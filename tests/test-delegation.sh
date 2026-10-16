@@ -78,7 +78,7 @@ summarize() {
         read_by_claude: [$bases[] | . as $b | select([$RD[] | select((.input | tostring) | contains($b))] | length > 0)],
         read_tool_on: [$bases[] | . as $b | select([$J[] | select(.name == "Read" and ((.input | tostring) | contains($b)))] | length > 0)],
         notices_all: ([$all[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text
-          | select(test($subj; "i") and test($outage; "i"))] | length)
+          | split("\n")[] | splits("(?<=[.!?]) +") | select(test($subj; "i") and test($outage; "i"))] | length)
       }' "$trace" || echo '{"ok":false,"unknown":true}'
 }
 
@@ -91,7 +91,8 @@ check_c() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate
   and .late_delegate_calls == 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
 check_d() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_no_model
   and .late_delegate_calls == 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
-# e: as c, for both files, and the user hears about the outage once across everything Claude wrote
+# e: as c, for both files, and the user hears about the outage once across everything Claude wrote (notices are
+# counted per sentence, so two in one message fail too)
 check_e() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed
   and .late_delegate_calls == 0 and (.read_by_claude | length == 2) and .notices_all == 1' >/dev/null <<<"$1"; }
 
@@ -112,6 +113,7 @@ selftest() {
   expect "c: second code_task_files call after the failure" fail c c-second-call app-20k.log
   expect "e: one notice" pass e e-one-notice app-20k.log app-20k-b.log
   expect "e: progress note plus a final notice" fail e e-progress-note app-20k.log app-20k-b.log
+  expect "e: two notices inside one final message" fail e e-double-notice app-20k.log app-20k-b.log
   expect "unparseable trace is unknown and fails" fail c garbage app-20k.log
   s=$(summarize "$fx/f-plugin-denied.jsonl" app-20k.log 2>/dev/null)
   if jq -e '.plugin_denied | length > 0' >/dev/null <<<"$s"; then echo "  selftest PASS: f: plugin-tool denial is flagged"
