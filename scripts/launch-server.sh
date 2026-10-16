@@ -13,9 +13,14 @@
 # Never prints file contents; stderr carries only short status lines.
 set -efu
 
+command -v node >/dev/null 2>&1 || { echo "local-llm: node (Node.js) is required" >&2; exit 2; }
 command -v npx >/dev/null 2>&1 || { echo "local-llm: npx (Node.js) is required" >&2; exit 2; }
 
-roots=$(node "$(dirname "$0")/resolve-roots.mjs")  # exits 2 (and stops here) on a refused entry
+# npx runs a matching @houtini/lm found in node_modules up the cwd's ancestry (and reads a project
+# .npmrc), so never run from the spawner's cwd; the plugin root has neither. Roots are absolute.
+cd "$(dirname "$0")/.."
+
+roots=$(node ./scripts/resolve-roots.mjs)  # exits 2 (and stops here) on a refused entry
 
 if [ -z "$roots" ]; then
   echo "local-llm: no allowed folders configured; set allowed_dirs in the plugin options" >&2
