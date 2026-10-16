@@ -1,0 +1,1 @@
+{"private": true, "description": "Pins npm's project root to the plugin so npx never resolves a package from an ancestor directory; see scripts/launch-server.sh."}

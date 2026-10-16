@@ -17,8 +17,9 @@ command -v node >/dev/null 2>&1 || { echo "local-llm: node (Node.js) is required
 command -v npx >/dev/null 2>&1 || { echo "local-llm: npx (Node.js) is required" >&2; exit 2; }
 
 # npx runs a matching @houtini/lm found in node_modules up the cwd's ancestry (and reads a project
-# .npmrc), so never run from the spawner's cwd; the plugin root has neither. Roots are absolute.
-cd "$(dirname "$0")/.."
+# .npmrc), so never run from the spawner's cwd; the plugin root's package.json pins npm's project
+# root here. Roots are absolute.
+CDPATH= cd -P -- "$(dirname -- "$0")/.." >/dev/null || { echo "local-llm: cannot enter the plugin directory" >&2; exit 2; }
 
 roots=$(node ./scripts/resolve-roots.mjs)  # exits 2 (and stops here) on a refused entry
 
