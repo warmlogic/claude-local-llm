@@ -78,7 +78,7 @@ for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://
     bad "launcher refuses non-loopback endpoint: $ep ($out)"
   fi
 done
-for ep in "http://127.0.0.1:1234" "http://localhost:1234/v1" "http://[::1]:1234"; do
+for ep in "http://127.0.0.1:1234" "http://localhost:1234/v1" "http://[::1]:1234" "http://[::1]" "https://localhost"; do
   out=$(LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$TMP")
   if [ "$(jq -r '.init' <<<"$out")" = "true" ]; then ok "launcher accepts loopback endpoint: $ep"
   else bad "launcher accepts loopback endpoint: $ep ($out)"; fi

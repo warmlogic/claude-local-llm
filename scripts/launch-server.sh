@@ -43,8 +43,8 @@ hostport=${endpoint#*://}
 hostport=${hostport%%[/?#]*}
 case $endpoint in http://*|https://*) ;; *) hostport=invalid ;; esac
 case $hostport in *@*) hostport=invalid ;; esac
-case ${hostport%:[0-9]*} in
-  127.0.0.1|localhost|'[::1]') ;;
+case $hostport in
+  127.0.0.1|localhost|'[::1]'|127.0.0.1:[0-9]*|localhost:[0-9]*|'[::1]:'[0-9]*) ;;
   *) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]): $endpoint" >&2; exit 2 ;;
 esac
 
