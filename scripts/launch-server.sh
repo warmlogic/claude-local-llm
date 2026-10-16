@@ -12,6 +12,7 @@
 # Never prints file contents; stderr carries only short status lines.
 set -efu
 
+command -v npx >/dev/null 2>&1 || { echo "local-llm: npx (Node.js) is required" >&2; exit 2; }
 
 roots=""
 old_ifs=$IFS
