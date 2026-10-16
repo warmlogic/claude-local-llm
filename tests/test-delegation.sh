@@ -98,10 +98,11 @@ check_c() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate
   and .late_delegate_calls == 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
 check_d() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_no_model
   and .late_delegate_calls == 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
-# check_e <turn-1 summary> <turn-2 summary>: turn 1 read file A itself after the tool failed and told the user;
+# check_e <turn-1 summary> <turn-2 summary>: turn 1 read file A itself after the tool failed with "fetch failed" and
+# told the user;
 # turn 2 read file B itself with no outage notice and no code_task_files call
 check_e() {
-  jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .late_delegate_calls == 0
+  jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed and .late_delegate_calls == 0
     and (.read_by_claude | index("app-20k.log") != null) and .notices_all >= 1' >/dev/null <<<"$1" \
   && jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .notices_all == 0
     and (.read_by_claude | index("app-20k-b.log") != null)' >/dev/null <<<"$2"
@@ -134,6 +135,7 @@ selftest() {
   expect_e "e: turn 2 calls code_task_files again" fail c-ok e2-delegates
   expect_e "e: two notices within turn 1 do not gate" pass e1-two-notices e2-ok
   expect_e "e: turn 1 never tells the user" fail e1-silent e2-ok
+  expect_e "e: turn 1 announces an outage after an input-specific failure" fail e1-other-failure e2-ok
   expect "unparseable trace is unknown and fails" fail c garbage app-20k.log
   s=$(summarize "$fx/f-plugin-denied.jsonl" app-20k.log 2>/dev/null)
   if jq -e '.plugin_denied | length > 0' >/dev/null <<<"$s"; then echo "  selftest PASS: f: plugin-tool denial is flagged"
