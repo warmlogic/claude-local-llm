@@ -4,5 +4,26 @@
   "author": {
     "name": "Matt Mollison",
     "email": "matt.mollison@gmail.com"
+  },
+  "userConfig": {
+    "allowed_dirs": {
+      "type": "directory",
+      "title": "Allowed folders",
+      "description": "Folders the local model may read files from. Nothing outside them is readable. A leading $HOME or ~ is expanded; a folder name must not contain a comma.",
+      "multiple": true,
+      "required": true,
+      "default": ["$HOME/github", "$HOME/catalyst"]
+    },
+    "endpoint_url": {
+      "type": "string",
+      "title": "LM Studio endpoint",
+      "description": "Base URL of the LM Studio server. Keep it on loopback.",
+      "default": "http://127.0.0.1:1234"
+    },
+    "model": {
+      "type": "string",
+      "title": "Model id",
+      "description": "Model id to use. Leave empty to use whichever model LM Studio has loaded."
+    }
   }
 }
