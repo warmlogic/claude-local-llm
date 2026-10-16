@@ -10,7 +10,7 @@ Claude Code plugin that runs a small MCP server (houtini-lm, pinned) backed by a
 bash tests/test-fence.sh   # must pass before committing
 ```
 
-Tests drive `scripts/launch-server.sh` over stdio MCP JSON-RPC (`tests/mcp-call.mjs`, node stdlib; `tests/fake-endpoint.mjs` is a loopback stand-in for LM Studio) using `mktemp` roots and generated synthetic fixtures. Needs `node`, `jq`, `curl`. Cases that need a model (happy path, oversized input) print `SKIP` when LM Studio is unreachable at `LOCAL_LLM_ENDPOINT_URL` (default `http://127.0.0.1:1234`); every fence case, the 1 MB cap and endpoint passthrough run without one. Scratch dirs under `tests/.tmp-*` are gitignored and removed on exit.
+Tests drive `scripts/launch-server.sh` over stdio MCP JSON-RPC (`tests/mcp-call.mjs`, node stdlib; `tests/fake-endpoint.mjs` is a loopback stand-in for LM Studio) using `mktemp` roots and generated synthetic fixtures. Needs `node`, `jq`, `curl`. Cases that need a model (happy path, oversized input) print `SKIP` when LM Studio is unreachable at `LOCAL_LLM_ENDPOINT_URL` (default `http://127.0.0.1:1234`); every fence case, the 1 MB cap and endpoint passthrough run without one. The oversized case assumes LM Studio loads the model at a 32k context and fails, not skips, if a 130k-char file is accepted. Scratch dirs under `tests/.tmp-*` are gitignored and removed on exit.
 
 ## Project layout
 

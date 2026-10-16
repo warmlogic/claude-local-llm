@@ -184,7 +184,7 @@ if [ "$lm_up" = 1 ]; then
   if jq -e '.call.isError and (.call.text | test("context")) and (.call.text | test("Model:") | not)' >/dev/null <<<"$out"; then
     ok "oversized: ~130k chars exceeds the context window, error and no summary"
   else
-    bad "oversized: expected a context-window error ($(jq -c '.call' <<<"$out" | cut -c1-300))"
+    bad "oversized: expected a context-window error; the suite assumes the model is loaded at 32k context, so a context above ~45k tokens fails here by design ($(jq -c '.call' <<<"$out" | cut -c1-300))"
   fi
 else
   skp "happy path: LM Studio not reachable at $ENDPOINT"
