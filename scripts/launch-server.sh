@@ -38,8 +38,9 @@ for entry in ${LOCAL_LLM_ALLOWED_DIRS-}; do
   resolved=$(cd -P -- "$entry" 2>/dev/null && pwd -P) || {
     echo "local-llm: allowed folder not found, skipping: $entry" >&2; continue; }
   case $resolved in
-    /) echo "local-llm: refusing '/' as an allowed folder: $entry" >&2; exit 2 ;;
     *[,:]*) echo "local-llm: resolved folder contains ',' or ':': $resolved" >&2; exit 2 ;;
+    *[!/]*) ;;
+    *) echo "local-llm: refusing '/' as an allowed folder: $entry" >&2; exit 2 ;;
   esac
   roots=${roots:+$roots,}$resolved
 done
