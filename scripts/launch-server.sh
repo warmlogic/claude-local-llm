@@ -5,10 +5,11 @@
 #         LOCAL_LLM_ENDPOINT_URL (default http://127.0.0.1:1234), LOCAL_LLM_MODEL (optional)
 #
 # Why this exists: houtini reads ANY absolute path when HOUTINI_LM_FILE_ROOTS is unset or
-# empty. This script refuses to start unless at least one absolute, non-"/" root remains.
-# Limits: a folder name containing a comma cannot be listed (houtini splits on "," and ":").
+# empty. This script refuses to start unless at least one existing, non-"/" root remains.
+# Each folder is resolved (symlinks, ".", "..") and a missing one is skipped with a warning.
+# Limits: no "," or ":" in folder names (houtini splits on both); "/" is refused.
 # The endpoint must be loopback, so file contents never leave the machine.
-# Never prints file contents; the only output is a one-line error on stderr.
+# Never prints file contents; stderr carries only short status lines.
 set -efu
 
 roots=""
@@ -27,16 +28,25 @@ for entry in ${LOCAL_LLM_ALLOWED_DIRS-}; do
   esac
   case $entry in
     '') continue ;;
-    /) echo "local-llm: refusing '/' as an allowed folder" >&2; exit 2 ;;
-    /*) roots=${roots:+$roots,}$entry ;;
+    *:*) echo "local-llm: allowed folder must not contain ':' (houtini splits on it): $entry" >&2; exit 2 ;;
+    /*) ;;
     *) echo "local-llm: allowed folder must be an absolute path: $entry" >&2; exit 2 ;;
   esac
+  # Pass houtini the folder it will actually use: symlinks and ".", ".." resolved.
+  resolved=$(cd -P -- "$entry" 2>/dev/null && pwd -P) || {
+    echo "local-llm: allowed folder not found, skipping: $entry" >&2; continue; }
+  case $resolved in
+    /) echo "local-llm: refusing '/' as an allowed folder: $entry" >&2; exit 2 ;;
+    *[,:]*) echo "local-llm: resolved folder contains ',' or ':': $resolved" >&2; exit 2 ;;
+  esac
+  roots=${roots:+$roots,}$resolved
 done
 
 if [ -z "$roots" ]; then
   echo "local-llm: no allowed folders configured; set allowed_dirs in the plugin options" >&2
   exit 2
 fi
+echo "local-llm: allowed folders: $roots" >&2
 
 endpoint=${LOCAL_LLM_ENDPOINT_URL:-http://127.0.0.1:1234}
 hostport=${endpoint#*://}
