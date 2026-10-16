@@ -37,7 +37,7 @@ case "$REPO/" in
   *) echo "FAIL: fixtures live under the repo, which must sit inside the default allowed_dirs (\$HOME/github or \$HOME/catalyst)"; exit 1 ;;
 esac
 
-OUT="${DELEG_OUT:-$(mktemp -d)}"; mkdir -p "$OUT"
+OUT="${DELEG_OUT:-$(mktemp -d)}"; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd -P)
 FIX=$(mktemp -d "$REPO/tests/.tmp-deleg-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }
 FIX=$(cd "$FIX" && pwd -P)
 PLUGINS=$(mktemp -d)
@@ -88,6 +88,7 @@ summarize() {
   jq -s --arg ft "$FILE_TOOL" --argjson bases "$(printf '%s\n' "$@" | jq -R . | jq -sc .)" '
     def tools: [.[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use")];
     def texts: [.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text];
+    def results: [.[] | select(.type == "user") | .message.content[]? | select(.type == "tool_result") | (.content | if type == "array" then map(.text // "") | join(" ") else (. // "" | tostring) end)];
     tools as $T
     | ([.[] | select(.type == "result")] | last // {}) as $r
     | ([$T[] | select(.name == $ft)]) as $D
@@ -100,6 +101,8 @@ summarize() {
         mcp_tool_listed: ([.[] | select(.type == "system" and .subtype == "init") | .tools[]?] | index($ft) != null),
         skill_used: ([$T[] | select(.name == "Skill")] | length > 0),
         delegate_calls: ($D | length),
+        saw_fetch_failed: ([results[] | select(contains("fetch failed"))] | length > 0),
+        saw_no_model: ([results[] | select(contains("No models loaded"))] | length > 0),
         delegated: [$bases[] | . as $b | select([$D[] | select((.input | tostring) | contains($b))] | length > 0)],
         read_by_claude: [$bases[] | . as $b | select([$R[] | select((.input | tostring) | contains($b))] | length > 0)],
         notices: ([texts[] | select(test("local[- ]?(model|llm)|lm studio|local-llm|delegat|\\bserver\\b"; "i") and test("unavailab|not (running|available|reachable|responding|connected|loaded)|offline|\\bdown\\b|fetch failed|no models? loaded|(unable|couldn.t|could not|can.t|cannot) (to )?(reach|connect|delegate|use)"; "i"))] | length)
@@ -109,9 +112,10 @@ summarize() {
 # check_<case> <summary-json> -> exit 0 when the run passes
 check_a() { jq -e '.ok and .answer_chars > 0 and (.delegated | index("app-20k.log") != null) and (.denied | index("'"$FILE_TOOL"'") == null)' >/dev/null <<<"$1"; }
 check_b() { jq -e '.ok and .answer_chars > 0 and .delegate_calls == 0 and (.read_by_claude | index("app-2k.log") != null)' >/dev/null <<<"$1"; }
-check_c() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
-check_d() { check_c "$1"; }
-check_e() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and (.read_by_claude | length == 2) and .notices == 1' >/dev/null <<<"$1"; }
+# c and d: the tool was tried, failed the expected way, and Claude then read the file itself
+check_c() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
+check_d() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_no_model and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
+check_e() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and (.delegate_calls >= 1) and (.read_by_claude | length == 2) and .notices == 1' >/dev/null <<<"$1"; }
 
 # --- plugins for each case ---------------------------------------------------------------------------
 copy_plugin "$PLUGINS/real" "$ENDPOINT"
@@ -151,7 +155,7 @@ for c in $CASES; do
     total_runs=$((total_runs+1))
     jq -e '.denied | length > 0' >/dev/null <<<"$s" && denied_runs=$((denied_runs+1))
     if "check_$c" "$s"; then passes=$((passes+1)); verdict=pass; else verdict=FAIL; fi
-    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, delegated, read_by_claude, notices, denied, answer_chars}' <<<"$s")"
+    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, saw_fetch_failed, saw_no_model, delegated, read_by_claude, notices, denied, answer_chars}' <<<"$s")"
   done
   if [ "$passes" -ge "$THRESHOLD" ]; then echo "case $c: $passes/$RUNS PASS"; else echo "case $c: $passes/$RUNS FAIL"; overall=1; fi
 done
