@@ -22,8 +22,8 @@ done
 
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }                                 # roots and fixtures
 HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }  # under $HOME when the repo is
-FAKE_PID=""
-trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
+FAKE_PID=""; NM_PID=""
+trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
 
 # Ambient houtini variables must not leak into any case; the scrub test sets them explicitly.
 unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
@@ -284,15 +284,23 @@ fi
 HOOK="$REPO/scripts/approve-skill.mjs"
 skill="$REPO/skills/delegate-local/SKILL.md"
 hook_out() { printf '%s' "$1" | node "$HOOK"; }
-if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then
+if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local"}}' \
+   | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
   ok "approval hook allows the plugin's own skill"
 else bad "approval hook allows the plugin's own skill"; fi
 for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
+             '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local2"}}' \
              '{"tool_name":"Bash","tool_input":{"skill":"local-llm:delegate-local"}}' \
              '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
   if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
   else bad "approval hook stays silent for: ${input:-<empty>}"; fi
 done
+if jq -e '.hooks.PreToolUse | any(.matcher == "Skill" and any(.hooks[]; (.command | contains("scripts/approve-skill.mjs"))))' "$REPO/hooks/hooks.json" >/dev/null 2>&1 \
+   && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"
+else bad "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"; fi
+st=$(DELEG_SELFTEST=1 bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); st_rc=$?
+if [ "$st_rc" -eq 0 ] && [ "$(grep -c 'selftest PASS' <<<"$st")" -ge 8 ]; then ok "delegation scorers pass their offline self-test ($(grep -c 'selftest PASS' <<<"$st") assertions)"
+else bad "delegation scorer self-test (rc=$st_rc): $(grep 'selftest FAIL' <<<"$st" | head -3 | tr '\n' ';')"; fi
 allowed=$(sed -n 's/^allowed-tools: //p' "$skill")
 missing=""
 for t in $allowed; do grep -qF "\`$t\`" "$skill" || missing="$missing $t"; done
@@ -303,6 +311,21 @@ else bad "skill is over its 80-line budget ($(wc -l < "$skill") lines)"; fi
 
 # --- model-backed cases --------------------------------------------------------
 gen_text 20000 > "$TMP/root/twenty-k.txt"
+
+# --- the outage strings the skill keys on (skills/delegate-local/SKILL.md, names table) ---
+dead_port=$(node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
+out=$(LOCAL_LLM_ENDPOINT_URL="http://127.0.0.1:$dead_port" read_files "$TMP/root" "$TMP/root/twenty-k.txt")
+if jq -e '.call.isError and (.call.text | contains("fetch failed"))' >/dev/null <<<"$out"; then ok "dead endpoint: the tool error says 'fetch failed'"
+else bad "dead endpoint: expected 'fetch failed' ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/nm-port" "$TMP/nm-requests.log" no-model &
+NM_PID=$!
+for _ in $(seq 1 50); do [ -s "$TMP/nm-port" ] && break; sleep 0.1; done
+if [ -s "$TMP/nm-port" ]; then
+  out=$(LOCAL_LLM_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/nm-port")" read_files "$TMP/root" "$TMP/root/twenty-k.txt")
+  if jq -e '.call.isError and (.call.text | contains("No models loaded"))' >/dev/null <<<"$out"; then ok "no-model endpoint: the tool error says 'No models loaded'"
+  else bad "no-model endpoint: expected 'No models loaded' ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+else bad "no-model fake endpoint did not start"; fi
+
 if [ "$lm_up" = 1 ]; then
   out=$(read_files "$TMP/root" "$TMP/root/twenty-k.txt")
   if jq -e '(.call != null and .call.isError == false) and (.call.text | test("1 file\\(s\\) read")) and (.call.text | test("Model:"))' >/dev/null <<<"$out"; then
