@@ -1,0 +1,8 @@
+{
+  "name": "local-llm",
+  "description": "Offload small, low-stakes text jobs (summaries, classification, extraction, drafts) from Claude Code to a model running locally in LM Studio, over loopback only",
+  "author": {
+    "name": "Matt Mollison",
+    "email": "matt.mollison@gmail.com"
+  }
+}
