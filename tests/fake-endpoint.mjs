@@ -1,13 +1,32 @@
-// Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file>
-// Writes its random port to <port-file>, appends one JSON line of request headers per request to
-// <log-file>, and answers every request with an OpenAI-style list of two fake chat models.
+// Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file> [mode]
+// Writes its random port to <port-file> and appends one JSON line of request headers per request to <log-file>.
+// Modes:
+//   models    (default) answers every request with an OpenAI-style list of two fake chat models.
+//   no-model  mirrors LM Studio with nothing loaded: /v1/models is an empty list, /api/v0/models shows one
+//             downloaded model with state "not-loaded", and chat completions fail with LM Studio's
+//             "No models loaded" error (HTTP 404).
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
 
-const [portFile, logFile] = process.argv.slice(2);
+const [portFile, logFile, mode = 'models'] = process.argv.slice(2);
+const json = (res, status, body) => {
+  res.statusCode = status;
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify(body));
+};
 const server = createServer((req, res) => {
   appendFileSync(logFile, JSON.stringify({ url: req.url, headers: req.headers }) + '\n');
-  res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ object: 'list', data: [{ id: 'fake-model', object: 'model' }, { id: 'fake-model-2', object: 'model' }] }));
+  if (mode === 'no-model') {
+    if (req.url === '/v1/models') return json(res, 200, { object: 'list', data: [] });
+    if (req.url === '/api/v0/models') {
+      return json(res, 200, { object: 'list', data: [{ id: 'downloaded-model', object: 'model', type: 'llm', state: 'not-loaded' }] });
+    }
+    if (req.url === '/v1/chat/completions') {
+      req.resume();
+      return json(res, 404, { error: "No models loaded. Please load a model in the developer page or use the 'lms load' command." });
+    }
+    return json(res, 404, { error: `Unexpected endpoint or method. (${req.method} ${req.url})` });
+  }
+  json(res, 200, { object: 'list', data: [{ id: 'fake-model', object: 'model' }, { id: 'fake-model-2', object: 'model' }] });
 });
 server.listen(0, '127.0.0.1', () => writeFileSync(portFile, String(server.address().port)));
