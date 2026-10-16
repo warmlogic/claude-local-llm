@@ -76,7 +76,7 @@ A="$TMP/a"; B="$TMP/b"; mkdir -p "$A" "$B"
 check_refuses "empty allowed_dirs" "" "no allowed folders"
 check_refuses "whitespace-only allowed_dirs" "   " "no allowed folders"
 check_refuses "only empty entries" " , ," "no allowed folders"
-check_refuses "only nonexistent folders" "$TMP/nope" "no allowed folders"
+check_refuses "only nonexistent folders" "$TMP/nope" "none of the allowed folders exist"
 check_refuses "relative entry" "some/relative/dir" "absolute path"
 check_refuses "valid root plus relative entry" "$A,relative" "absolute path"
 check_refuses "root '/' entry" "/" "refusing '/'"
@@ -95,13 +95,19 @@ check_refuses "symlink root whose target contains ':'" "$TMP/link-colon" "':'"
 # Characters JS trim() strips but [[:space:]] misses (any locale): the root must survive houtini's trim.
 feff=$(printf '\xef\xbb\xbf'); nbsp=$(printf '\xc2\xa0'); nl=$(printf '\n_'); nl=${nl%_}
 mkdir -p "$TMP/d$feff" "$TMP/d$nbsp" "$TMP/d$nl"
-for loc in C en_US.UTF-8; do
-  LC_ALL=$loc check_refuses "dir ending in U+FEFF (LC_ALL=$loc)" "$TMP/d$feff/" "altered by houtini"
-  LC_ALL=$loc check_refuses "dir ending in NBSP (LC_ALL=$loc)" "$TMP/d$nbsp/" "altered by houtini"
-done
+check_refuses "dir ending in U+FEFF" "$TMP/d$feff/" "altered by houtini"
+check_refuses "dir ending in NBSP" "$TMP/d$nbsp/" "altered by houtini"
+check_refuses "trailing NBSP without a slash (sibling dir exists)" "$TMP/d$nbsp" "leading/trailing whitespace"
+check_refuses "trailing space without a slash (sibling dir exists)" "$TMP/d " "leading/trailing whitespace"
 check_refuses "dir ending in a newline" "$TMP/d$nl/" "altered by houtini"
 mkdir -p "$TMP/p/x"; chmod 000 "$TMP/p"
 check_refuses "unreadable parent (EACCES) is an error, not a skip" "$TMP/p/x" "EACCES"
+check_refuses "path through a regular file (ENOTDIR)" "$TMP/plain-file/x" "ENOTDIR"
+ln -s "$TMP/loop2" "$TMP/loop1"; ln -s "$TMP/loop1" "$TMP/loop2"
+check_refuses "symlink loop (ELOOP)" "$TMP/loop1" "ELOOP"
+out=$(HOME= LOCAL_LLM_ALLOWED_DIRS="~/x" node "$DRIVER" "$LAUNCHER")
+if did_not_start "$out" "HOME is not an absolute path"; then ok "empty HOME with ~/x is refused"
+else bad "empty HOME with ~/x is refused ($out)"; fi
 check_refuses "regular file as a root" "$TMP/plain-file" "not a directory"
 check_refuses "entry with ':' (houtini splits on it)" "$A,$A/x:y" "':'"
 check_refuses "'path:suffix' (would authorize path plus a cwd-relative suffix)" "$TMP/a:b" "':'"
@@ -146,7 +152,8 @@ check_rejected "dot-dot escape from inside the root" "$TMP/root/../outside/secre
 
 # --- root list handling --------------------------------------------------------
 echo "second root" > "$B/second.txt"
-check_reads "two roots joined with ', ' and padding: read from the second" " $A , $B " "$B/second.txt"
+check_reads "two roots joined with a bare comma: read from the second" "$A,$B" "$B/second.txt"
+check_refuses "padding around an entry is refused, not trimmed" " $A , $B " "leading/trailing whitespace"
 mkdir -p "$TMP/with space"; echo "spaced" > "$TMP/with space/f.txt"
 check_reads "root with a space in its name" "$TMP/with space" "$TMP/with space/f.txt"
 out=$(read_files "$TMP/missing,$B" "$B/second.txt")
@@ -202,6 +209,62 @@ out=$(read_files "$TMP/root" "$TMP/root/over-1mb.txt")
 if jq -e '.call.isError and (.call.text | test("over the 1 MB limit")) and (.call.text | test("Model:") | not)' >/dev/null <<<"$out"; then
   ok "file over 1 MB is rejected without a model"
 else bad "file over 1 MB ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+
+# --- environment houtini receives: scrub list is read from the launcher --------
+unset_names=$(awk '/^unset /{f=1} f{print} f&&!/\\$/{exit}' "$LAUNCHER" | tr -d '\\' | sed 's/^unset//')
+exported_names=$(grep -oE '^(\[ -z [^]]*\] \|\| )?export [A-Za-z_]+' "$LAUNCHER" | sed -E 's/.*export //' | sort -u | tr '\n' ' ')
+mkdir -p "$TMP/stubbin"
+printf '#!/bin/sh\nenv > "%s"\nexit 0\n' "$TMP/stub-env" > "$TMP/stubbin/npx"; chmod +x "$TMP/stubbin/npx"
+ambient=(); for n in $unset_names; do ambient+=("$n=ambient-$n"); done
+env "${ambient[@]}" PATH="$TMP/stubbin:$PATH" LOCAL_LLM_ALLOWED_DIRS="$A" "$LAUNCHER" 2>/dev/null
+leaked=""; for n in $unset_names; do grep -q "^$n=" "$TMP/stub-env" 2>/dev/null && leaked="$leaked $n"; done
+want_roots=$(cd -P "$A" && pwd -P)
+if [ -s "$TMP/stub-env" ] && [ "$(wc -w <<<"$unset_names")" -ge 15 ] && [ -z "$leaked" ] \
+   && grep -qxF "HOUTINI_LM_FILE_ROOTS=$want_roots" "$TMP/stub-env" \
+   && grep -qxF "HOUTINI_LM_ENDPOINT_URL=http://127.0.0.1:1234" "$TMP/stub-env" \
+   && grep -qxF "HOUTINI_LM_API_KEY=not-needed" "$TMP/stub-env" \
+   && grep -qxF "HOUTINI_LM_MAX_FILE_MB=1" "$TMP/stub-env"; then
+  ok "houtini's environment: ${#ambient[@]} ambient variables dropped, launcher values set"
+else bad "houtini's environment (leaked:$leaked; unset list: $(wc -w <<<"$unset_names") names)"; fi
+
+# Every variable the pinned dist reads is either scrubbed or deliberately exported.
+dist=""
+for d in "$HOME"/.npm/_npx/*/node_modules/@houtini/lm; do
+  [ -f "$d/package.json" ] && grep -q '"version": "3.3.4"' "$d/package.json" && dist="$d/dist" && break
+done
+if [ -n "$dist" ]; then
+  missing=""
+  for n in $(grep -rhoE 'process\.env\.[A-Z_]+' "$dist"/*.js | sed 's/process\.env\.//' | sort -u); do
+    case " $unset_names $exported_names " in *" $n "*) ;; *) missing="$missing $n" ;; esac
+  done
+  if [ -z "$missing" ]; then ok "every process.env name in houtini 3.3.4's dist is scrubbed or exported"
+  else bad "houtini env names neither scrubbed nor exported:$missing"; fi
+else
+  skp "houtini 3.3.4 dist not in the npx cache; env-name coverage check"
+fi
+
+# --- the launcher never runs from the spawner's cwd ----------------------------
+# npx prefers a matching @houtini/lm under cwd's node_modules; a planted copy must not run.
+mkdir -p "$TMP/proj/node_modules/@houtini/lm"
+cat > "$TMP/proj/node_modules/@houtini/lm/package.json" <<JSON
+{"name":"@houtini/lm","version":"3.3.4","bin":{"lm":"planted.js"}}
+JSON
+printf '#!/usr/bin/env node\nrequire("fs").writeFileSync(%s,"ran");console.log("CANARY-PLANTED");\n' "'$TMP/planted-ran'" > "$TMP/proj/node_modules/@houtini/lm/planted.js"
+chmod +x "$TMP/proj/node_modules/@houtini/lm/planted.js"
+out=$(cd "$TMP/proj" && run_launcher "$A")
+if [ ! -e "$TMP/planted-ran" ] && ! grep -q CANARY-PLANTED <<<"$out" \
+   && jq -e '.init and (.serverName | test("houtini"; "i"))' >/dev/null <<<"$out"; then
+  ok "a planted node_modules/@houtini/lm in the cwd is not run; real houtini answers"
+else bad "planted houtini in cwd ($out)"; fi
+
+# --- case-insensitive filesystems: root typed in another case than on disk -----
+swapped=$(basename "$HOME_TMP" | tr 'a-zA-Z' 'A-Za-z')
+if [ "$swapped" != "$(basename "$HOME_TMP")" ] && [ -d "$(dirname "$HOME_TMP")/$swapped" ]; then
+  echo "case fixture" > "$HOME_TMP/case.txt"
+  check_reads "root typed in different case than on disk still reads" "$(dirname "$HOME_TMP")/$swapped" "$HOME_TMP/case.txt"
+else
+  skp "case-insensitive root: filesystem is case-sensitive"
+fi
 
 # --- model-backed cases --------------------------------------------------------
 gen_text 20000 > "$TMP/root/twenty-k.txt"

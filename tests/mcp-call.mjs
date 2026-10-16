@@ -1,6 +1,6 @@
 // Drive a stdio MCP server over JSON-RPC: initialize, then optionally one tools/call.
 // Usage: node mcp-call.mjs <server-command> [tool] [json-args]
-// Prints one JSON line: {"init":bool,"initError":str|null,"exit":int|null,"timedOut":bool,"stderr":str,"call":{"isError":bool,"text":str}|null}
+// Prints one JSON line: {"init":bool,"serverName":str|null,"initError":str|null,"exit":int|null,"timedOut":bool,"stderr":str,"call":{"isError":bool,"text":str}|null}
 // Environment is inherited from the caller. Exits 0 whenever it could report.
 import { spawn } from 'node:child_process';
 
@@ -9,7 +9,7 @@ const CALL_TIMEOUT_MS = 240000;
 const START_TIMEOUT_MS = 20000;
 
 const child = spawn(cmd, [], { stdio: ['pipe', 'pipe', 'pipe'] });
-const out = { init: false, initError: null, exit: null, timedOut: false, stderr: '', call: null };
+const out = { init: false, serverName: null, initError: null, exit: null, timedOut: false, stderr: '', call: null };
 let buf = '';
 let timer;
 
@@ -35,6 +35,7 @@ child.stdout.on('data', (d) => {
     if (m.id === 1) {
       if (m.error) { out.initError = JSON.stringify(m.error); return finish(); }
       out.init = true;
+      out.serverName = m.result?.serverInfo?.name ?? null;
       send({ jsonrpc: '2.0', method: 'notifications/initialized' });
       if (!tool) return finish();
       arm(CALL_TIMEOUT_MS);
