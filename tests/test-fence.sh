@@ -244,6 +244,15 @@ if [ ! -e "$TMP/planted-ran" ] && ! grep -q CANARY-PLANTED <<<"$out" \
   ok "planted @houtini/lm in the cwd and above it is not run; real houtini answers"
 else bad "planted houtini in cwd ($([ -e "$TMP/planted-ran" ] && echo CANARY-RAN) $out)"; fi
 
+# The plugin root's package.json stops npm climbing to a planted ancestor of the plugin itself.
+rm -f "$TMP/planted-ran"
+plant "$TMP/anc"; mkdir -p "$TMP/anc/plug"
+cp -R "$REPO/scripts" "$REPO/package.json" "$TMP/anc/plug/"
+out=$(cd "$TMP" && LOCAL_LLM_ALLOWED_DIRS="$A" node "$DRIVER" "$TMP/anc/plug/scripts/launch-server.sh")
+if [ ! -e "$TMP/planted-ran" ] && ! grep -q CANARY-PLANTED <<<"$out" && jq -e '.init and (.serverName | test("houtini"; "i"))' >/dev/null <<<"$out"; then
+  ok "a planted @houtini/lm above the plugin root is not run (package.json boundary)"
+else bad "planted houtini above the plugin ($([ -e "$TMP/planted-ran" ] && echo CANARY-RAN) $out)"; fi
+
 # --- houtini's env reads (the cache is filled by the launcher runs above) ------
 # Every variable the pinned dist reads is either scrubbed or deliberately exported.
 dist=""
