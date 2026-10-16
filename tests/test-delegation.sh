@@ -12,12 +12,19 @@
 #   b  2k-char file: no code_task_files call, Claude reads the file
 #   c  endpoint down: the tool fails with "fetch failed", is not called again, and Claude reads the file itself
 #   d  endpoint up but no model loaded (fake endpoint, tests/fake-endpoint.mjs no-model): same as c
-#   e  two jobs, endpoint down: as c, and the outage is announced exactly once across all assistant text
+#   e  one session, two turns, endpoint down: turn 1 summarizes file A (tool fails, Claude reads it, user is told);
+#      turn 2 (claude -p --resume) summarizes file B with zero outage notices and zero code_task_files calls
 #   f  no permission prompt for the plugin: no permission_denials entry for the Skill call or the plugin's tools
 #      in any inspectable run of a-e (other denials, i.e. Claude's own compound Bash, are printed but do not gate)
 # A trace that does not parse or has no result event is "unknown" and fails its case. "Claude read the file"
 # means a successful, non-empty Read, Grep or Bash cat/head/tail/sed/awk/grep on it after the tool failed
 # (joined to its tool_result by tool_use_id); wc, ls and stat do not count.
+#
+# Case e quotes the criterion: "the user is told once per session, not once per job". One turn cannot separate the
+# nag the criterion guards against (re-announcing on every job) from a status note plus a recap of the same incident,
+# which the model writes in a single turn regardless of wording. So the session is split: turn 1 must tell the user
+# (turn1_notices is printed, not gated) and turn 2, a new job after the outage is known, must stay silent about it
+# and must not call the tool again ("skip the local model for the rest of the session").
 #
 # Environment: DELEG_RUNS (5)  DELEG_CASES ("a b c d e")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
 # default a new mktemp dir that is kept)  DELEG_ALLOWED_TOOLS (passed to --allowedTools; setting it voids the
@@ -91,10 +98,14 @@ check_c() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate
   and .late_delegate_calls == 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
 check_d() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_no_model
   and .late_delegate_calls == 0 and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
-# e: as c, for both files, and the user hears about the outage once across everything Claude wrote (notices are
-# counted per sentence, so two in one message fail too)
-check_e() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed
-  and .late_delegate_calls == 0 and (.read_by_claude | length == 2) and .notices_all == 1' >/dev/null <<<"$1"; }
+# check_e <turn-1 summary> <turn-2 summary>: turn 1 read file A itself after the tool failed and told the user;
+# turn 2 read file B itself with no outage notice and no code_task_files call
+check_e() {
+  jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .late_delegate_calls == 0
+    and (.read_by_claude | index("app-20k.log") != null) and .notices_all >= 1' >/dev/null <<<"$1" \
+  && jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .notices_all == 0
+    and (.read_by_claude | index("app-20k-b.log") != null)' >/dev/null <<<"$2"
+}
 
 # --- offline scorer self-test ------------------------------------------------------------------------
 selftest() {
@@ -111,9 +122,18 @@ selftest() {
   expect "c: fetch failed, then a successful Read" pass c c-ok app-20k.log
   expect "c: fetch failed, then a denied Read and a refusal" fail c c-denied-read app-20k.log
   expect "c: second code_task_files call after the failure" fail c c-second-call app-20k.log
-  expect "e: one notice" pass e e-one-notice app-20k.log app-20k-b.log
-  expect "e: progress note plus a final notice" fail e e-progress-note app-20k.log app-20k-b.log
-  expect "e: two notices inside one final message" fail e e-double-notice app-20k.log app-20k-b.log
+  # expect_e <label> <pass|fail> <turn-1 fixture> <turn-2 fixture>
+  expect_e() {
+    local got=fail s1 s2
+    s1=$(summarize "$fx/$3.jsonl" app-20k.log 2>/dev/null); s2=$(summarize "$fx/$4.jsonl" app-20k-b.log 2>/dev/null)
+    check_e "$s1" "$s2" && got=pass
+    if [ "$got" = "$2" ]; then echo "  selftest PASS: $1"; else echo "  selftest FAIL: $1 (got $got)"; fails=$((fails+1)); fi
+  }
+  expect_e "e: turn 1 tells the user, turn 2 is silent and reads" pass c-ok e2-ok
+  expect_e "e: turn 2 re-announces the outage" fail c-ok e2-renotice
+  expect_e "e: turn 2 calls code_task_files again" fail c-ok e2-delegates
+  expect_e "e: two notices within turn 1 do not gate" pass e1-two-notices e2-ok
+  expect_e "e: turn 1 never tells the user" fail e1-silent e2-ok
   expect "unparseable trace is unknown and fails" fail c garbage app-20k.log
   s=$(summarize "$fx/f-plugin-denied.jsonl" app-20k.log 2>/dev/null)
   if jq -e '.plugin_denied | length > 0' >/dev/null <<<"$s"; then echo "  selftest PASS: f: plugin-tool denial is flagged"
@@ -183,9 +203,12 @@ dead_url() {
 lm_up=0
 curl -s -m 3 "$ENDPOINT/v1/models" >/dev/null 2>&1 && lm_up=1
 
-# run_claude <plugin-dir> <prompt> <trace-file>: returns claude's (timeout's) exit code
+# run_claude <plugin-dir> <prompt> <trace-file> [resume-session-id]: returns claude's (timeout's) exit code.
+# Case e needs a resumable session, so it passes an id (turn 2) or sets KEEP_SESSION=1 (turn 1); the other
+# cases do not persist theirs.
 run_claude() {
-  local args=(-p "$2" --plugin-dir "$1" --output-format stream-json --verbose --no-session-persistence)
+  local args=(-p "$2" --plugin-dir "$1" --output-format stream-json --verbose)
+  if [ -n "${4:-}" ]; then args+=(--resume "$4"); elif [ "${KEEP_SESSION:-}" != 1 ]; then args+=(--no-session-persistence); fi
   [ -z "$SOURCES" ] || args+=(--setting-sources "$SOURCES")
   [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
   [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
@@ -206,11 +229,11 @@ case " $CASES " in *" d "*)
 esac
 
 plugin_for() { case "$1" in a|b) echo real ;; c|e) echo down ;; d) echo nomodel ;; esac; }
-bases_for() { case "$1" in e) echo "app-20k.log app-20k-b.log" ;; b) echo "app-2k.log" ;; *) echo "app-20k.log" ;; esac; }
+bases_for() { case "$1" in b) echo "app-2k.log" ;; *) echo "app-20k.log" ;; esac; }
 prompt_for() {
   case "$1" in
     b) echo "Summarize $FIX/app-2k.log in five bullet points." ;;
-    e) echo "Do two jobs. First, summarize $FIX/app-20k.log in three bullet points. Second, summarize $FIX/app-20k-b.log in three bullet points." ;;
+    e) echo "Summarize $FIX/app-20k.log in three bullet points." ;;
     *) echo "Summarize $FIX/app-20k.log in five bullet points." ;;
   esac
 }
@@ -220,29 +243,51 @@ echo "delegation acceptance: $RUNS runs per case (pass at >= $THRESHOLD), traces
 echo "LM Studio reachable: $lm_up; model: ${DELEG_MODEL:-default}; setting sources: ${SOURCES:-none}"
 
 overall=0; total_runs=0; inspectable=0; plugin_denials=0; other_denials=0
+# tally <summary>: add one trace to the case f totals
+tally() {
+  total_runs=$((total_runs+1))
+  jq -e '.ok' >/dev/null <<<"$1" || return 0
+  inspectable=$((inspectable+1))
+  plugin_denials=$((plugin_denials + $(jq '.plugin_denied | length' <<<"$1")))
+  other_denials=$((other_denials + $(jq '(.denied | length) - (.plugin_denied | length)' <<<"$1")))
+}
+# report_run <exit-code> <trace> <verdict>: name a timeout, and show the first stderr line of a failed run
+report_run() {
+  if [ "$1" -ne 0 ]; then
+    if [ "$1" -eq 124 ]; then echo "    claude timed out after ${RUN_TIMEOUT_SEC}s (exit 124): $(basename "$2")"; else echo "    claude exited $1: $(basename "$2")"; fi
+  fi
+  case "$3" in pass) ;; *) [ ! -s "$2.err" ] || echo "    stderr: $(head -n 1 "$2.err" | cut -c1-200)" ;; esac
+}
 for c in $CASES; do
   if [ -z "$(plugin_for "$c")" ]; then echo "unknown case: $c"; overall=1; continue; fi
   if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = b ]; }; then echo "case $c: SKIP (LM Studio is not reachable)"; continue; fi
   passes=0
   for n in $(seq 1 "$RUNS"); do
     trace="$OUT/$c-$n.jsonl"
+    if [ "$c" = e ]; then
+      # shellcheck disable=SC2046
+      KEEP_SESSION=1 run_claude "$PLUGINS/$(plugin_for e)" "$(prompt_for e)" "$trace"; rc=$?
+      s=$(summarize "$trace" app-20k.log)
+      sid=$(jq -rs '[.[] | .session_id? // empty] | first // empty' "$trace" 2>/dev/null)
+      trace2="$OUT/e-$n-turn2.jsonl"
+      if [ -n "$sid" ]; then
+        run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-20k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
+      else rc2=1; echo "no session id in $trace" > "$trace2.err"; : > "$trace2"; fi
+      s2=$(summarize "$trace2" app-20k-b.log)
+      tally "$s"; tally "$s2"
+      if jq -e '.ok' >/dev/null <<<"$s" && jq -e '.ok' >/dev/null <<<"$s2" && check_e "$s" "$s2"; then passes=$((passes+1)); verdict=pass; else verdict=FAIL; fi
+      echo "  e-$n $verdict turn1_notices=$(jq '.notices_all' <<<"$s" 2>/dev/null) turn1 $(jq -c '{delegate_calls, late_delegate_calls, read_by_claude}' <<<"$s" 2>/dev/null) turn2 $(jq -c '{delegate_calls, notices_all, read_by_claude, denied}' <<<"$s2" 2>/dev/null)"
+      report_run "$rc" "$trace" "$verdict"; report_run "$rc2" "$trace2" "$verdict"
+      continue
+    fi
     run_claude "$PLUGINS/$(plugin_for "$c")" "$(prompt_for "$c")" "$trace"; rc=$?
     # shellcheck disable=SC2046
     s=$(summarize "$trace" $(bases_for "$c"))
-    total_runs=$((total_runs+1))
-    if jq -e '.ok' >/dev/null <<<"$s"; then
-      inspectable=$((inspectable+1))
-      plugin_denials=$((plugin_denials + $(jq '.plugin_denied | length' <<<"$s")))
-      other_denials=$((other_denials + $(jq '(.denied | length) - (.plugin_denied | length)' <<<"$s")))
-      if "check_$c" "$s"; then passes=$((passes+1)); verdict=pass; else verdict=FAIL; fi
-    else
-      verdict="FAIL (unknown: no parsable result event)"
-    fi
+    tally "$s"
+    if jq -e '.ok' >/dev/null <<<"$s" && "check_$c" "$s"; then passes=$((passes+1)); verdict=pass
+    elif jq -e '.ok' >/dev/null <<<"$s"; then verdict=FAIL; else verdict="FAIL (unknown: no parsable result event)"; fi
     echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, late_delegate_calls, saw_fetch_failed, saw_no_model, delegated, read_by_claude, read_tool_on, notices_all, denied, answer_chars}' <<<"$s" 2>/dev/null)"
-    if [ "$rc" -ne 0 ]; then
-      [ "$rc" -eq 124 ] && echo "    claude timed out after ${RUN_TIMEOUT_SEC}s (exit 124)" || echo "    claude exited $rc"
-    fi
-    case "$verdict" in pass) ;; *) [ ! -s "$trace.err" ] || echo "    stderr: $(head -n 1 "$trace.err" | cut -c1-200)" ;; esac
+    report_run "$rc" "$trace" "$verdict"
   done
   if [ "$passes" -ge "$THRESHOLD" ]; then echo "case $c: $passes/$RUNS PASS"; else echo "case $c: $passes/$RUNS FAIL"; overall=1; fi
 done
