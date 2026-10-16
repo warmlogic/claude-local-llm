@@ -216,7 +216,7 @@ exported_names=$(grep -oE '^(\[ -z [^]]*\] \|\| )?export [A-Za-z_]+' "$LAUNCHER"
 mkdir -p "$TMP/stubbin"
 printf '#!/bin/sh\nenv > "%s"\nexit 0\n' "$TMP/stub-env" > "$TMP/stubbin/npx"; chmod +x "$TMP/stubbin/npx"
 ambient=(); for n in $unset_names; do ambient+=("$n=ambient-$n"); done
-env "${ambient[@]}" PATH="$TMP/stubbin:$PATH" LOCAL_LLM_ALLOWED_DIRS="$A" "$LAUNCHER" 2>/dev/null
+env "${ambient[@]}" LOCAL_LLM_ENDPOINT_URL=http://127.0.0.1:1234 LOCAL_LLM_MODEL= PATH="$TMP/stubbin:$PATH" LOCAL_LLM_ALLOWED_DIRS="$A" "$LAUNCHER" 2>/dev/null
 leaked=""; for n in $unset_names; do grep -q "^$n=" "$TMP/stub-env" 2>/dev/null && leaked="$leaked $n"; done
 want_roots=$(cd -P "$A" && pwd -P)
 if [ -s "$TMP/stub-env" ] && [ "$(wc -w <<<"$unset_names")" -ge 15 ] && [ -z "$leaked" ] \
