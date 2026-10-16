@@ -1,6 +1,6 @@
 // Drive a stdio MCP server over JSON-RPC: initialize, then optionally one tools/call.
 // Usage: node mcp-call.mjs <server-command> [tool] [json-args]
-// Prints one JSON line: {"init":bool,"initError":str|null,"exit":int|null,"stderr":str,"call":{"isError":bool,"text":str}|null}
+// Prints one JSON line: {"init":bool,"initError":str|null,"exit":int|null,"timedOut":bool,"stderr":str,"call":{"isError":bool,"text":str}|null}
 // Environment is inherited from the caller. Exits 0 whenever it could report.
 import { spawn } from 'node:child_process';
 
@@ -9,7 +9,7 @@ const CALL_TIMEOUT_MS = 240000;
 const START_TIMEOUT_MS = 20000;
 
 const child = spawn(cmd, [], { stdio: ['pipe', 'pipe', 'pipe'] });
-const out = { init: false, initError: null, exit: null, stderr: '', call: null };
+const out = { init: false, initError: null, exit: null, timedOut: false, stderr: '', call: null };
 let buf = '';
 let timer;
 
@@ -20,12 +20,12 @@ const finish = () => {
   console.log(JSON.stringify(out));
   process.exit(0);
 };
-const arm = (ms) => { clearTimeout(timer); timer = setTimeout(finish, ms); };
+const arm = (ms) => { clearTimeout(timer); timer = setTimeout(() => { out.timedOut = true; finish(); }, ms); };
 
 child.stderr.on('data', (d) => { out.stderr = (out.stderr + d).slice(-2000); });
 child.stdin.on('error', () => {});
 child.on('error', (e) => { out.stderr = `spawn failed: ${e.message}`; out.exit = -1; finish(); });
-child.on('exit', (code) => { out.exit = code ?? -1; setTimeout(finish, 50); });
+child.on('close', (code) => { out.exit = code ?? -1; setTimeout(finish, 50); });
 child.stdout.on('data', (d) => {
   buf += d;
   let i;

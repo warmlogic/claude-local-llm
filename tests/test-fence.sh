@@ -20,8 +20,8 @@ for tool in node jq curl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "FAIL: $tool is required to run this suite"; exit 1; }
 done
 
-TMP=$(mktemp -d)                                  # roots and fixtures
-HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX")   # under $HOME when the repo is
+TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }                                 # roots and fixtures
+HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }  # under $HOME when the repo is
 FAKE_PID=""
 trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
 
@@ -56,7 +56,7 @@ check_refuses() { # <label> <allowed-dirs> <stderr-fragment> [endpoint]
 check_reads() {
   local out
   out=$(read_files "$2" "$3")
-  if jq -e '.init and (.call.text | test("outside the allowed roots") | not)' >/dev/null <<<"$out" \
+  if jq -e '.init and (.call.text | test("outside the allowed roots|READ FAILED") | not)' >/dev/null <<<"$out" \
      && { [ "$lm_up" = 0 ] || jq -e '.call != null and .call.isError == false' >/dev/null <<<"$out"; }; then
     ok "$1"
   else
@@ -79,6 +79,15 @@ check_refuses "valid root plus '/'" "$A,/" "refusing '/'"
 check_refuses "'//' resolves to /" "//" "refusing '/'"
 check_refuses "'/.' resolves to /" "/." "refusing '/'"
 check_refuses "dot-dot chain resolves to /" "$A$(printf '/..%.0s' $(seq 1 40))" "refusing '/'"
+# houtini trims each piece after splitting, so a root that differs from its trimmed form is refused
+mkdir -p "$TMP/d" "$TMP/d "; echo canary-d > "$TMP/d/canary.txt"
+ln -s "$TMP/d " "$TMP/link-trailing-space"
+mkdir -p "$TMP/c:d"; ln -s "$TMP/c:d" "$TMP/link-colon"
+echo f > "$TMP/plain-file"
+check_refuses "entry resolving to a dir with trailing whitespace" "$TMP/d /" "trailing whitespace"
+check_refuses "symlink root whose target ends in whitespace" "$TMP/link-trailing-space" "trailing whitespace"
+check_refuses "symlink root whose target contains ':'" "$TMP/link-colon" "':'"
+check_refuses "regular file as a root" "$TMP/plain-file" "not a directory"
 check_refuses "entry with ':' (houtini splits on it)" "$A,$A/x:y" "':'"
 check_refuses "'path:suffix' (would authorize path plus a cwd-relative suffix)" "$TMP/a:b" "':'"
 out=$(env -u LOCAL_LLM_ALLOWED_DIRS node "$DRIVER" "$LAUNCHER")
@@ -126,7 +135,7 @@ check_reads "two roots joined with ', ' and padding: read from the second" " $A 
 mkdir -p "$TMP/with space"; echo "spaced" > "$TMP/with space/f.txt"
 check_reads "root with a space in its name" "$TMP/with space" "$TMP/with space/f.txt"
 out=$(read_files "$TMP/missing,$B" "$B/second.txt")
-if jq -e '.init and (.stderr | contains("not found, skipping")) and (.stderr | contains("allowed folders: ")) and (.call.text | test("outside the allowed roots") | not)' >/dev/null <<<"$out" \
+if jq -e '.init and (.stderr | contains("not found, skipping")) and (.stderr | contains("allowed folders: ")) and (.call.text | test("outside the allowed roots|READ FAILED") | not)' >/dev/null <<<"$out" \
    && { [ "$lm_up" = 0 ] || jq -e '.call != null and .call.isError == false' >/dev/null <<<"$out"; }; then
   ok "nonexistent root is skipped with a warning; the valid root still works"
 else bad "nonexistent root skipped ($(jq -c '{stderr,call}' <<<"$out" | cut -c1-300))"; fi
@@ -157,6 +166,14 @@ if [ -s "$TMP/port" ]; then
   else
     bad "endpoint passthrough (requests: $(wc -l < "$TMP/requests.log" 2>/dev/null), $(jq -c '{init,stderr}' <<<"$out" | cut -c1-200))"
   fi
+  # model pin: LOCAL_LLM_MODEL reaches houtini as HOUTINI_LM_MODEL; empty means no pin
+  ep="http://127.0.0.1:$(cat "$TMP/port")"
+  out=$(LOCAL_LLM_MODEL=fake-model LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A" discover)
+  if jq -e '.call.text | test("pinned via HOUTINI_LM_MODEL")' >/dev/null <<<"$out"; then ok "LOCAL_LLM_MODEL pins the model"
+  else bad "LOCAL_LLM_MODEL pins the model ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+  out=$(LOCAL_LLM_MODEL= LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A" discover)
+  if jq -e '.call.text | test("no HOUTINI_LM_MODEL pin")' >/dev/null <<<"$out"; then ok "empty LOCAL_LLM_MODEL leaves the model unpinned"
+  else bad "empty LOCAL_LLM_MODEL leaves the model unpinned ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
 else
   bad "endpoint passthrough: fake endpoint did not start"
 fi
@@ -181,7 +198,7 @@ if [ "$lm_up" = 1 ]; then
   # LM Studio is expected at a 32k context. Over it, houtini surfaces the upstream error; no summary.
   gen_text 130000 > "$TMP/root/huge.txt"
   out=$(read_files "$TMP/root" "$TMP/root/huge.txt")
-  if jq -e '.call.isError and (.call.text | test("context")) and (.call.text | test("Model:") | not)' >/dev/null <<<"$out"; then
+  if jq -e '.call.isError and (.call.text | test("context_length_exceeded|context length"; "i")) and (.call.text | test("Model:") | not)' >/dev/null <<<"$out"; then
     ok "oversized: ~130k chars exceeds the context window, error and no summary"
   else
     bad "oversized: expected a context-window error; the suite assumes the model is loaded at 32k context, so a context above ~45k tokens fails here by design ($(jq -c '.call' <<<"$out" | cut -c1-300))"
