@@ -10,8 +10,9 @@
 #   b  2k-char file: no code_task_files call, Claude reads the file
 #   c  endpoint down: Claude still answers by reading the file itself
 #   d  endpoint up but no model loaded (fake endpoint, tests/fake-endpoint.mjs no-model): same as c
-#   e  two jobs, endpoint down: the outage is announced once, not twice
-#   f  no permission prompt: permission_denials is empty in every run of a-e
+#   e  two jobs, endpoint down: the final result announces the outage once, not once per job
+#   f  no permission prompt for the plugin: no permission_denials entry for the Skill call or the plugin's tools in a-e
+#      (other denials, i.e. Claude's own compound Bash, are counted and printed but do not gate)
 #
 # Environment: DELEG_RUNS (5)  DELEG_CASES ("a b c d e")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
 # default a new mktemp dir that is kept)  DELEG_ALLOWED_TOOLS (passed to --allowedTools; empty by default)
@@ -98,6 +99,7 @@ summarize() {
         answer_chars: (($r.result // "") | length),
         is_error: (if ($r | has("is_error")) then $r.is_error else true end),
         denied: [($r.permission_denials // [])[] | .tool_name],
+        plugin_denied: [($r.permission_denials // [])[] | .tool_name | select(. == "Skill" or startswith("mcp__plugin_local-llm_local-llm__"))],
         mcp_tool_listed: ([.[] | select(.type == "system" and .subtype == "init") | .tools[]?] | index($ft) != null),
         skill_used: ([$T[] | select(.name == "Skill")] | length > 0),
         delegate_calls: ($D | length),
@@ -105,7 +107,8 @@ summarize() {
         saw_no_model: ([results[] | select(contains("No models loaded"))] | length > 0),
         delegated: [$bases[] | . as $b | select([$D[] | select((.input | tostring) | contains($b))] | length > 0)],
         read_by_claude: [$bases[] | . as $b | select([$R[] | select((.input | tostring) | contains($b))] | length > 0)],
-        notices: ([texts[] | select(test("local[- ]?(model|llm)|lm studio|local-llm|delegat|\\bserver\\b"; "i") and test("unavailab|not (running|available|reachable|responding|connected|loaded)|offline|\\bdown\\b|fetch failed|no models? loaded|(unable|couldn.t|could not|can.t|cannot) (to )?(reach|connect|delegate|use)"; "i"))] | length)
+        notices_all: ([texts[] | select(test("local[- ]?(model|llm)|lm studio|local-llm|delegat|\\bserver\\b"; "i") and test("unavailab|not (running|available|reachable|responding|connected|loaded)|offline|\\bdown\\b|fetch failed|no models? loaded|(unable|couldn.t|could not|can.t|cannot) (to )?(reach|connect|delegate|use)"; "i"))] | length),
+        result_notices: ([($r.result // "") | split("\n")[] | splits("(?<=[.!?]) +") | select(test("local[- ]?(model|llm)|lm studio|local-llm|delegat|\\bserver\\b"; "i") and test("unavailab|not (running|available|reachable|responding|connected|loaded)|offline|\\bdown\\b|fetch failed|no models? loaded|(unable|couldn.t|could not|can.t|cannot) (to )?(reach|connect|delegate|use)"; "i"))] | length)
       }' "$trace" 2>/dev/null || echo '{"ok":false}'
 }
 
@@ -115,7 +118,10 @@ check_b() { jq -e '.ok and .answer_chars > 0 and .delegate_calls == 0 and (.read
 # c and d: the tool was tried, failed the expected way, and Claude then read the file itself
 check_c() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
 check_d() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_no_model and (.read_by_claude | index("app-20k.log") != null)' >/dev/null <<<"$1"; }
-check_e() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and (.delegate_calls >= 1) and (.read_by_claude | length == 2) and .notices == 1' >/dev/null <<<"$1"; }
+# e scores the final result only: "the user is told once per session, not once per job". A working note between
+# tool calls ("Server is down; doing it myself.") is progress narration, not the notice, so intermediate
+# assistant text is not counted (notices_all prints it for information).
+check_e() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and (.delegate_calls >= 1) and (.read_by_claude | length == 2) and .result_notices == 1' >/dev/null <<<"$1"; }
 
 # --- plugins for each case ---------------------------------------------------------------------------
 copy_plugin "$PLUGINS/real" "$ENDPOINT"
@@ -142,7 +148,7 @@ THRESHOLD=$(( (RUNS * 4 + 4) / 5 ))
 echo "delegation acceptance: $RUNS runs per case (pass at >= $THRESHOLD), traces in $OUT"
 echo "LM Studio reachable: $lm_up; model: ${DELEG_MODEL:-default}; setting sources: ${SOURCES:-none}"
 
-overall=0; total_runs=0; denied_runs=0
+overall=0; total_runs=0; denied_runs=0; other_denials=0
 for c in $CASES; do
   if [ -z "$(plugin_for "$c")" ]; then echo "unknown case: $c"; overall=1; continue; fi
   if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = b ]; }; then echo "case $c: SKIP (LM Studio is not reachable)"; continue; fi
@@ -153,12 +159,14 @@ for c in $CASES; do
     # shellcheck disable=SC2086
     s=$(summarize "$trace" $(bases_for "$c"))
     total_runs=$((total_runs+1))
-    jq -e '.denied | length > 0' >/dev/null <<<"$s" && denied_runs=$((denied_runs+1))
+    jq -e '.plugin_denied | length > 0' >/dev/null <<<"$s" && denied_runs=$((denied_runs+1))
+    other_denials=$((other_denials + $(jq '(.denied | length) - (.plugin_denied | length)' <<<"$s")))
     if "check_$c" "$s"; then passes=$((passes+1)); verdict=pass; else verdict=FAIL; fi
-    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, saw_fetch_failed, saw_no_model, delegated, read_by_claude, notices, denied, answer_chars}' <<<"$s")"
+    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, saw_fetch_failed, saw_no_model, delegated, read_by_claude, result_notices, notices_all, denied, answer_chars}' <<<"$s")"
   done
   if [ "$passes" -ge "$THRESHOLD" ]; then echo "case $c: $passes/$RUNS PASS"; else echo "case $c: $passes/$RUNS FAIL"; overall=1; fi
 done
-if [ "$denied_runs" -eq 0 ]; then echo "case f: 0/$total_runs runs with permission_denials PASS"
-else echo "case f: $denied_runs/$total_runs runs with permission_denials FAIL"; overall=1; fi
+if [ "$denied_runs" -eq 0 ]; then echo "case f: 0/$total_runs runs with a plugin permission denial PASS"
+else echo "case f: $denied_runs/$total_runs runs with a plugin permission denial FAIL"; overall=1; fi
+echo "other denials (not plugin): $other_denials"
 exit "$overall"
