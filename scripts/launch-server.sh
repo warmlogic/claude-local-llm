@@ -6,8 +6,8 @@
 #
 # Why this exists: houtini reads ANY absolute path when HOUTINI_LM_FILE_ROOTS is unset or
 # empty. This script refuses to start unless at least one existing, non-"/" root remains.
-# Invariant: each resolved root is unchanged by houtini's split on [,:] and per-piece trim.
-# Each folder is resolved (symlinks, ".", "..") and a missing one is skipped with a warning.
+# resolve-roots.mjs resolves the folders with houtini's own parse (see its header for the
+# invariant); a missing folder is skipped with a warning.
 # Limits: no "," or ":" in folder names (houtini splits on both); "/" is refused.
 # The endpoint must be loopback, so file contents never leave the machine.
 # Never prints file contents; stderr carries only short status lines.
@@ -15,40 +15,7 @@ set -efu
 
 command -v npx >/dev/null 2>&1 || { echo "local-llm: npx (Node.js) is required" >&2; exit 2; }
 
-roots=""
-nl=$(printf '\n_'); nl=${nl%_}
-old_ifs=$IFS
-IFS=,
-for entry in ${LOCAL_LLM_ALLOWED_DIRS-}; do
-  IFS=$old_ifs
-  # trim surrounding whitespace
-  entry=${entry#"${entry%%[![:space:]]*}"}
-  entry=${entry%"${entry##*[![:space:]]}"}
-  case $entry in
-    '$HOME'|'${HOME}'|'~') entry=$HOME ;;
-    '$HOME/'*) entry=$HOME/${entry#'$HOME/'} ;;
-    '${HOME}/'*) entry=$HOME/${entry#'${HOME}/'} ;;
-    '~/'*) entry=$HOME/${entry#'~/'} ;;
-  esac
-  case $entry in
-    '') continue ;;
-    *:*) echo "local-llm: allowed folder must not contain ':' (houtini splits on it): $entry" >&2; exit 2 ;;
-    /*) ;;
-    *) echo "local-llm: allowed folder must be an absolute path: $entry" >&2; exit 2 ;;
-  esac
-  # Pass houtini the folder it will actually use: symlinks and ".", ".." resolved.
-  [ -e "$entry" ] || { echo "local-llm: allowed folder not found, skipping: $entry" >&2; continue; }
-  resolved=$(cd -P -- "$entry" 2>/dev/null && pwd -P && echo x) || {
-    echo "local-llm: allowed folder is not a directory (or not traversable): $entry" >&2; exit 2; }
-  resolved=${resolved%x}; resolved=${resolved%?}  # keep trailing newlines/spaces of the path itself
-  # Invariant: houtini splits on [:,] and trims each piece, so the root must survive that unchanged.
-  case $resolved in
-    *[,:]*|*"$nl"*|*[[:space:]]) echo "local-llm: resolved folder has ',' ':' newline or trailing whitespace: $resolved" >&2; exit 2 ;;
-    *[!/]*) ;;
-    *) echo "local-llm: refusing '/' as an allowed folder: $entry" >&2; exit 2 ;;
-  esac
-  roots=${roots:+$roots,}$resolved
-done
+roots=$(node "$(dirname "$0")/resolve-roots.mjs")  # exits 2 (and stops here) on a refused entry
 
 if [ -z "$roots" ]; then
   echo "local-llm: no allowed folders configured; set allowed_dirs in the plugin options" >&2
