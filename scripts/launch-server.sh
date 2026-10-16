@@ -39,6 +39,11 @@ case ${rest#:} in
   *[!0-9]*) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port (set endpoint_url in the plugin options): $endpoint" >&2; exit 2 ;;
 esac
 
+# houtini 3.3.4 also reads these (every process.env.* in its dist); drop any ambient value so only
+# what is exported below applies. Re-derive this list from the dist when the pin changes.
+unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
+  HOUTINI_LM_MODEL HOUTINI_LM_THINKING HOUTINI_LM_STRUCTURED HOUTINI_LM_SERIALISE HOUTINI_LM_RETRY_RATELIMIT \
+  HOUTINI_LM_PROVIDER HOUTINI_LM_MIN_TOKENS HOUTINI_LM_CROSS_PROCESS_LOCK HOUTINI_LM_CONTEXT_WINDOW
 export HOUTINI_LM_FILE_ROOTS=$roots
 export HOUTINI_LM_ENDPOINT_URL=$endpoint
 [ -z "${LOCAL_LLM_MODEL:-}" ] || export HOUTINI_LM_MODEL=$LOCAL_LLM_MODEL
