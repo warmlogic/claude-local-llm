@@ -6,6 +6,7 @@
 #
 # Why this exists: houtini reads ANY absolute path when HOUTINI_LM_FILE_ROOTS is unset or
 # empty. This script refuses to start unless at least one existing, non-"/" root remains.
+# Invariant: each resolved root is unchanged by houtini's split on [,:] and per-piece trim.
 # Each folder is resolved (symlinks, ".", "..") and a missing one is skipped with a warning.
 # Limits: no "," or ":" in folder names (houtini splits on both); "/" is refused.
 # The endpoint must be loopback, so file contents never leave the machine.
@@ -15,6 +16,7 @@ set -efu
 command -v npx >/dev/null 2>&1 || { echo "local-llm: npx (Node.js) is required" >&2; exit 2; }
 
 roots=""
+nl=$(printf '\n_'); nl=${nl%_}
 old_ifs=$IFS
 IFS=,
 for entry in ${LOCAL_LLM_ALLOWED_DIRS-}; do
@@ -35,10 +37,13 @@ for entry in ${LOCAL_LLM_ALLOWED_DIRS-}; do
     *) echo "local-llm: allowed folder must be an absolute path: $entry" >&2; exit 2 ;;
   esac
   # Pass houtini the folder it will actually use: symlinks and ".", ".." resolved.
-  resolved=$(cd -P -- "$entry" 2>/dev/null && pwd -P) || {
-    echo "local-llm: allowed folder not found, skipping: $entry" >&2; continue; }
+  [ -e "$entry" ] || { echo "local-llm: allowed folder not found, skipping: $entry" >&2; continue; }
+  resolved=$(cd -P -- "$entry" 2>/dev/null && pwd -P && echo x) || {
+    echo "local-llm: allowed folder is not a directory (or not traversable): $entry" >&2; exit 2; }
+  resolved=${resolved%x}; resolved=${resolved%?}  # keep trailing newlines/spaces of the path itself
+  # Invariant: houtini splits on [:,] and trims each piece, so the root must survive that unchanged.
   case $resolved in
-    *[,:]*) echo "local-llm: resolved folder contains ',' or ':': $resolved" >&2; exit 2 ;;
+    *[,:]*|*"$nl"*|*[[:space:]]) echo "local-llm: resolved folder has ',' ':' newline or trailing whitespace: $resolved" >&2; exit 2 ;;
     *[!/]*) ;;
     *) echo "local-llm: refusing '/' as an allowed folder: $entry" >&2; exit 2 ;;
   esac
@@ -64,7 +69,7 @@ case $hostport in
 esac
 case $rest in ''|:[0-9]*) ;; *) rest=bad ;; esac
 case ${rest#:} in
-  *[!0-9]*) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port: $endpoint" >&2; exit 2 ;;
+  *[!0-9]*) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port (set endpoint_url in the plugin options): $endpoint" >&2; exit 2 ;;
 esac
 
 export HOUTINI_LM_FILE_ROOTS=$roots
