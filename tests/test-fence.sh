@@ -23,7 +23,12 @@ done
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }                                 # roots and fixtures
 HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }  # under $HOME when the repo is
 FAKE_PID=""
-trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
+trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
+
+# Ambient houtini variables must not leak into any case; the scrub test sets them explicitly.
+unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
+  HOUTINI_LM_MODEL HOUTINI_LM_THINKING HOUTINI_LM_STRUCTURED HOUTINI_LM_SERIALISE HOUTINI_LM_RETRY_RATELIMIT \
+  HOUTINI_LM_PROVIDER HOUTINI_LM_MIN_TOKENS HOUTINI_LM_CROSS_PROCESS_LOCK HOUTINI_LM_CONTEXT_WINDOW
 
 lm_up=0
 curl -s -m 3 "$ENDPOINT/v1/models" >/dev/null 2>&1 && lm_up=1
@@ -44,7 +49,7 @@ gen_text() {
 }
 # did_not_start <json> <stderr-fragment>: launcher exited non-zero, no MCP initialize, fragment on stderr
 did_not_start() {
-  jq -e --arg f "$2" '(.init | not) and .exit != null and .exit != 0 and (.stderr | contains($f))' >/dev/null <<<"$1"
+  jq -e --arg f "$2" '(.timedOut | not) and (.init | not) and .exit != null and .exit != 0 and (.stderr | contains($f))' >/dev/null <<<"$1"
 }
 check_refuses() { # <label> <allowed-dirs> <stderr-fragment> [endpoint]
   local out
@@ -56,7 +61,7 @@ check_refuses() { # <label> <allowed-dirs> <stderr-fragment> [endpoint]
 check_reads() {
   local out
   out=$(read_files "$2" "$3")
-  if jq -e '.init and (.call.text | test("outside the allowed roots|READ FAILED") | not)' >/dev/null <<<"$out" \
+  if jq -e '(.timedOut | not) and .init and (.call.text | test("outside the allowed roots|READ FAILED") | not)' >/dev/null <<<"$out" \
      && { [ "$lm_up" = 0 ] || jq -e '.call != null and .call.isError == false' >/dev/null <<<"$out"; }; then
     ok "$1"
   else
@@ -80,13 +85,23 @@ check_refuses "'//' resolves to /" "//" "refusing '/'"
 check_refuses "'/.' resolves to /" "/." "refusing '/'"
 check_refuses "dot-dot chain resolves to /" "$A$(printf '/..%.0s' $(seq 1 40))" "refusing '/'"
 # houtini trims each piece after splitting, so a root that differs from its trimmed form is refused
-mkdir -p "$TMP/d" "$TMP/d "; echo canary-d > "$TMP/d/canary.txt"
+mkdir -p "$TMP/d" "$TMP/d "
 ln -s "$TMP/d " "$TMP/link-trailing-space"
 mkdir -p "$TMP/c:d"; ln -s "$TMP/c:d" "$TMP/link-colon"
 echo f > "$TMP/plain-file"
-check_refuses "entry resolving to a dir with trailing whitespace" "$TMP/d /" "trailing whitespace"
-check_refuses "symlink root whose target ends in whitespace" "$TMP/link-trailing-space" "trailing whitespace"
+check_refuses "entry resolving to a dir with trailing whitespace" "$TMP/d /" "altered by houtini"
+check_refuses "symlink root whose target ends in whitespace" "$TMP/link-trailing-space" "altered by houtini"
 check_refuses "symlink root whose target contains ':'" "$TMP/link-colon" "':'"
+# Characters JS trim() strips but [[:space:]] misses (any locale): the root must survive houtini's trim.
+feff=$(printf '\xef\xbb\xbf'); nbsp=$(printf '\xc2\xa0'); nl=$(printf '\n_'); nl=${nl%_}
+mkdir -p "$TMP/d$feff" "$TMP/d$nbsp" "$TMP/d$nl"
+for loc in C en_US.UTF-8; do
+  LC_ALL=$loc check_refuses "dir ending in U+FEFF (LC_ALL=$loc)" "$TMP/d$feff/" "altered by houtini"
+  LC_ALL=$loc check_refuses "dir ending in NBSP (LC_ALL=$loc)" "$TMP/d$nbsp/" "altered by houtini"
+done
+check_refuses "dir ending in a newline" "$TMP/d$nl/" "altered by houtini"
+mkdir -p "$TMP/p/x"; chmod 000 "$TMP/p"
+check_refuses "unreadable parent (EACCES) is an error, not a skip" "$TMP/p/x" "EACCES"
 check_refuses "regular file as a root" "$TMP/plain-file" "not a directory"
 check_refuses "entry with ':' (houtini splits on it)" "$A,$A/x:y" "':'"
 check_refuses "'path:suffix' (would authorize path plus a cwd-relative suffix)" "$TMP/a:b" "':'"
@@ -174,6 +189,9 @@ if [ -s "$TMP/port" ]; then
   out=$(LOCAL_LLM_MODEL= LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A" discover)
   if jq -e '.call.text | test("no HOUTINI_LM_MODEL pin")' >/dev/null <<<"$out"; then ok "empty LOCAL_LLM_MODEL leaves the model unpinned"
   else bad "empty LOCAL_LLM_MODEL leaves the model unpinned ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+  out=$(HOUTINI_LM_MODEL=fake-model-2 LM_STUDIO_MODEL=x HOUTINI_LM_STRUCTURED=1 LOCAL_LLM_MODEL= LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A" discover)
+  if jq -e '.call.text | test("no HOUTINI_LM_MODEL pin")' >/dev/null <<<"$out"; then ok "ambient houtini variables are scrubbed"
+  else bad "ambient houtini variables are scrubbed ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
 else
   bad "endpoint passthrough: fake endpoint did not start"
 fi
