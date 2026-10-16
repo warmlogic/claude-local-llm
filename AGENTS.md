@@ -34,7 +34,7 @@ tests/
 - **`HOUTINI_LM_API_KEY=not-needed`.** LM Studio needs no key; setting a dummy stops houtini from falling back to `OPENROUTER_API_KEY` from the user's environment and sending anything off-box.
 - **`HOUTINI_LM_STRUCTURED` stays unset.** Plain text output is the contract.
 - **`HOUTINI_LM_MAX_FILE_MB=1`** (houtini's minimum) caps a single read well below the context window's reach.
-- **`npx -y @houtini/lm@3.3.4` with `npm_config_prefer_offline=true`.** The exact pin keeps the fence code reviewed; the offline preference makes startup hit the npx cache (about 0.4 s warm) instead of the registry. Never pin below 3.3.3. Re-run `tests/test-fence.sh` when bumping the pin.
+- **`npx -y @houtini/lm@3.3.4` with `npm_config_prefer_offline=true`.** The exact pin keeps the fence code reviewed; the offline preference makes startup hit the npx cache (about 0.4 s warm) instead of the registry. Never pin below 3.3.3: 3.3.0–3.3.2 hid answers from Claude Code. Re-run `tests/test-fence.sh` when bumping the pin.
 - **Oversized input is a hard error, not a truncated summary.** The limit is the loaded model's context window in tokens, not houtini's byte cap. Dense synthetic text runs about 2.7 chars/token, so ~80k chars (~30k tokens) still fit a 32k context while ~90k+ chars return `Error: Upstream model error mid-stream: ... context_length_exceeded` and no summary. Houtini does not truncate silently. A size check before delegating is still the skill's job, because the error costs a round trip and real prose tokenizes at a different rate.
 - **Tool names** for a plugin server are `mcp__plugin_local-llm_local-llm__<tool>` (`code_task_files`, `discover`, ...); use the full name in `allowed-tools` and permission rules.
 
