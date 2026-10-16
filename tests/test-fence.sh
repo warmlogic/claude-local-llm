@@ -280,6 +280,27 @@ else
   skp "case-insensitive root: filesystem is case-sensitive"
 fi
 
+# --- delegate-local skill and its approval hook --------------------------------
+HOOK="$REPO/scripts/approve-skill.mjs"
+skill="$REPO/skills/delegate-local/SKILL.md"
+hook_out() { printf '%s' "$1" | node "$HOOK"; }
+if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then
+  ok "approval hook allows the plugin's own skill"
+else bad "approval hook allows the plugin's own skill"; fi
+for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
+             '{"tool_name":"Bash","tool_input":{"skill":"local-llm:delegate-local"}}' \
+             '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
+  if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
+  else bad "approval hook stays silent for: ${input:-<empty>}"; fi
+done
+allowed=$(sed -n 's/^allowed-tools: //p' "$skill")
+missing=""
+for t in $allowed; do grep -qF "\`$t\`" "$skill" || missing="$missing $t"; done
+if [ -n "$allowed" ] && [ -z "$missing" ]; then ok "every allowed-tools entry in the skill also appears in its names table"
+else bad "skill allowed-tools entries missing from the names table:${missing:- (no allowed-tools line)}"; fi
+if [ "$(wc -l < "$skill")" -le 80 ]; then ok "skill stays within its 80-line budget"
+else bad "skill is over its 80-line budget ($(wc -l < "$skill") lines)"; fi
+
 # --- model-backed cases --------------------------------------------------------
 gen_text 20000 > "$TMP/root/twenty-k.txt"
 if [ "$lm_up" = 1 ]; then
