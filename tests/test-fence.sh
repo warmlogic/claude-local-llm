@@ -68,6 +68,22 @@ out=$(run_launcher "")
 if jq -e '.stderr | test("no allowed folders")' >/dev/null <<<"$out"; then ok "refusal names the problem on stderr"
 else bad "refusal names the problem on stderr ($out)"; fi
 
+# --- loopback only: a remote endpoint is refused before houtini starts ---------
+for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@evil.example/" "http://localhost:1@evil.example/" "ftp://127.0.0.1" "127.0.0.1:1234" "http://10.0.0.5:1234"; do
+  out=$(LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$TMP")
+  if [ "$(jq -r '.init' <<<"$out")" = "false" ] && [ "$(jq -r '.exit' <<<"$out")" != "null" ] \
+     && [ "$(jq -r '.exit' <<<"$out")" != "0" ] && jq -e '.stderr | test("loopback")' >/dev/null <<<"$out"; then
+    ok "launcher refuses non-loopback endpoint: $ep"
+  else
+    bad "launcher refuses non-loopback endpoint: $ep ($out)"
+  fi
+done
+for ep in "http://127.0.0.1:1234" "http://localhost:1234/v1" "http://[::1]:1234"; do
+  out=$(LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$TMP")
+  if [ "$(jq -r '.init' <<<"$out")" = "true" ]; then ok "launcher accepts loopback endpoint: $ep"
+  else bad "launcher accepts loopback endpoint: $ep ($out)"; fi
+done
+
 # --- the fence: reads outside every root are rejected --------------------------
 mkdir -p "$TMP/root" "$TMP/root-evil" "$TMP/outside"
 echo "canary-outside" > "$TMP/outside/secret.txt"
@@ -99,7 +115,7 @@ case "$HOME_TMP" in
     for form in '$HOME' '${HOME}' '~'; do
       out=$(read_files "$form/$rel" "$HOME_TMP/note.txt")
       if jq -e '.init and (.call.text | test("outside the allowed roots") | not)' >/dev/null <<<"$out" \
-         && { [ "$lm_up" = 0 ] || jq -e '.call.isError | not' >/dev/null <<<"$out"; }; then
+         && { [ "$lm_up" = 0 ] || jq -e '.call != null and .call.isError == false' >/dev/null <<<"$out"; }; then
         ok "root given as literal $form/... is expanded"
       else
         bad "root given as literal $form/... is expanded ($(jq -c '.call' <<<"$out" | cut -c1-300))"
@@ -112,7 +128,7 @@ esac
 gen_text 20000 > "$TMP/root/twenty-k.txt"
 if [ "$lm_up" = 1 ]; then
   out=$(read_files "$TMP/root" "$TMP/root/twenty-k.txt")
-  if jq -e '(.call.isError | not) and (.call.text | test("1 file\\(s\\) read")) and (.call.text | test("Model:"))' >/dev/null <<<"$out"; then
+  if jq -e '(.call != null and .call.isError == false) and (.call.text | test("1 file\\(s\\) read")) and (.call.text | test("Model:"))' >/dev/null <<<"$out"; then
     ok "happy path: ~20k-char file summarized, footer shows 1 file(s) read"
   else
     bad "happy path ($(jq -c '.call' <<<"$out" | cut -c1-300))"
@@ -123,7 +139,7 @@ if [ "$lm_up" = 1 ]; then
   out=$(read_files "$TMP/root" "$TMP/root/huge.txt")
   if jq -e '.call.isError and (.call.text | test("context")) and (.call.text | test("Model:") | not)' >/dev/null <<<"$out"; then
     ok "oversized: ~130k chars exceeds the context window, error and no summary"
-  elif jq -e '.call.isError | not' >/dev/null <<<"$out"; then
+  elif jq -e '.call != null and .call.isError == false' >/dev/null <<<"$out"; then
     skp "oversized: loaded model's context fits ~130k chars; raise the fixture size"
   else
     bad "oversized ($(jq -c '.call' <<<"$out" | cut -c1-300))"
