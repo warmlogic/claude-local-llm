@@ -12,6 +12,7 @@
 # Never prints file contents; stderr carries only short status lines.
 set -efu
 
+
 roots=""
 old_ifs=$IFS
 IFS=,
@@ -54,8 +55,14 @@ hostport=${hostport%%[/?#]*}
 case $endpoint in http://*|https://*) ;; *) hostport=invalid ;; esac
 case $hostport in *@*) hostport=invalid ;; esac
 case $hostport in
-  127.0.0.1|localhost|'[::1]'|127.0.0.1:[0-9]*|localhost:[0-9]*|'[::1]:'[0-9]*) ;;
-  *) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]): $endpoint" >&2; exit 2 ;;
+  127.0.0.1*) rest=${hostport#127.0.0.1} ;;
+  localhost*) rest=${hostport#localhost} ;;
+  '[::1]'*) rest=${hostport#'[::1]'} ;;
+  *) rest=bad ;;
+esac
+case $rest in ''|:[0-9]*) ;; *) rest=bad ;; esac
+case ${rest#:} in
+  *[!0-9]*) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port: $endpoint" >&2; exit 2 ;;
 esac
 
 export HOUTINI_LM_FILE_ROOTS=$roots
