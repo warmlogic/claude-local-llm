@@ -3,16 +3,13 @@
 // `claude -p` an unapproved call is denied; the skill's `allowed-tools` only applies once the skill is loaded).
 // Everything else gets no output, so the normal permission flow decides: the other houtini tools (chat,
 // custom_prompt, embed, ...) stay unapproved.
-// Why this is safe: code_task_files and verify_claims only read files, the launcher fences them to the configured
-// allowed folders (scripts/launch-server.sh fails closed), and all inference stays on loopback.
+// Why this is safe: code_task_files only reads files, the launcher fences it to the configured allowed folders
+// (scripts/launch-server.sh fails closed), and all inference stays on loopback. Deny rules still win over this hook.
 // Names are exact, and the skill name is qualified: a bare `delegate-local` could be another plugin's skill.
 import { readFileSync } from 'node:fs';
 
 const SKILL = 'local-llm:delegate-local';
-const TOOLS = new Set([
-  'mcp__plugin_local-llm_local-llm__code_task_files',
-  'mcp__plugin_local-llm_local-verify__verify_claims', // served by a later server; harmless until it exists
-]);
+const TOOLS = new Set(['mcp__plugin_local-llm_local-llm__code_task_files']);
 let input = {};
 try {
   input = JSON.parse(readFileSync(0, 'utf8'));
