@@ -146,7 +146,7 @@ claude --plugin-dir "$HOME/github/claude-local-llm" "Use the delegate-local skil
 Success looks like this:
 
 - Claude loads the `delegate-local` skill and calls `code_task_files` without a permission prompt. To see the tool result, open the transcript view (`ctrl+o`).
-- The result ends in a footer such as `Model: qwen3.6-35b-a3b-splash | 13226→130 tokens | TTFT: 4355ms, 148.7 tok/s, 5.2s | unknown · 1 file(s) read`.
+- The result contains a footer such as `Model: qwen3.6-35b-a3b-splash | 13226→130 tokens | TTFT: 4355ms, 148.7 tok/s, 5.2s | unknown · 1 file(s) read`.
 - Claude's reply says the local model produced the summary.
 
 Optional: to see whether Claude delegates unprompted, repeat with "Summarize $PWD/smoke.log in 3 bullets." That depends on the model's judgment, so it is probabilistic; a miss is not a setup failure. Clean up when you are done: `rm -r "$HOME/github/local-llm-smoke"`.
