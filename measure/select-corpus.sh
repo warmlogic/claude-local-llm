@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Picks the measurement corpus by a fixed rule (AGENTS.md, "Measuring"). Prints the private manifest TSV:
-# id <TAB> slot <TAB> type <TAB> task <TAB> bytes <TAB> mtime_iso <TAB> sha256 <TAB> path
-# Paths never leave $MEASURE_HOME: run.sh writes this output there and nowhere else.
+# id <TAB> slot <TAB> type <TAB> task <TAB> chars <TAB> mtime_iso <TAB> sha256 <TAB> path
+# Paths never leave $MEASURE_HOME: run.sh writes this output there and nowhere else. Sizes are characters (wc -m in
+# UTF-8), as the spec states them. Warnings go to stderr and never name a file; a missing root is a warning, and a
+# failed filter command exits non-zero ("selection crashed") rather than letting a file through.
 # Usage: select-corpus.sh [cutoff_epoch]   (default: now)
 set -euo pipefail
 export LC_ALL=C
@@ -16,26 +18,40 @@ TRANSCRIPT_RE='transcript|meeting|standup|1on1|1-on-1|interview|call-notes'
 LOG_NAME_RE='(^|[_.-])(logs?|stderr|stdout|trace)([_.-]|$)|^(train|run|job)_'
 LOG_DIR_RE='^(logs?|debug|runs?)$'
 
+warn() { echo "select-corpus: warning: $*" >&2; }
+# keep <grep args...>: a name filter; grep's 1 means "no line kept", anything above it is a crash
+keep() { local rc=0; grep "$@" || rc=$?; [ "$rc" -le 1 ] || { echo "select-corpus: grep failed (rc=$rc)" >&2; exit 2; }; }
+
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+roots=()
+for r in "${ROOTS[@]}"; do if [ -d "$r" ]; then roots+=("$r"); else warn "root $r does not exist; skipped"; fi; done
+[ "${#roots[@]}" -gt 0 ] || { echo "select-corpus: none of the roots exist" >&2; exit 2; }
 # 1. walk: prune dot-dirs and build/vendor dirs, regular files only (no symlinks), allowed extensions
-find -P "${ROOTS[@]}" \( -type d \( -name '.*' -o -name node_modules -o -name worktrees -o -name venv \
+find -P "${roots[@]}" \( -type d \( -name '.*' -o -name node_modules -o -name worktrees -o -name venv \
     -o -name __pycache__ -o -name dist -o -name build -o -name target -o -name site-packages -o -name vendor \
-    -o -name fixtures \) -prune \) -o -type f -print 2>/dev/null \
-  | grep -E -i "$EXT_RE" | grep -E -v -i "$SECRET_NAME_RE" | grep -E -v "$LOCK_RE" > "$tmp/walk" || true
-for x in "${SELF_EXCLUDE[@]}"; do grep -F -v "$x/" "$tmp/walk" > "$tmp/w2" || true; mv "$tmp/w2" "$tmp/walk"; done
-# 2. stat, size windows, cutoff, text + UTF-8 + no secret pattern; classify
+    -o -name fixtures \) -prune \) -o -type f -print > "$tmp/all" 2> "$tmp/find.err" || true
+[ ! -s "$tmp/find.err" ] || warn "find could not read $(wc -l < "$tmp/find.err" | tr -d ' ') folder(s) or file(s); they were skipped"
+keep -E -i "$EXT_RE" "$tmp/all" > "$tmp/w1"
+keep -E -v -i "$SECRET_NAME_RE" "$tmp/w1" > "$tmp/w2"
+keep -E -v "$LOCK_RE" "$tmp/w2" > "$tmp/walk"
+for x in "${SELF_EXCLUDE[@]}"; do keep -F -v "$x/" "$tmp/walk" > "$tmp/w3"; mv "$tmp/w3" "$tmp/walk"; done
+# 2. stat, cutoff, text + UTF-8, size windows in characters, no secret pattern; classify
+n_scan_fail=0
 while IFS= read -r p; do
   read -r m b < <(stat -f '%m %z' "$p") || continue
   [ "$m" -le "$CUTOFF" ] || continue
-  slot=""
-  if [ "$b" -ge 20000 ] && [ "$b" -le 50000 ]; then slot=main
-  elif [ "$b" -ge 1800 ] && [ "$b" -le 2200 ]; then slot=s2k
-  elif [ "$b" -ge 4500 ] && [ "$b" -le 5500 ]; then slot=s5k
-  elif [ "$b" -ge 9000 ] && [ "$b" -le 11000 ]; then slot=s10k
-  else continue; fi
+  [ "$b" -ge 1800 ] && [ "$b" -le 200000 ] || continue   # bytes bound chars from both sides (1 to 4 bytes each)
   grep -Iq . "$p" || continue
   iconv -f UTF-8 -t UTF-8 "$p" >/dev/null 2>&1 || continue
-  ! grep -E -i -q -e "$SECRET_BODY_RE" "$p" || continue
+  c=$(LC_ALL=en_US.UTF-8 wc -m < "$p" | tr -d ' ') || continue
+  slot=""
+  if [ "$c" -ge 20000 ] && [ "$c" -le 50000 ]; then slot=main
+  elif [ "$c" -ge 1800 ] && [ "$c" -le 2200 ]; then slot=s2k
+  elif [ "$c" -ge 4500 ] && [ "$c" -le 5500 ]; then slot=s5k
+  elif [ "$c" -ge 9000 ] && [ "$c" -le 11000 ]; then slot=s10k
+  else continue; fi
+  rc=0; grep -E -i -q -e "$SECRET_BODY_RE" "$p" || rc=$?
+  [ "$rc" -eq 1 ] || { [ "$rc" -eq 0 ] || n_scan_fail=$((n_scan_fail+1)); continue; }   # only "no match" passes
   base=$(basename "$p" | tr '[:upper:]' '[:lower:]'); lp=$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')
   if printf '%s' "$base" | grep -E -q "$TRANSCRIPT_RE" && printf '%s' "$base" | grep -E -q '\.(txt|md|vtt|srt)$'; then t=transcript
   elif printf '%s' "$base" | grep -E -q '\.(log|out)$' \
@@ -44,8 +60,9 @@ while IFS= read -r p; do
               || basename "$(dirname "$lp")" | grep -E -q "$LOG_DIR_RE"; }; }; then t=log
   else t=doc; fi
   [ "$t" != doc ] || ! printf '%s' "$base" | grep -E -q '\.(jsonl|log|out)$' || continue   # structured/log ext never counts as a doc
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$m" "$slot" "$t" "$b" "$(shasum -a 256 "$p" | cut -c1-64)" "$p"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$m" "$slot" "$t" "$c" "$(shasum -a 256 "$p" | cut -c1-64)" "$p"
 done < "$tmp/walk" > "$tmp/cands"
+[ "$n_scan_fail" -eq 0 ] || warn "the secret scan failed on $n_scan_fail candidate(s); they were excluded"
 # 3. newest first (mtime desc, path asc); drop duplicate contents (keep first); max 1 per parent dir per (slot, type)
 sort -t $'\t' -k1,1nr -k6,6 "$tmp/cands" \
  | awk -F'\t' '!seen[$5]++' \
