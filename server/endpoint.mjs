@@ -58,6 +58,15 @@ export function upstreamCode(json) {
   }
 }
 
+// An identifier-shaped code outside the allowlist goes to stderr (the MCP log) to help extend the
+// list; it never reaches the reply.
+const IDENTIFIER = /^[a-z][a-z0-9_.-]{0,63}$/;
+function logUnlistedCodes(status, json) {
+  const err = json?.error;
+  const codes = [err?.code, err?.type].filter((c) => typeof c === 'string' && IDENTIFIER.test(c));
+  if (codes.length) console.error(`local-verify: upstream HTTP ${status} with unlisted error code ${codes.join('/')}`);
+}
+
 const diagnostic = (status, code) =>
   `endpoint error (HTTP ${status}${code ? `, ${code}` : ''})${CODE_HINTS[code] ? `: ${CODE_HINTS[code]}` : ''}`;
 
@@ -75,7 +84,10 @@ export async function fetchJson(url, init, timeoutMs, signal) {
     if (signal.aborted) throw signal.reason;
     if (timer.aborted) throw new RequestTimeout('a request to the endpoint timed out');
     if (e instanceof EndpointError) throw e;
-    throw new Error(`fetch failed (${typeof e.cause?.code === 'string' ? e.cause.code : 'network error'})`);
+    const code = typeof e.cause?.code === 'string' ? e.cause.code : 'network error';
+    // Before a response, a connection failure ("fetch failed", the outage string the skill keys on);
+    // after one, the body could not be read.
+    throw new Error(res ? `reading the response failed (HTTP ${res.status}, ${code})` : `fetch failed (${code})`, { cause: e });
   }
   let json;
   try {
@@ -83,7 +95,11 @@ export async function fetchJson(url, init, timeoutMs, signal) {
   } catch {
     json = undefined;
   }
-  if (!res.ok) throw new EndpointError(diagnostic(res.status, upstreamCode(json)), res.status);
+  if (!res.ok) {
+    const code = upstreamCode(json);
+    if (!code) logUnlistedCodes(res.status, json);
+    throw new EndpointError(diagnostic(res.status, code), res.status);
+  }
   if (json === undefined) throw new EndpointError(`the endpoint returned a non-JSON response (HTTP ${res.status})`, res.status);
   return json;
 }
@@ -135,7 +151,12 @@ const isEmbedding = (m) => m?.type === 'embeddings' || /embed/i.test(String(m?.i
 // whose load state is unknown, since naming an unloaded model makes LM Studio load it.
 export async function pickModel(cfg, signal) {
   if (cfg.model) return cfg.model;
-  const get = (path) => fetchJson(`${cfg.base}${path}`, {}, cfg.requestTimeoutMs, signal);
+  const get = (path) =>
+    fetchJson(`${cfg.base}${path}`, {}, cfg.requestTimeoutMs, signal).catch((e) => {
+      if (e instanceof RequestTimeout) throw new Error(`the model list request to ${path} timed out after ${cfg.requestTimeoutMs} ms`);
+      throw e;
+    });
+  const pinHint = 'set the model plugin option';
   let v0;
   try {
     v0 = await get('/api/v0/models');
@@ -146,17 +167,23 @@ export async function pickModel(cfg, signal) {
       throw e1;
     });
     if (!Array.isArray(v1?.data)) throw new Error('unexpected response from /v1/models');
-    const chat = v1.data.filter((m) => typeof m?.id === 'string' && !isEmbedding(m));
+    const listed = v1.data.filter((m) => typeof m?.id === 'string');
+    const chat = listed.filter((m) => !isEmbedding(m));
     if (chat.length === 1) return chat[0].id;
-    if (!chat.length) throw new Error('No models loaded: the endpoint lists no chat model');
-    throw new Error(`cannot tell which of ${chat.length} listed models is loaded; set the model plugin option`);
+    if (!chat.length) {
+      throw new Error(`No models loaded: no chat model listed${listed.length ? ' (only embeddings models)' : ''}`);
+    }
+    throw new Error(`cannot tell which of ${chat.length} listed models is loaded; ${pinHint}`);
   }
   if (!Array.isArray(v0?.data)) throw new Error('unexpected response from /api/v0/models');
-  const chat = v0.data.filter((m) => typeof m?.id === 'string' && !isEmbedding(m));
-  const loaded = chat.find((m) => m.state === 'loaded');
-  if (loaded) return loaded.id;
+  const models = v0.data.filter((m) => typeof m?.id === 'string');
+  const chat = models.filter((m) => !isEmbedding(m));
+  const loaded = chat.filter((m) => m.state === 'loaded');
+  if (loaded.length === 1) return loaded[0].id;
+  if (loaded.length > 1) throw new Error(`cannot tell which of ${loaded.length} loaded chat models to use; ${pinHint}`);
   if (chat.some((m) => m.state === undefined)) {
-    throw new Error('cannot tell which model is loaded (no load state reported); set the model plugin option');
+    throw new Error(`cannot tell which model is loaded (no load state reported); ${pinHint}`);
   }
-  throw new Error('No models loaded in LM Studio; load one, then retry');
+  const embeddingsOnly = models.some((m) => isEmbedding(m) && m.state === 'loaded');
+  throw new Error(`No models loaded in LM Studio: no chat model loaded${embeddingsOnly ? ' (only embeddings models are)' : ''}; load one, then retry`);
 }

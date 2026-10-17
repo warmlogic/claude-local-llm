@@ -192,7 +192,9 @@ async function judgeClaim(cfg, model, state, claim, ci, k, signalIn) {
     const result = { ...base, label: p > 0.5 ? 'SUPPORTED' : 'NOT_SUPPORTED', p_supported: round3(p), agreement: round3(Math.max(p, 1 - p)) };
     return { result };
   } catch (e) {
-    console.error(`local-verify: claim ${ci} NOT_RUN: ${inspect(e)}`); // stderr is the MCP log
+    // A claim's own failure is logged with its stack; a stop of the whole call (budget or cancel) is
+    // logged once by verifyClaims instead of once per claim.
+    if (!signalIn.aborted) console.error(`local-verify: claim ${ci} NOT_RUN: ${inspect(e)}`); // stderr is the MCP log
     return { result: { ...base, label: 'NOT_RUN', reason: e.message }, error: e };
   }
 }
@@ -221,6 +223,7 @@ export async function verifyClaims(cfg, args, cancel = new AbortController().sig
   try {
     const model = await pickModel(cfg, signal);
     const judged = await Promise.all(claims.map((c, ci) => judgeClaim(cfg, model, state, c, ci, k, signal)));
+    if (signal.aborted) console.error(`local-verify: call stopped: ${signal.reason?.message ?? signal.reason}`);
     const results = judged.map((j) => j.result);
     const firstError = judged.find((j) => j.error)?.error;
     if (judged.every((j) => j.error)) throw new Error(firstError.message, { cause: firstError });

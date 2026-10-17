@@ -128,7 +128,7 @@ async function callTool(id, params) {
     const result = await verifyClaims(cfg, params.arguments, cancel.signal);
     if (!cancel.signal.aborted) reply(id, text(JSON.stringify(result)));
   } catch (e) {
-    if (cancel.signal.aborted) return console.error(`local-verify: request ${key} cancelled`);
+    if (cancel.signal.aborted) return undefined; // cancelled: the reason is logged once in verifyClaims
     console.error(`local-verify: verify_claims failed: ${inspect(e)}`); // stack and cause chain
     reply(id, text(`Error: ${e?.message ?? 'internal error'}`, true));
   } finally {
@@ -139,7 +139,8 @@ async function callTool(id, params) {
 const inFlight = new Map(); // JSON-encoded request id -> AbortController of a running tools/call
 function cancelRequest(params) {
   if (!isPlainObject(params) || !isId(params.requestId)) return;
-  inFlight.get(JSON.stringify(params.requestId))?.abort(new Error('the request was cancelled'));
+  const key = JSON.stringify(params.requestId);
+  inFlight.get(key)?.abort(new Error(`request ${key} was cancelled`));
 }
 
 // Every field is type-checked before use, so no request shape can throw out of the handler.
@@ -176,7 +177,18 @@ const internalError = (id, e) => {
 };
 
 console.error(`local-verify: ready; allowed folders: ${roots.join(',')}`);
-createInterface({ input: process.stdin }).on('line', (line) => {
+// A closed stdout (the client went away) must not crash the process with EPIPE.
+process.stdout.on('error', (e) => {
+  if (e.code !== 'EPIPE') console.error(`local-verify: stdout error: ${inspect(e)}`);
+  process.exit(0);
+});
+const lines = createInterface({ input: process.stdin });
+// The client closed stdin: stop every running call (freeing its requests) and exit.
+lines.on('close', () => {
+  for (const ctl of inFlight.values()) ctl.abort(new Error('the client closed the connection'));
+  process.exit(0);
+});
+lines.on('line', (line) => {
   if (!line.trim()) return;
   let msg;
   try {

@@ -22,7 +22,7 @@ const finish = () => {
 };
 const arm = (ms) => { clearTimeout(timer); timer = setTimeout(() => { out.timedOut = true; finish(); }, ms); };
 
-child.stderr.on('data', (d) => { out.stderr = (out.stderr + d).slice(-2000); });
+child.stderr.on('data', (d) => { out.stderr = (out.stderr + d).slice(-8000); });
 child.stdin.on('error', () => {});
 child.on('error', (e) => { out.stderr = `spawn failed: ${e.message}`; out.exit = -1; finish(); });
 child.on('close', (code) => { out.exit = code ?? -1; setTimeout(finish, 50); });

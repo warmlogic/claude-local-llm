@@ -33,6 +33,8 @@ start_fake() {
   EP="http://127.0.0.1:$(cat "$TMP/$1.port")"; LOG="$TMP/$1.log"
 }
 chat_count() { jq -s '[.[] | select(.headers and .url == "/v1/chat/completions")] | length' "$1"; }  # one header line per request
+# counts_eq <a> <b>: both are whole numbers and equal, so an unreadable log can never compare equal to itself
+counts_eq() { [[ $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] && [ "$1" -eq "$2" ]; }
 # call <json-args> [env...]: one verify_claims call through the launcher, fenced to $ROOT, against $EP
 call() {
   local args="$1"; shift
@@ -136,12 +138,13 @@ check_refused() { # <label> <path> <message-fragment>
   out=$(call "$(claims_on "$2" '["[yes] The api service started."]')")
   after=$(chat_count "$LOG")
   if jq -e --arg f "$3" '.call.isError and (.call.text | startswith("Error:")) and (.call.text | contains($f))' >/dev/null <<<"$out" \
-     && ! grep -q canary <<<"$out" && [ "$before" = "$after" ]; then ok "refused: $1"
+     && ! grep -q canary <<<"$out" && counts_eq "$before" "$after"; then ok "refused: $1"
   else bad "refused: $1 (chat requests $before -> $after; $(brief "$out"))"; fi
 }
 OUTSIDE="outside the allowed folders ($REAL_ROOT); widen allowed_dirs in the plugin options if intended"
 check_refused "path outside every root, naming the allowed folders" "$TMP/outside/secret.txt" "$OUTSIDE"
-check_refused "symlink inside the root pointing outside it" "$ROOT/link-out.txt" "outside the allowed folders"
+check_refused "symlink inside the root pointing outside it, naming where it resolves" "$ROOT/link-out.txt" \
+  "path resolves (through a symlink or ..) to $(cd -P "$TMP/outside" && pwd -P)/secret.txt, outside the allowed folders"
 check_refused "sibling directory sharing the root's name prefix" "$TMP/root-evil/sibling.txt" "outside the allowed folders"
 check_refused "dot-dot escape from inside the root" "$ROOT/../outside/secret.txt" "outside the allowed folders"
 check_refused "relative path" "root/inside.txt" "must be absolute"
@@ -156,14 +159,14 @@ if jq -e '.call.isError and (.call.text | contains("outside the allowed folders"
   ok "one path outside the roots fails the whole call"
 else bad "one path outside the roots fails the whole call ($(brief "$out"))"; fi
 out=$(call "$(jq -nc --arg a "$ROOT/missing.txt" --arg b "$TMP/outside/secret.txt" --arg c "$INSIDE" '{paths:[$a,$b,$c], claims:["[yes] x"]}')")
-if jq -e --arg a "$ROOT/missing.txt: no such file" --arg b "$TMP/outside/secret.txt: path is outside" \
+if jq -e --arg a "$ROOT/missing.txt: no such file" --arg b "$TMP/outside/secret.txt: path resolves" \
      '.call.isError and (.call.text | contains("cannot use 2 paths") and contains($a) and contains($b))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
   ok "several bad paths: every one is listed with its cause"
 else bad "several bad paths ($(brief "$out"))"; fi
 before=$(chat_count "$LOG")
 out=$(call "$(jq -nc --arg a "$ROOT/half1.txt" --arg b "$ROOT/half2.txt" '{paths:[$a,$b], claims:["[yes] x"]}')")
 if jq -e '.call.isError and (.call.text | contains("over the 1 MB combined limit"))' >/dev/null <<<"$out" \
-   && ! grep -q canary <<<"$out" && [ "$(chat_count "$LOG")" = "$before" ]; then ok "files over 1 MB combined are refused before any request"
+   && ! grep -q canary <<<"$out" && counts_eq "$(chat_count "$LOG")" "$before"; then ok "files over 1 MB combined are refused before any request"
 else bad "combined cap ($(brief "$out"))"; fi
 
 # --- JSON shape, declared kinds, vote shares and the request each sample sends ----------------
@@ -178,7 +181,7 @@ if jq -e '.call.isError == false' >/dev/null <<<"$out" && jq -e '
      and .results[1].claim == "[split] The api service stopped."' >/dev/null <<<"$res"; then
   ok "result shape: every result has auto_accept false; kind is as declared, computed when undeclared; votes collapse to two labels"
 else bad "result shape ($(cut -c1-400 <<<"$res"))"; fi
-if [ "$(chat_count "$LOG")" = 30 ] && jq -se '[.[] | select(.body) | .body] |
+if counts_eq "$(chat_count "$LOG")" "30" && jq -se '[.[] | select(.body) | .body] |
      all(.[]; .temperature == 1 and .reasoning_effort == "none" and .model == "fake-verify-model"
               and (.response_format.json_schema.schema.properties.label.enum | sort) == ["CONTRADICTED","NOT_IN_SOURCE","SUPPORTED"]
               and (.messages[-1].content | contains("canary-inside")))
@@ -206,7 +209,7 @@ arg_case() { # <label> <json-args> <message-fragment>
   before=$(chat_count "$LOG")
   out=$(call "$2")
   if jq -e --arg f "$3" '.call.isError and (.call.text | startswith("Error:")) and (.call.text | contains($f))' >/dev/null <<<"$out" \
-     && [ "$(chat_count "$LOG")" = "$before" ]; then ok "invalid arguments refused: $1"
+     && counts_eq "$(chat_count "$LOG")" "$before"; then ok "invalid arguments refused: $1"
   else bad "invalid arguments refused: $1 ($(brief "$out"))"; fi
 }
 arg_case "no paths" "$(jq -nc '{paths:[], claims:["x"]}')" "paths must be an array of 1 to 10"
@@ -246,9 +249,18 @@ model_case "/api/v0/models without a data array: an unexpected response, not 'no
   '.call.isError and (.call.text | contains("unexpected response from /api/v0/models"))'
 model_case "both model lists 404: endpoint_url probably ends in /v1" verify-nolists \
   '.call.isError and (.call.text | contains("endpoint_url should be the server root, without /v1"))'
+model_case "two loaded chat models: refuses to guess" verify-twoloaded \
+  '.call.isError and (.call.text | contains("cannot tell which of 2 loaded chat models to use; set the model plugin option"))'
+model_case "only an embeddings model loaded: 'no chat model loaded'" verify-embedonly \
+  '.call.isError and (.call.text | contains("No models loaded in LM Studio: no chat model loaded (only embeddings models are)"))'
+start_fake m-slow verify-slowlist
+out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)" LOCAL_VERIFY_REQUEST_TIMEOUT_MS=300)
+if jq -e '.call.isError and (.call.text | contains("the model list request to /api/v0/models timed out after 300 ms"))' >/dev/null <<<"$out"; then
+  ok "a model-list timeout names the path and the timeout"
+else bad "model-list timeout ($(brief "$out"))"; fi
 model_case "nothing loaded: 'No models loaded'" no-model \
   '.call.isError and (.call.text | contains("No models loaded"))'
-if [ "$(chat_count "$LOG")" = 0 ]; then ok "no chat request goes out when no model is known to be loaded"
+if counts_eq "$(chat_count "$LOG")" "0"; then ok "no chat request goes out when no model is known to be loaded"
 else bad "no-model: $(chat_count "$LOG") chat requests"; fi
 
 # --- upstream errors are fixed diagnostics: no upstream text, no retry ------------------------
@@ -258,7 +270,7 @@ upstream_case() { # <label> <claim> <message-fragment>
   before=$(chat_count "$LOG")
   out=$(call "$(claims_on "$INSIDE" "[\"$2\"]" 1)")
   if jq -e --arg f "$3" '.call.isError and (.call.text | contains($f))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out" \
-     && [ "$(chat_count "$LOG")" = $((before + 1)) ]; then ok "$1"
+     && counts_eq "$(chat_count "$LOG")" "$((before + 1))"; then ok "$1"
   else bad "$1 ($(( $(chat_count "$LOG") - before )) requests; $(brief "$out"))"; fi
 }
 upstream_case "a 400 whose message echoes the prompt: status only, no file text" "[echo400] x" "endpoint error (HTTP 400)"
@@ -266,6 +278,14 @@ upstream_case "a 500 with an error field: status and allowlisted code, not retri
 upstream_case "a non-JSON 200: a fixed message, no body" "[html] x" "non-JSON response (HTTP 200)"
 upstream_case "LM Studio's real context-overflow 400: the context hint, no file text" "[ctx] x" \
   "endpoint error (HTTP 400, context_length_exceeded): the files are too large for the model's context"
+out=$(call "$(claims_on "$INSIDE" '["[oddcode] x"]' 1)")
+if jq -e '.call.isError and (.call.text | endswith("endpoint error (HTTP 400)")) and (.stderr | contains("upstream HTTP 400 with unlisted error code weird_code_x"))' >/dev/null <<<"$out" \
+   && ! grep -q canary <<<"$out"; then ok "an unlisted error code goes to stderr only; the reply stays the bare status"
+else bad "unlisted code ($(jq -c '{call, stderr: (.stderr[-300:])}' <<<"$out"))"; fi
+out=$(call "$(claims_on "$INSIDE" '["[cutbody] x"]' 1)")
+if jq -e '.call.isError and (.call.text | contains("reading the response failed (HTTP 200"))' >/dev/null <<<"$out"; then
+  ok "a body cut off mid-stream: 'reading the response failed', not 'fetch failed'"
+else bad "cut-off body ($(brief "$out"))"; fi
 upstream_case "a 404 with code model_not_found: the model-option hint" "[nomodel] x" \
   "endpoint error (HTTP 404, model_not_found): check the model plugin option, or leave it empty"
 printf 'canary-ctx: the context window is 32k tokens and the context length is fixed\n' > "$ROOT/mentions-context.txt"
@@ -276,7 +296,7 @@ else bad "echoed context words ($(brief "$out"))"; fi
 before=$(chat_count "$LOG")
 out=$(call "$(claims_on "$INSIDE" '["[badfinish] x"]' 1)")
 if jq -e '.call.isError and (.call.text | contains("finish_reason unrecognized, non-JSON content"))' >/dev/null <<<"$out" \
-   && ! grep -q canary <<<"$out" && [ "$(chat_count "$LOG")" = $((before + 2)) ]; then
+   && ! grep -q canary <<<"$out" && counts_eq "$(chat_count "$LOG")" "$((before + 2))"; then
   ok "an answer whose finish_reason and content echo the prompt: neither is reported"
 else bad "echoing finish_reason ($(brief "$out"))"; fi
 
@@ -289,7 +309,7 @@ start_fake target verify; target_log=$LOG
 start_fake redirect verify-redirect "$EP"
 out=$(call "$(claims_on "$INSIDE" '["[yes] x"]')")
 if jq -e '.call.isError and (.call.text | contains("HTTP 307): redirects are not followed"))' >/dev/null <<<"$out" \
-   && [ "$(chat_count "$target_log")" = 0 ] && [ "$(chat_count "$LOG")" -ge 1 ] && ! grep -q canary <<<"$out"; then
+   && counts_eq "$(chat_count "$target_log")" "0" && [ "$(chat_count "$LOG")" -ge 1 ] && ! grep -q canary <<<"$out"; then
   ok "a 307 from the endpoint is not followed: the call fails and the redirect target gets nothing"
 else bad "redirect (target got $(chat_count "$target_log") chat requests; $(brief "$out"))"; fi
 
@@ -305,7 +325,7 @@ else bad "control: the proxy saw nothing, so the proxy cases below prove nothing
 for variant in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy" 'NODE_OPTIONS="--use-env-proxy"' "PROXY_FLAG_UNSET=1"; do
   : > "$proxy_log"; before=$(chat_count "$LOG")
   out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)" "${proxy_env[@]}" "$variant")
-  if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ] && [ "$(chat_count "$LOG")" = $((before + 1)) ]; then
+  if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ] && counts_eq "$(chat_count "$LOG")" "$((before + 1))"; then
     ok "launcher with $variant and *_PROXY set: the proxy gets nothing, the endpoint gets the request"
   else bad "proxy bypass with $variant (proxy log $(wc -l < "$proxy_log") lines; $(brief "$out"))"; fi
 done
@@ -343,32 +363,34 @@ else bad "direct start without proxy variables ($(jq -c '{init,stderr,call}' <<<
 # --- time: one retry on a stall, one redraw of a cut-off answer, the call budget ---------------
 start_fake once verify-stall-once
 out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 2)" LOCAL_VERIFY_REQUEST_TIMEOUT_MS=300)
-if jq -e '.call.isError == false and (.call.text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" = 4 ]; then
+if jq -e '.call.isError == false and (.call.text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$out" && counts_eq "$(chat_count "$LOG")" "4"; then
   ok "a request that stalls once is retried and the call succeeds (4 requests for k=2)"
 else bad "stall-once retry ($(chat_count "$LOG") requests; $(brief "$out"))"; fi
 start_fake stall verify-stall
 out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)" LOCAL_VERIFY_REQUEST_TIMEOUT_MS=200)
 if jq -e '.call.isError and (.call.text | contains("timed out twice") and contains("send fewer claims or a smaller k"))' >/dev/null <<<"$out" \
-   && [ "$(chat_count "$LOG")" = 2 ]; then
+   && counts_eq "$(chat_count "$LOG")" "2"; then
   ok "a request that stalls twice fails after one retry, with a retry hint"
 else bad "stall twice ($(chat_count "$LOG") requests; $(brief "$out"))"; fi
 start_fake garbage1 verify-garbage-once
 out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 3)")
 if jq -e '.call.isError == false and (.call.text | fromjson | .results[0].p_supported == 1)' >/dev/null <<<"$out" \
-   && [ "$(chat_count "$LOG")" = 6 ] && jq -se '[.[] | select(.body) | .body.seed] | sort == [0,1,2,500,501,502]' "$LOG" >/dev/null; then
+   && counts_eq "$(chat_count "$LOG")" "6" && jq -se '[.[] | select(.body) | .body.seed] | sort == [0,1,2,500,501,502]' "$LOG" >/dev/null; then
   ok "a cut-off answer is redrawn once with another seed (6 requests for k=3)"
 else bad "redraw ($(chat_count "$LOG") requests; $(brief "$out"))"; fi
 start_fake garbage verify-garbage
 out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
 if jq -e '.call.isError and (.call.text | contains("no valid label twice") and contains("finish_reason length, non-JSON content"))' >/dev/null <<<"$out" \
-   && [ "$(chat_count "$LOG")" = 2 ] && ! grep -q '"label": "S' <<<"$out"; then
+   && counts_eq "$(chat_count "$LOG")" "2" && ! grep -q '"label": "S' <<<"$out"; then
   ok "a sample cut off twice fails, with finish_reason and content diagnostics but no model text"
 else bad "cut off twice ($(chat_count "$LOG") requests; $(brief "$out"))"; fi
 start_fake stall2 verify-stall
 t0=$(date +%s)
 out=$(call "$(claims_on "$INSIDE" '["[yes] x","[yes] y"]' 4)" LOCAL_VERIFY_REQUEST_TIMEOUT_MS=60000 LOCAL_VERIFY_BUDGET_MS=500)
 elapsed=$(( $(date +%s) - t0 ))
-if jq -e '.call.isError and (.call.text | contains("budget") and contains("send fewer claims or a smaller k"))' >/dev/null <<<"$out" && [ "$elapsed" -lt 10 ]; then
+if jq -e '.call.isError and (.call.text | contains("budget") and contains("send fewer claims or a smaller k"))
+          and (.stderr | [scan("call stopped: verify_claims ran past")] | length == 1) and (.stderr | contains("NOT_RUN:") | not)' >/dev/null <<<"$out" \
+   && [ "$elapsed" -lt 10 ]; then
   ok "a call where no claim finishes stops at its budget with an error and a retry hint (${elapsed}s)"
 else bad "budget (${elapsed}s; $(brief "$out"))"; fi
 
@@ -430,7 +452,7 @@ lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(
 out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 3000)
 b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
 if jq -e '.at_ms < 2000 and .result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
-   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("request 2 cancelled")' >/dev/null <<<"$out"; then
+   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("call stopped: request 2 was cancelled")' >/dev/null <<<"$out"; then
   ok "notifications/cancelled aborts the call: no reply for it, its slots free, the next call answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c1-200 <<<"$b"))"; fi
 start_fake twocalls verify
@@ -453,6 +475,14 @@ if jq -e '.call.isError == false and (.call.text | fromjson | .partial and ([.re
    && [ "$sent_a" -le 5 ]; then
   ok "a failed sample stops its siblings while the call goes on: $sent_a of claim a's 20 requests sent"
 else bad "sibling cancel ($sent_a of claim a's 20 requests; $(brief "$out"))"; fi
+
+start_fake hangup verify
+lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 4)")" \
+  '[$i, $a, {delay_ms: 300}, {close_stdin: true}]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 2 5000)
+if jq -e '.exit == 0 and .exit_ms < 2000 and (.timedOut | not) and (.stderr | test("Error|EPIPE") | not)' >/dev/null <<<"$out"; then
+  ok "the client closes stdin mid-call: the server stops its call and exits 0 promptly ($(jq '.exit_ms' <<<"$out") ms)"
+else bad "stdin close mid-call ($(jq -c '{exit,exit_ms,timedOut,stderr: (.stderr[-300:])}' <<<"$out"))"; fi
 
 # --- the eval fixtures are well-formed: valid kinds, existing files, 24 easy lookup items -------
 FIX="$SCRIPT_DIR/fixtures/verify"

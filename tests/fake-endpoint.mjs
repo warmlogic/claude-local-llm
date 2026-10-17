@@ -13,7 +13,8 @@
 //             "[echo400]" -> HTTP 400 likewise; "[html]" -> a non-JSON 200; "[badfinish]" -> non-JSON content
 //             and a finish_reason that echo the prompt; "[ctx]" -> LM Studio's real context-overflow 400
 //             (captured from LM Studio 0.4's Splash engine); "[nomodel]" -> a 404 with code model_not_found;
-//             "[fail-seed0]" -> an immediate 500 for the claim's first seed only; else NOT_IN_SOURCE. Logs the
+//             "[fail-seed0]" -> an immediate 500 for the claim's first seed only; "[oddcode]" -> a 400 with an
+//             unlisted error code; "[cutbody]" -> a 200 whose body is cut off mid-stream; else NOT_IN_SOURCE. Logs the
 //             parsed request body and the number of chat requests in flight (inflight) as it arrives.
 //   verify-stall-once  as verify, but the first request for each seed never answers.
 //   verify-stall       chat completions never answer.
@@ -27,6 +28,9 @@
 //   verify-nostate       as verify, but /api/v0/models entries carry no load state.
 //   verify-badlist       as verify, but /api/v0/models answers an object with no data array.
 //   verify-nolists       as verify, but both /api/v0/models and /v1/models are 404s (endpoint_url with /v1).
+//   verify-twoloaded     as verify, but /api/v0/models shows two loaded chat models.
+//   verify-embedonly     as verify, but only an embeddings model is loaded.
+//   verify-slowlist      as verify, but /api/v0/models never answers.
 //   proxy     an HTTP proxy that must never be used: logs each request (absolute URL) and answers 502.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -53,6 +57,8 @@ const answer = (res, content, finish = 'stop') =>
 const MODELS_V0 = {
   verify: [{ id: 'fake-embed', type: 'embeddings', state: 'loaded' }, { id: 'fake-verify-model', type: 'llm', state: 'loaded' }],
   'verify-nostate': [{ id: 'fake-a', type: 'llm' }, { id: 'fake-b', type: 'llm' }],
+  'verify-twoloaded': [{ id: 'fake-a', type: 'llm', state: 'loaded' }, { id: 'fake-b', type: 'vlm', state: 'loaded' }],
+  'verify-embedonly': [{ id: 'fake-embed', type: 'embeddings', state: 'loaded' }, { id: 'fake-chat', type: 'llm', state: 'not-loaded' }],
 };
 const MODELS_V1 = {
   'verify-v1': [{ id: 'text-embedding-fake' }, { id: 'v1-chat-model' }],
@@ -62,6 +68,7 @@ const verify = (req, res) => {
   if (req.url === '/api/v0/models') {
     if (MODELS_V1[mode] || mode === 'verify-nolists') return json(res, 404, { error: 'Unexpected endpoint' });
     if (mode === 'verify-badlist') return json(res, 200, { object: 'list' });
+    if (mode === 'verify-slowlist') return undefined; // never answer
     return json(res, 200, { object: 'list', data: MODELS_V0[mode] ?? MODELS_V0.verify });
   }
   if (req.url === '/v1/models' && MODELS_V1[mode]) return json(res, 200, { object: 'list', data: MODELS_V1[mode] });
@@ -91,6 +98,12 @@ const verify = (req, res) => {
         res.statusCode = 400;
         res.setHeader('content-type', 'application/json; charset=utf-8');
         return res.end(LMSTUDIO_CTX_ERROR);
+      }
+      if (claim.includes('[oddcode]')) return json(res, 400, { error: { message: `odd ${prompt}`, code: 'weird_code_x' } });
+      if (claim.includes('[cutbody]')) {
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': '100000' });
+        res.write('{"choices":[{"message":');
+        return setTimeout(() => res.socket.destroy(), 20);
       }
       if (claim.includes('[nomodel]')) return json(res, 404, { error: { message: `model not found ${prompt}`, code: 'model_not_found' } });
       if (claim.includes('[badfinish]')) return answer(res, `not json ${prompt}`, `canary-finish ${prompt}`);

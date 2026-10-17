@@ -38,9 +38,8 @@ export async function readFenced(path, roots) {
     throw new Error(e.code === 'ENOENT' ? 'no such file' : `cannot resolve the path (${e.code})`);
   }
   if (!roots.some((root) => real === root || real.startsWith(root + sep))) {
-    throw new Error(
-      `path is outside the allowed folders (${roots.join(', ')}); widen allowed_dirs in the plugin options if intended`,
-    );
+    const where = real === path ? 'path is' : `path resolves (through a symlink or ..) to ${real},`;
+    throw new Error(`${where} outside the allowed folders (${roots.join(', ')}); widen allowed_dirs in the plugin options if intended`);
   }
   let fh;
   try {
@@ -69,6 +68,7 @@ export async function readFenced(path, roots) {
   } catch (e) {
     throw e.code ? new Error(`cannot read the file (${e.code})`) : e;
   } finally {
-    await fh.close();
+    // A failed close must not replace the read's own result or error.
+    await fh.close().catch((e) => console.error(`local-verify: closing a read file failed (${e.code ?? e.message})`));
   }
 }
