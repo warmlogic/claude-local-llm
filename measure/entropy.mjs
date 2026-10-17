@@ -2,6 +2,7 @@
 // list names. Reads the selector's candidate TSV on stdin (path in the last column), writes the rows that pass to
 // stdout, and prints only counts to stderr, never a path or file text. A file that cannot be read is dropped.
 // Rule: a run of at least MIN_LEN characters from [A-Za-z0-9+/_=-] whose Shannon entropy exceeds MAX_BITS per char.
+// Known gap: a pure-hex run has at most 4.0 bits per char, so a bare hex key never trips it (best-effort, by design).
 import { readFileSync } from "node:fs";
 
 const MIN_LEN = 32;
