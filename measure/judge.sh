@@ -4,8 +4,9 @@
 #                                   ran ok, passed them, and has no stored verdict yet
 #   judge.sh <run-dir> --mech-only  mechanical checks only; never starts a session
 # Writes <run-dir>/judge/<id>-<cfg>.mech.json and, per judged answer, .prompt, .out.json and .verdict.json.
-# The judge sees the full file (the run's hash-verified copy in files/<id>), the task, the usable definition and the answer, never the configuration: short
-# the skill's attribution note (a line like "_Summarized by the local model._") is dropped before it reads the answer.
+# The judge sees the full file (the run's hash-verified copy in files/<id>), the task, the usable definition and the
+# answer, but never the configuration: the skill's attribution note (a line like "_Summarized by the local model._")
+# is dropped from the answer first. A verdict needs array reference, invented and missed, and a boolean usable.
 # Env: MEASURE_JUDGE_MODEL (opus), MEASURE_JUDGE_JOBS (4 in parallel), MEASURE_CLAUDE (claude; tests use a fake).
 set -uo pipefail
 
@@ -29,7 +30,7 @@ manifest() { manifest_field "$RUN_DIR/corpus.tsv" "$1" "$2"; }
 
 # judge_one <aid>: build the prompt, call the judge, keep its structured output
 judge_one() {
-  local aid="$1" id="${1%-*}" path task out work
+  local aid="$1" id="${1%-*}" path task out work rc
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
   jq -rn --rawfile file "$RUN_DIR/files/$id" --arg prompt "$(task_field "$task" prompt "$path")" \
     --arg usable "$(task_field "$task" usable)" --arg ref "$(task_field "$task" reference)" \
@@ -48,13 +49,16 @@ judge_one() {
   (cd "$work" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$JUDGE_TIMEOUT_SEC" "$CLAUDE" -p --model "$JUDGE_MODEL" \
     --tools "" --setting-sources project --no-session-persistence --output-format json \
     --json-schema "$(cat "$MDIR/judge-schema.json")" < "$RUN_DIR/judge/$aid.prompt" > "$out" 2> "$out.err")
-  if jq -e '.structured_output | type == "object" and has("usable")' "$out" >/dev/null 2>&1; then
+  rc=$?
+  rmdir "$work" 2>/dev/null
+  if jq -e '.structured_output | type == "object" and (.reference | type) == "array" and (.invented | type) == "array"
+            and (.missed | type) == "array" and (.usable | type) == "boolean"' "$out" >/dev/null 2>&1; then
     jq '.structured_output + {judge_models: (.modelUsage // {} | keys)}' "$out" > "$RUN_DIR/judge/$aid.verdict.json"
     echo "  judge $aid: usable=$(jq -r .usable "$RUN_DIR/judge/$aid.verdict.json")"
   else
-    echo "  judge $aid: no structured verdict (see $out.err)" >&2; rmdir "$work"; return 1
+    echo "  judge $aid: no valid verdict (claude rc=$rc$([ "$rc" -eq 124 ] && echo ", timed out"); see $out.err): $(head -n 1 "$out.err" 2>/dev/null | cut -c1-200)" >&2
+    return 1
   fi
-  rmdir "$work" 2>/dev/null
 }
 
 if [ "${2:-}" = --one ]; then judge_one "$3"; exit $?; fi
