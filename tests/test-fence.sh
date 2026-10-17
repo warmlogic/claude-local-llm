@@ -290,6 +290,7 @@ if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-loca
 else bad "approval hook allows the plugin's own skill"; fi
 for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local2"}}' \
+             '{"tool_name":"Skill","tool_input":{"skill":"delegate-local"}}' \
              '{"tool_name":"Bash","tool_input":{"skill":"local-llm:delegate-local"}}' \
              '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
   if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
@@ -299,8 +300,11 @@ if jq -e '.hooks.PreToolUse | any(.matcher == "Skill" and any(.hooks[]; (.comman
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"
 else bad "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"; fi
 st=$(DELEG_SELFTEST=1 bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); st_rc=$?
-if [ "$st_rc" -eq 0 ] && [ "$(grep -c 'selftest PASS' <<<"$st")" -ge 8 ]; then ok "delegation scorers pass their offline self-test ($(grep -c 'selftest PASS' <<<"$st") assertions)"
-else bad "delegation scorer self-test (rc=$st_rc): $(grep 'selftest FAIL' <<<"$st" | head -3 | tr '\n' ';')"; fi
+st_calls=$(grep -cE '^  expect(_[ef])? "' "$SCRIPT_DIR/test-delegation.sh")
+st_total=$(sed -n 's/^selftest total: \([0-9]*\), failed: 0$/\1/p' <<<"$st")
+if [ "$st_rc" -eq 0 ] && [ -n "$st_total" ] && [ "$st_total" -eq "$st_calls" ] && ! grep -q 'selftest FAIL' <<<"$st"; then
+  ok "delegation scorers pass their offline self-test ($st_total of $st_calls assertions)"
+else bad "delegation scorer self-test (rc=$st_rc, total=${st_total:-none}, expect calls=$st_calls): $(grep 'selftest FAIL' <<<"$st" | head -3 | tr '\n' ';')"; fi
 allowed=$(sed -n 's/^allowed-tools: //p' "$skill")
 missing=""
 for t in $allowed; do grep -qF "\`$t\`" "$skill" || missing="$missing $t"; done

@@ -4,6 +4,7 @@
 // `allowed-tools` line then covers the MCP tools for that turn.
 import { readFileSync } from 'node:fs';
 
+// Qualified name only: a bare `delegate-local` could be another plugin's skill.
 const SKILL = 'local-llm:delegate-local';
 let input = {};
 try {
