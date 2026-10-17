@@ -7,6 +7,7 @@
 #
 # Private state lives under MEASURE_HOME (default $HOME/.cache/local-llm-measure), outside every allowed folder:
 # corpus.tsv (the frozen manifest, with paths), runs/<stamp>/ (traces, answers, judge prompts, review.md).
+# Sessions run in an empty temp dir outside $HOME (see work_dir in lib.sh).
 # Env: MEASURE_HOME; MEASURE_MODEL (empty = Claude Code's default model, unpinned); MEASURE_LOCAL_MODEL
 # (qwen3.6-35b-a3b-splash, must be listed by LM Studio); MEASURE_RESELECT=1 (pick the corpus again);
 # MEASURE_CONFIGS ("off on"); MEASURE_ONLY (space-separated ids, e.g. "f01": a partial run, whose results go to
@@ -62,7 +63,11 @@ rows=$(wc -l < "$MANIFEST" | tr -d ' ')
 [ "$rows" -eq 13 ] || echo "warning: the manifest has $rows files, not 13 (10 main + 3 small)" >&2
 
 RUN_DIR="$MEASURE_HOME/runs/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$RUN_DIR/work" "$RUN_DIR/traces" "$RUN_DIR/facts" "$RUN_DIR/judge" || die "mkdir $RUN_DIR"
+mkdir -p "$RUN_DIR/traces" "$RUN_DIR/facts" "$RUN_DIR/judge" || die "mkdir $RUN_DIR"
+# The sessions' cwd: empty, constant for the run, and outside $HOME. Under $HOME, Claude Code finds
+# $HOME/.claude/CLAUDE.md while walking the cwd's ancestors and loads the user's own instructions as project memory.
+WORK=$(work_dir) || die "the session cwd must sit outside \$HOME; set TMPDIR to a folder outside it"
+trap 'rmdir "$WORK" 2>/dev/null' EXIT
 if [ -n "$ONLY" ]; then
   awk -F'\t' -v only=" $ONLY " 'index(only, " " $1 " ") > 0' "$MANIFEST" > "$RUN_DIR/corpus.tsv"
   [ -s "$RUN_DIR/corpus.tsv" ] || die "MEASURE_ONLY=\"$ONLY\" names no manifest id"
@@ -110,7 +115,7 @@ run_one() {
               --add-dir "$HOME/github" --add-dir "$HOME/catalyst")
   [ -z "$MODEL" ] || args+=(--model "$MODEL")
   [ "$2" = off ] || args+=(--plugin-dir "$8")
-  (cd "$RUN_DIR/work" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
+  (cd "$WORK" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
   rc=$?
   facts "$t" "$1" "$2" "$3" "$4" "$5" "$6" "$rc" > "$RUN_DIR/facts/$1.json"
   jq -r '"  \(.run): \(.status)  T=\(.T)  turns=\(.turns)  \((.duration_ms // 0) / 1000 | floor)s\(if .footer then "  local total \(.footer.total_s)s" else "" end)"' \

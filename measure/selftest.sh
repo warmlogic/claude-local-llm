@@ -65,7 +65,7 @@ check "mech: extra field" '[false,"fields are not exactly subject, first_date, l
 check "mech: not JSON" '[false,"not a JSON object"]' "$(mech extraction 'here is the summary')"
 
 # --- judge.sh with a fake judge, then report.sh -------------------------------------------------------------
-R="$TMP/run"; mkdir -p "$R/facts" "$R/work" "$R/judge"
+R="$TMP/run"; mkdir -p "$R/facts" "$R/judge"
 sha=$(shasum -a 256 "$DOC" | cut -c1-64)
 printf 'f01\tmain\tdoc\tsummary\t24000\t2026-01-05T00:00:00\t%s\t%s\nf02\tmain\tlog\tclassification\t41000\t2026-01-04T00:00:00\t%s\t%s\nf11\ts2k\tdoc\tsummary\t2000\t2026-01-03T00:00:00\t%s\t%s\n' \
   "$sha" "$DOC" "$sha" "$DOC" "$sha" "$DOC" > "$R/corpus.tsv"
@@ -108,7 +108,7 @@ check "report: main row with job T, savings and growth" '1' \
   "$(grep -c '^| f01 | doc | summary | 20–30k | 26298 | 18698 | 28.9% | .* | 9000 | 800 | 2 | 2 | ok | ok | 3 | 6.4 |  | yes | yes |' "$RES")"
 check "report: a delegated run without the call stays in, FAILED and not usable" '1' \
   "$(grep -c '^| f02 | log | classification | 40–50k | 26298 | 20398 | .* | FAILED: no-call | .* | no (judge bool differs) | no |' "$RES")"
-check "report: headline over both main files, gate FAIL" '1' "$(grep -c '^| Claude tokens per job (Σ T over 2 main files) | 52596 | 39096 (25.7% fewer) | ≥ 80% fewer | FAIL |' "$RES")"
+check "report: headline over both main files, gate FAIL" '1' "$(grep -c '^| Claude tokens per job (Σ T over 2 main files) | 52596 | 39096 (savings 25.7%) | ≥ 80% fewer | FAIL |' "$RES")"
 check "report: usable counts" '1' "$(grep -c '^| Usable answers | 1 of 2 | 1 of 2 | ≥ 2 of 2 | FAIL |' "$RES")"
 check "report: fixed cost and break-even" '2' "$(grep -cE '^- Fixed cost per session: 700 tokens|^- Break-even: 1 job\(s\) per session' "$RES")"
 check "report: small file in the threshold table" '1' "$(grep -c '^| f11 | ~2k | 26298 | 18698 | 28.9% | 3/3 | 3/3 |' "$RES")"

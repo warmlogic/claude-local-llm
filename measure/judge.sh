@@ -26,7 +26,7 @@ manifest() { manifest_field "$RUN_DIR/corpus.tsv" "$1" "$2"; }
 
 # judge_one <aid>: build the prompt, call the judge, keep its structured output
 judge_one() {
-  local aid="$1" id="${1%-*}" path task out
+  local aid="$1" id="${1%-*}" path task out work
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
   jq -rn --rawfile file "$path" --arg prompt "$(task_field "$task" prompt "$path")" \
     --arg usable "$(task_field "$task" usable)" --arg ref "$(task_field "$task" reference)" \
@@ -41,15 +41,17 @@ judge_one() {
       + "empty. Keep `reason` under 300 characters.\n\n<answer>\n" + $answer + "\n</answer>\n"' \
     > "$RUN_DIR/judge/$aid.prompt" || { echo "  judge $aid: could not build the prompt" >&2; return 1; }
   out="$RUN_DIR/judge/$aid.out.json"
-  (cd "$RUN_DIR/work" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$JUDGE_TIMEOUT_SEC" "$CLAUDE" -p --model "$JUDGE_MODEL" \
+  work=$(work_dir) || { echo "  judge $aid: no temp dir outside \$HOME for the cwd" >&2; return 1; }
+  (cd "$work" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$JUDGE_TIMEOUT_SEC" "$CLAUDE" -p --model "$JUDGE_MODEL" \
     --tools "" --setting-sources project --no-session-persistence --output-format json \
     --json-schema "$(cat "$MDIR/judge-schema.json")" < "$RUN_DIR/judge/$aid.prompt" > "$out" 2> "$out.err")
   if jq -e '.structured_output | type == "object" and has("usable")' "$out" >/dev/null 2>&1; then
     jq '.structured_output + {judge_models: (.modelUsage // {} | keys)}' "$out" > "$RUN_DIR/judge/$aid.verdict.json"
     echo "  judge $aid: usable=$(jq -r .usable "$RUN_DIR/judge/$aid.verdict.json")"
   else
-    echo "  judge $aid: no structured verdict (see $out.err)" >&2; return 1
+    echo "  judge $aid: no structured verdict (see $out.err)" >&2; rmdir "$work"; return 1
   fi
+  rmdir "$work" 2>/dev/null
 }
 
 if [ "${2:-}" = --one ]; then judge_one "$3"; exit $?; fi
