@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 
 const [cmd, tool, argJson] = process.argv.slice(2);
-const CALL_TIMEOUT_MS = 240000;
+const CALL_TIMEOUT_MS = 300000; // above the verify server's 240 s call budget, so an overrun arrives as its result
 const START_TIMEOUT_MS = 20000;
 
 const child = spawn(cmd, [], { stdio: ['pipe', 'pipe', 'pipe'] });

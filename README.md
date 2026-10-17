@@ -7,6 +7,7 @@ When you ask Claude to summarize, classify, extract from, or draft from a big lo
 Status:
 
 - ✅ Implemented: the MCP server (houtini-lm, pinned) behind a fenced launcher, the `delegate-local` skill, the permission hook, and the tests.
+- ✅ Implemented: a second server, local-verify, with one tool, `verify_claims`: the local model votes on whether short claims are supported by a file, without the file entering Claude's context. Its answer is a hint, never verification, and the skill does not use it yet.
 - 🔲 Planned: measuring token savings and answer quality on real files (milestone 2). Until then, the savings are the design goal, not a measured result.
 - 🔲 Planned: a marketplace listing, for a permanent install. Today the plugin loads from a clone with `--plugin-dir`.
 
@@ -115,8 +116,8 @@ This writes `pluginConfigs["local-llm@inline"].options` in `~/.claude/settings.j
 
 The plugin ships what it needs, so you do not add an allow rule.
 
-- A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) allows exactly two things, by exact name: a `Skill` call for `local-llm:delegate-local`, and the read-only tool `mcp__plugin_local-llm_local-llm__code_task_files`. That is why a plain "use the local model to summarize ..." needs no prompt either. Every other tool, including the server's other tools (`chat`, `discover`, ...), is left to Claude Code's normal permission flow. Your own deny rules still win over the hook: denying `code_task_files` removes the tool, and Claude reads the file itself.
-- The skill's `allowed-tools` line covers the same one tool for the turn that loads the skill.
+- A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) allows exactly three things, by exact name: a `Skill` call for `local-llm:delegate-local`, and the read-only tools `mcp__plugin_local-llm_local-llm__code_task_files` and `mcp__plugin_local-llm_local-verify__verify_claims`. That is why a plain "use the local model to summarize ..." needs no prompt either. Every other tool, including the server's other tools (`chat`, `discover`, ...), is left to Claude Code's normal permission flow. Your own deny rules still win over the hook: denying `code_task_files` removes the tool, and Claude reads the file itself.
+- The skill's `allowed-tools` line covers `code_task_files` for the turn that loads the skill.
 - A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) adds a one-line hint when your prompt names an existing file of 10,000 bytes or more, nudging Claude toward the skill. It only stats the files; it never reads them.
 - The skill sends Claude to the Read and Grep tools for the rest, because compound shell commands can still prompt in any session.
 
@@ -170,9 +171,11 @@ The launcher exits with status 2 and a one-line reason before houtini starts. Th
 | `local-llm: HOME is not an absolute path` | A `$HOME` or `~` entry needs `HOME` set to an absolute path in the environment Claude Code runs in. |
 | `local-llm: cannot enter the plugin directory` | The plugin folder moved or is unreadable. Re-clone it or fix its permissions. |
 
+The second server, local-verify, starts through its own launcher with the same folder and endpoint checks. Its folder refusals are the `local-llm:` messages above; its own checks start with `local-verify:`, such as `local-verify: endpoint must be loopback` and, when the server is started without its launcher while a proxy variable is defined, `local-verify: refusing to start`.
+
 ### Where to read the server's stderr
 
-Claude Code saves each MCP server's stderr under `~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-plugin-local-llm-local-llm/`, one `.jsonl` file per start, where `<project>` is the folder you launched `claude` from with its slashes and dots turned into dashes. The refusal messages above are in the `Server stderr:` entries. `claude --debug` also prints them.
+Claude Code saves each MCP server's stderr under `~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-plugin-local-llm-local-llm/` (local-verify's in `mcp-logs-plugin-local-llm-local-verify/` beside it), one `.jsonl` file per start, where `<project>` is the folder you launched `claude` from with its slashes and dots turned into dashes. The refusal messages above are in the `Server stderr:` entries. `claude --debug` also prints them.
 
 ### The `allowed folders:` line
 
