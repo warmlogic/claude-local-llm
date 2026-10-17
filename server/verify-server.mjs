@@ -11,7 +11,7 @@
 // spec asks. Other notifications are ignored. stdout carries protocol messages only; status lines and
 // stacks go to stderr, which Claude Code keeps as the MCP log.
 import { createInterface } from 'node:readline';
-import { isLoopbackEndpoint, loopbackError } from '../scripts/loopback.mjs';
+import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopback.mjs';
 import { logError, safeMessage, VerifyError } from './errors.mjs';
 import { parseRoots } from './fence.mjs';
 import { DEFAULT_K, KINDS, MAX_CLAIM_CHARS, MAX_CLAIMS, MAX_K, MAX_PATHS, verifyClaims } from './verify-claims.mjs';
@@ -34,8 +34,8 @@ const positiveInt = (name, fallback) => {
 
 // Any of these DEFINED, even empty, refuses the start. NO_PROXY is never consulted: Node reads
 // no_proxy ?? NO_PROXY with its own precedence, and every attempt to judge an exemption here missed a
-// case. The launcher (scripts/no-proxy.sh) unsets exactly this set, so only a direct start can trip it.
-const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NODE_USE_ENV_PROXY'];
+// case. The launcher (scripts/no-proxy.sh) unsets exactly this set (PROXY_VARS, scripts/loopback.mjs), so only
+// a direct start can trip it.
 const proxied = PROXY_VARS.filter((n) => Object.hasOwn(process.env, n));
 if (proxied.length) {
   die(`refusing to start: ${proxied.join(', ')} is defined, and Node's env proxy could send requests (file text ` +

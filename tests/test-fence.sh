@@ -437,6 +437,11 @@ vt=$(bash "$SCRIPT_DIR/test-verify.sh" 2>&1); vt_rc=$?
 if [ "$vt_rc" -eq 0 ] && grep -q '^verify pass=[1-9][0-9]* fail=0$' <<<"$vt"; then ok "local-verify suite ($(tail -1 <<<"$vt"))"
 else bad "local-verify suite (rc=$vt_rc): $(grep -E 'FAIL|^verify pass' <<<"$vt" | head -5 | tr '\n' ';')"; fi
 
+# --- the batch runner: its own offline suite (fake endpoint only) ----------------
+bt=$(bash "$SCRIPT_DIR/test-batch.sh" 2>&1); bt_rc=$?
+if [ "$bt_rc" -eq 0 ] && grep -q '^batch pass=[1-9][0-9]* fail=0$' <<<"$bt"; then ok "batch runner suite ($(tail -1 <<<"$bt"))"
+else bad "batch runner suite (rc=$bt_rc): $(grep -E 'FAIL|^batch pass' <<<"$bt" | head -5 | tr '\n' ';')"; fi
+
 # --- model-backed cases --------------------------------------------------------
 gen_text 20000 > "$TMP/root/twenty-k.txt"
 

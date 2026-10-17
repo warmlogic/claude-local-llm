@@ -30,7 +30,7 @@ A bounded text job (summarize, classify, extract, draft) over one or a few files
 
 ## When not to
 
-Small inputs. Decisions, judgment, security review, multi-file edits, or anything needing your tools. Secrets, credentials, or files outside the allowed folders. Jobs where a wrong answer is costly and you cannot spot-check it. Input over about 60k characters: do not send it whole; Grep or Read the relevant slices yourself, or split it into pieces under 60k and make one call each.
+Small inputs. Decisions, judgment, security review, multi-file edits, or anything needing your tools. Secrets, credentials, or files outside the allowed folders. Jobs where a wrong answer is costly and you cannot spot-check it. Input over about 60k characters: do not send it whole; Grep or Read the relevant slices yourself, or split it into pieces under 60k and make one call each. Many files, or a mining job over a lot of text (transcripts, logs): run the plugin's `batch/run.mjs` in the background (AGENTS.md, "Batch runner") and read only its `index.md`.
 
 ## How to call
 

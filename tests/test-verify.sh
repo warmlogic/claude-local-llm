@@ -351,11 +351,14 @@ done
 PROXY_NAMES=(HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NODE_USE_ENV_PROXY)
 # The launcher's scrub, the server's refusal and this test must name the same variables.
 from_scrub=$(sed -n 's/^unset //p' "$REPO/scripts/no-proxy.sh" | tr ' ' '\n' | sort | tr '\n' ' ')
-from_server=$(grep '^const PROXY_VARS = ' "$REPO/server/verify-server.mjs" | grep -oE "'[A-Za-z_]+'" | tr -d "'" | sort | tr '\n' ' ')
+from_server=$(grep '^export const PROXY_VARS = ' "$REPO/scripts/loopback.mjs" | grep -oE "'[A-Za-z_]+'" | tr -d "'" | sort | tr '\n' ' ')
+# ... and every consumer imports that one list instead of keeping a copy.
+copies=$(grep -l '^const PROXY_VARS' "$REPO/server/verify-server.mjs" "$REPO/batch/run.mjs" 2>/dev/null | wc -l | tr -d ' ')
+imports=$(grep -lE "^import .*PROXY_VARS.* from '../scripts/loopback.mjs'" "$REPO/server/verify-server.mjs" "$REPO/batch/run.mjs" | wc -l | tr -d ' ')
 from_test=$(printf '%s\n' "${PROXY_NAMES[@]}" | sort | tr '\n' ' ')
-if [ -n "$from_test" ] && [ "$(wc -w <<<"$from_test")" -eq 7 ] && [ "$from_scrub" = "$from_test" ] && [ "$from_server" = "$from_test" ]; then
-  ok "no-proxy.sh, the server's PROXY_VARS and this test name the same 7 variables"
-else bad "proxy lists differ: no-proxy.sh [$from_scrub] server [$from_server] test [$from_test]"; fi
+if [ -n "$from_test" ] && [ "$(wc -w <<<"$from_test")" -eq 7 ] && [ "$from_scrub" = "$from_test" ] && [ "$from_server" = "$from_test" ] && [ "$copies" = 0 ] && [ "$imports" = 2 ]; then
+  ok "no-proxy.sh, scripts/loopback.mjs's PROXY_VARS (imported by the server and the batch runner) and this test name the same 7 variables"
+else bad "proxy lists differ: no-proxy.sh [$from_scrub] loopback.mjs [$from_server] test [$from_test]; copies=$copies imports=$imports"; fi
 unset_all=(); for n in "${PROXY_NAMES[@]}" NO_PROXY no_proxy; do unset_all+=(-u "$n"); done
 direct() { # <env assignments...>: start the server directly and call it once
   env "${unset_all[@]}" "$@" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" \
