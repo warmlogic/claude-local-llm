@@ -32,7 +32,8 @@ def n0: . // 0;
 | [$J[] | select(.name == $ft and ((.input | tostring) | contains($path)) and $path != "")
     | . + {footer: (.res.text // null | houtini_footer)}
     | . + {good: (.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not)
-                  and .footer != null and .footer.files_read == .footer.files_total and (.footer.flags | length) == 0)}] as $D
+                  and .footer != null and .footer.files_total != null and .footer.files_read == .footer.files_total
+                  and (.footer.flags | length) == 0)}] as $D
 | ([$D[] | select(.good)] | first // null) as $good
 | def bash_read: .name == "Bash" and ((.input.command // "") | contains($path))
     and ([(.input.command // "") | splits("[;&|\n]+") | select(test("^\\s*([^\\s]*/)?(cat|head|tail|sed|awk)\\s"))] | length > 0);
@@ -68,6 +69,8 @@ def n0: . // 0;
     tool_listed: $listed,
     calls: ($D | length),
     footer: ($good.footer // null),
+    # every call's footer, valid answer or not: a call that hit max tokens after 75 s still took 75 s
+    call_footers: [$D[] | .footer | select(. != null) | {model, ttft_ms, total_s, flags}],
     also_read: ($cfg == "on" and $read_attempt),
     denials: [($r.permission_denials // [])[] | .tool_name | select(. != "Skill" and (startswith("mcp__plugin_local-llm_") | not))],
     plugin_denials: [($r.permission_denials // [])[] | .tool_name | select(. == "Skill" or startswith("mcp__plugin_local-llm_"))],
