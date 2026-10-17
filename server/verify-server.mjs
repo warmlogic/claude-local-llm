@@ -8,7 +8,8 @@
 // are ignored. stdout carries protocol messages only; status lines go to stderr.
 import { createInterface } from 'node:readline';
 import { isLoopbackEndpoint, loopbackError } from '../scripts/loopback.mjs';
-import { DEFAULT_K, MAX_CLAIMS, MAX_K, MAX_PATHS, parseRoots, verifyClaims } from './verify-claims.mjs';
+import { parseRoots } from './fence.mjs';
+import { DEFAULT_K, KINDS, MAX_CLAIM_CHARS, MAX_CLAIMS, MAX_K, MAX_PATHS, verifyClaims } from './verify-claims.mjs';
 
 const SERVER_INFO = { name: 'local-verify', version: '0.1.0' };
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']; // newest first
@@ -47,11 +48,13 @@ const TOOL = {
   name: 'verify_claims',
   description:
     'Ask the local model (LM Studio) whether each claim is supported by the given files, without the files ' +
-    'entering your context. Returns JSON {model, k, results: [{claim, label: SUPPORTED|NOT_SUPPORTED, ' +
-    'p_supported (share of k samples that said SUPPORTED), agreement (share that agreed with label), ' +
-    'kind: lookup|computed}]}. The result is a hint, never verification. Claims with numbers, counts, dates ' +
-    'or comparisons are kind "computed" and carry auto_accept: false, because the model is often unanimously ' +
-    'wrong on them; check those with Grep or code.',
+    'entering your context. Returns JSON {model, k, results: [{claim, kind, auto_accept: false, label: ' +
+    'SUPPORTED|NOT_SUPPORTED|NOT_RUN, p_supported (share of k samples that said SUPPORTED), agreement (share ' +
+    'that agreed with label)}]}; when some claims could not finish it adds partial: true and error, and those ' +
+    'claims are NOT_RUN with a reason. The result is a hint, never verification. Pass a claim as ' +
+    '{text, kind: "lookup"} only when it is a plain fact you could check by finding one passage: no counts, ' +
+    'order, comparisons, dates or quantifiers. Anything else, and a bare string, is "computed": the model is ' +
+    'often unanimously wrong on those, so check them with Grep or code.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -64,10 +67,20 @@ const TOOL = {
       },
       claims: {
         type: 'array',
-        items: { type: 'string' },
+        items: {
+          anyOf: [
+            { type: 'string', maxLength: MAX_CLAIM_CHARS },
+            {
+              type: 'object',
+              properties: { text: { type: 'string', maxLength: MAX_CLAIM_CHARS }, kind: { type: 'string', enum: KINDS } },
+              required: ['text'],
+              additionalProperties: false,
+            },
+          ],
+        },
         minItems: 1,
         maxItems: MAX_CLAIMS,
-        description: 'Short, self-contained claims to check, one fact each',
+        description: 'Short, self-contained claims, one fact each: a string (kind computed) or {text, kind}',
       },
       k: { type: 'integer', minimum: 1, maximum: MAX_K, default: DEFAULT_K, description: 'Samples per claim' },
     },
@@ -81,20 +94,32 @@ const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
 const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
 const text = (t, isError = false) => ({ content: [{ type: 'text', text: t }], isError });
+const isId = (id) => typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id));
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const short = (s) => JSON.stringify(s.slice(0, 80));
 
 async function callTool(id, params) {
-  if (params?.name !== TOOL.name) return fail(id, -32602, `unknown tool: ${String(params?.name)}`);
+  if (typeof params?.name !== 'string') return fail(id, -32602, 'invalid params: name must be a string');
+  if (params.name !== TOOL.name) return fail(id, -32602, `unknown tool: ${short(params.name)}`);
+  if (params.arguments !== undefined && !isPlainObject(params.arguments)) {
+    return fail(id, -32602, 'invalid params: arguments must be an object');
+  }
   try {
     reply(id, text(JSON.stringify(await verifyClaims(cfg, params.arguments))));
   } catch (e) {
-    reply(id, text(`Error: ${e.message}`, true));
+    console.error(`local-verify: verify_claims failed: ${e?.stack ?? e}`); // stderr is the MCP log
+    reply(id, text(`Error: ${e?.message ?? 'internal error'}`, true));
   }
 }
 
+// Every field is type-checked before use, so no request shape can throw out of the handler.
 function handle(msg) {
+  if (!isPlainObject(msg)) return fail(null, -32600, 'invalid request');
   const { id, method, params } = msg;
-  const isRequest = id !== undefined && id !== null;
-  if (!isRequest) return; // notifications (initialized, cancelled) need no answer
+  if (id === undefined) return undefined; // a notification (initialized, cancelled): no answer
+  if (!isId(id)) return fail(null, -32600, 'invalid request: id must be a string or a number');
+  if (typeof method !== 'string') return fail(id, -32600, 'invalid request: method must be a string');
+  if (params !== undefined && !isPlainObject(params)) return fail(id, -32602, 'invalid params: params must be an object');
   switch (method) {
     case 'initialize': {
       const asked = params?.protocolVersion;
@@ -108,9 +133,14 @@ function handle(msg) {
     case 'tools/call':
       return callTool(id, params);
     default:
-      return fail(id, -32601, `method not found: ${String(method)}`);
+      return fail(id, -32601, `method not found: ${short(method)}`);
   }
 }
+
+const internalError = (id, e) => {
+  console.error(`local-verify: internal error: ${e?.stack ?? e}`);
+  fail(isId(id) ? id : null, -32603, 'internal error');
+};
 
 console.error(`local-verify: ready; allowed folders: ${roots.join(',')}`);
 createInterface({ input: process.stdin }).on('line', (line) => {
@@ -119,8 +149,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   try {
     msg = JSON.parse(line);
   } catch {
-    return fail(null, -32700, 'parse error');
+    fail(null, -32700, 'parse error');
+    return;
   }
-  if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) return fail(null, -32600, 'invalid request');
-  handle(msg);
+  try {
+    Promise.resolve(handle(msg)).catch((e) => internalError(msg?.id, e));
+  } catch (e) {
+    internalError(msg?.id, e);
+  }
 });
