@@ -25,7 +25,8 @@
 # Exposure answers "did the file's content reach Claude's context?" without enumerating read commands: every line
 # of a fixture starts with a unique token; exposure is the fraction of the file's tokens found in the text of all
 # tool results except code_task_files (that is the local model's answer). Reads by any tool or shell form count;
-# a narrow search for a pattern (a few lines) stays near 0.
+# a narrow search for a pattern (a few lines) stays near 0. For c, d and e the read must come after the tool failed
+# (exposure_after), and the failure and the success must be on the target file itself.
 #
 # Case e quotes the criterion: "in a two-job session with the server down (two turns of one session), the final
 # reply of the turn where the outage happens tells the user (cause and how to retry; a mid-turn note is allowed
@@ -77,9 +78,11 @@ summarize() {
         | {id: .tool_use_id, is_error: (.is_error // false), text: (.content | txt), pos: $k}] as $res
     | [$uses[] | . as $u | . + {res: (first($res[] | select(.id == $u.id)) // null)}] as $J
     | [$J[] | select(.name == $ft)] as $D
-    | ([$D[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))))] | min_by(.res.pos)) as $first
+    | [$D[] | select((.input | tostring) | contains($base))] as $Dt
+    | ([$Dt[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))))] | min_by(.res.pos)) as $first
     | ($first.res.pos // -1) as $ff
     | ([$J[] | select(.name != $ft) | (.res.text // "")] | join("\n")) as $seen
+    | ([$J[] | select(.name != $ft and .res != null and .res.pos > $ff) | .res.text] | join("\n")) as $seen_after
     | ([.[] | select(.type == "result")] | last // {}) as $r
     | {
         ok: ($r | has("result")),
@@ -91,11 +94,12 @@ summarize() {
         skill_used: ([$J[] | select(.name == "Skill")] | length > 0),
         delegate_calls: ($D | length),
         late_delegate_calls: (if $ff < 0 then 0 else [$D[] | select(.pos > $ff and .mid != $first.mid)] | length end),
-        delegated: ([$D[] | select((.input | tostring) | contains($base))] | length > 0),
-        delegate_ok: ([$D[] | select(.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not))] | length > 0),
-        saw_fetch_failed: ([$D[] | select(.res != null and (.res.text | contains("fetch failed")))] | length > 0),
-        saw_no_model: ([$D[] | select(.res != null and (.res.text | contains("No models loaded")))] | length > 0),
+        delegated: ($Dt | length > 0),
+        delegate_ok: ([$Dt[] | select(.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not))] | length > 0),
+        saw_fetch_failed: ([$Dt[] | select(.res != null and (.res.text | contains("fetch failed")))] | length > 0),
+        saw_no_model: ([$Dt[] | select(.res != null and (.res.text | contains("No models loaded")))] | length > 0),
         exposure: ((([$tokens[] | select(. as $t | $seen | contains($t))] | length) / ($tokens | length)) * 100 | round / 100),
+        exposure_after: ((([$tokens[] | select(. as $t | $seen_after | contains($t))] | length) / ($tokens | length)) * 100 | round / 100),
         result: ($r.result // ""),
         texts: [$all[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text]
       }' "$trace" || echo '{"ok":false,"unknown":true}'
@@ -129,14 +133,14 @@ check_a() { jq -e --argjson max "$EXPOSURE_MAX" '.ok and (.is_error | not) and .
 check_b() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
 # c and d: the tool was tried, failed the expected way, was not called again, and Claude then read the file itself
 check_c() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed
-  and .late_delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
+  and .late_delegate_calls == 0 and .exposure_after >= $min' >/dev/null <<<"$1"; }
 check_d() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_no_model
-  and .late_delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
+  and .late_delegate_calls == 0 and .exposure_after >= $min' >/dev/null <<<"$1"; }
 # check_e <turn-1 summary> <turn-2 summary>
 check_e() {
   local v line
   jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed
-    and .late_delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1" || return 1
+    and .late_delegate_calls == 0 and .exposure_after >= $min' >/dev/null <<<"$1" || return 1
   jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$2" || return 1
   v=$(judge "$(jq -r '.result' <<<"$1")") || return 1
   jq -e '.mentions_local_model_unavailable and .gives_cause and .gives_retry' >/dev/null <<<"$v" || return 1
@@ -192,6 +196,7 @@ selftest() {
   expect "a: Grep for '.' returns every line" fail a a-grep-dot app-20k.log
   expect "a: head -5 is a quarter of the file" fail a a-head5 app-20k.log
   expect "a: the delegation itself failed" fail a a-failed-delegate app-20k.log
+  expect "a: the target call failed and a call on another file succeeded" fail a a-other-file-ok app-20k.log
   expect "b: Read of the small file, no delegation" pass b b-ok app-2k.log
   expect "b: Bash cat of the small file" pass b b-bash-cat app-2k.log
   expect "b: the 2k file was delegated" fail b b-delegates app-2k.log
@@ -206,6 +211,8 @@ selftest() {
   expect "c: a denied Read and a refusal" fail c c-denied-read app-20k.log
   expect "c: second code_task_files call after the failure" fail c c-second-call app-20k.log
   expect "c: the tool was never tried" fail c c-no-delegate app-20k.log
+  expect "c: the file was read only before the tool failed" fail c c-read-before-failure app-20k.log
+  expect "c: the failing call was on another file" fail c c-failure-on-other-file app-20k.log
   expect "d: No models loaded, then a Read" pass d d-ok app-20k.log
   expect "d: fetch failed instead of No models loaded" fail d c-ok app-20k.log
   expect_e "e: turn 1 final reply tells the user, turn 2 is silent" pass e1-ok e2-ok
