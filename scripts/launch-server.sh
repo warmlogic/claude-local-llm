@@ -9,7 +9,7 @@
 # resolve-roots.mjs resolves the folders with houtini's own parse (see its header for the
 # invariant); a missing folder is skipped with a warning.
 # Limits: no "," or ":" in folder names (houtini splits on both); "/" is refused.
-# The endpoint must be loopback, so file contents never leave the machine.
+# The endpoint must be loopback, so the local model server never sends file text off the machine.
 # Never prints file contents; stderr carries only short status lines.
 set -efu
 
