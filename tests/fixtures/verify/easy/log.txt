@@ -1,0 +1,7 @@
+2026-10-14T09:12:03Z INFO  api  started on :8080 (workers=8)
+2026-10-14T09:14:47Z WARN  db   pool exhausted, waiting (active=20/20)
+2026-10-14T09:14:52Z ERROR db   query timeout after 30000ms: SELECT * FROM orders WHERE ...
+2026-10-14T09:15:10Z ERROR api  POST /checkout 504 (upstream timeout)
+2026-10-14T09:15:11Z ERROR api  POST /checkout 504 (upstream timeout)
+2026-10-14T09:21:30Z INFO  db   pool recovered (active=6/20)
+2026-10-14T09:40:02Z INFO  api  shutdown requested by SIGTERM
