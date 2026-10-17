@@ -155,7 +155,8 @@ job() {
   if [ "$rc" -ne 0 ]; then
     st=$([ "$rc" -eq 1 ] && echo corpus-changed || echo snapshot-failed)
     jq -nc --arg run "$name" --arg cfg "$2" --arg id "$1" --argjson rep "$3" --arg st "$st" \
-      '{run: $run, cfg: $cfg, kind: "job", id: $id, rep: $rep, status: $st, T: null}' > "$RUN_DIR/facts/$name.json"
+      '{run: $run, cfg: $cfg, kind: "job", id: $id, rep: $rep, status: $st, T: null}' > "$RUN_DIR/facts/$name.json.new" \
+      && mv "$RUN_DIR/facts/$name.json.new" "$RUN_DIR/facts/$name.json" || die "writing facts for $name"
     echo "  $name: FAILED: $st"; return
   fi
   prompt=$(task_field "$task" prompt "$path") || die "tasks.json has no prompt for task '$task' ($1)"

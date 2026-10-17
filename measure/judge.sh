@@ -31,10 +31,11 @@ manifest() { manifest_field "$RUN_DIR/corpus.tsv" "$1" "$2"; }
 
 # judge_one <aid>: build the prompt, call the judge, keep its structured output
 judge_one() {
-  local aid="$1" id="${1%-*}" path task out work rc
+  local aid="$1" id="${1%-*}" path task out work rc prompt usable ref
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
-  jq -rn --rawfile file "$RUN_DIR/files/$id" --arg prompt "$(task_field "$task" prompt "$path")" \
-    --arg usable "$(task_field "$task" usable)" --arg ref "$(task_field "$task" reference)" \
+  prompt=$(task_field "$task" prompt "$path") && usable=$(task_field "$task" usable) && ref=$(task_field "$task" reference) \
+    || { echo "  judge $aid: tasks.json lacks the prompt, usable or reference for task '$task'" >&2; return 1; }
+  jq -rn --rawfile file "$RUN_DIR/files/$id" --arg prompt "$prompt" --arg usable "$usable" --arg ref "$ref" \
     --slurpfile f "$RUN_DIR/facts/$aid-1.json" --arg note "$ATTRIBUTION_NOTE" '
     ($f[0].answer // "" | split("\n") | map(select(test($note; "i") | not)) | join("\n")) as $answer
     | "You are grading one answer that an assistant gave to a task about a file. The full file comes first.\n\n"
@@ -55,7 +56,8 @@ judge_one() {
   if jq -e '.structured_output | type == "object" and (.reference | type) == "array" and (.invented | type) == "array"
             and (.missed | type) == "array" and (.usable | type) == "boolean"' "$out" >/dev/null 2>&1; then
     jq --arg sha "$(answer_sha "$RUN_DIR/facts/$aid-1.json")" '.structured_output + {judge_models: (.modelUsage // {} | keys), answer_sha: $sha}' \
-      "$out" > "$RUN_DIR/judge/$aid.verdict.json"
+      "$out" > "$RUN_DIR/judge/$aid.verdict.json.new" && mv "$RUN_DIR/judge/$aid.verdict.json.new" "$RUN_DIR/judge/$aid.verdict.json" \
+      || { echo "  judge $aid: could not write the verdict" >&2; return 1; }
     echo "  judge $aid: usable=$(jq -r .usable "$RUN_DIR/judge/$aid.verdict.json")"
   else
     echo "  judge $aid: no valid verdict (claude rc=$rc$([ "$rc" -eq 124 ] && echo ", timed out"); see $out.err): $(head -n 1 "$out.err" 2>/dev/null | cut -c1-200)" >&2

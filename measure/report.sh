@@ -28,11 +28,10 @@ awk -F'\t' '{print $1 "\t" $8}' "$RUN_DIR/corpus.tsv" | jq -R 'split("\t") | {(.
   || die "unreadable manifest paths"
 
 want=$(jq -r '.local_model // empty' "$RUN_DIR/meta.json")
-if [ -n "$want" ]; then
-  other=$(jq -r --arg m "$want" '[.[] | .call_footers[]?.model // empty | select(. != $m)] | unique | join(", ")' "$tmp/runs.json") \
-    || die "unreadable footers"
-  [ -z "$other" ] || die "footers name $other, not the pinned local model $want: the run did not measure that model"
-fi
+[ -n "$want" ] || die "meta.json records no local_model, so the footers cannot be checked against the pinned model"
+other=$(jq -r --arg m "$want" '[.[] | .call_footers[]?.model // empty | select(. != $m)] | unique | join(", ")' "$tmp/runs.json") \
+  || die "unreadable footers"
+[ -z "$other" ] || die "footers name $other, not the pinned local model $want: the run did not measure that model"
 
 # collect <suffix>: {"<id>-<cfg>": <file contents>} for judge/<id>-<cfg><suffix>
 collect() {

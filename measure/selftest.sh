@@ -150,11 +150,14 @@ mk "$H/github/x7/future.md" 31000 203001010000
 i=0
 for form in 'Authorization: Bearer abcdefgh12345678' 'authorization: Basic dXNlcjpwYXNz' '{"headers": {"Authorization": "Bearer abc.def.ghi"}}' \
             "curl -H 'Authorization: Bearer xyz12345678' https://example.test" 'Bearer abcdefgh12345678 was sent' '"token": "abc123def"' \
-            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2' 'password    = hunter2' '"api_key"   :   "abc"' '**Password:** hunter2' 'config["password"] = "hunter2"' "settings['api-key']: abc"; do
+            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2' 'password    = hunter2' '"api_key"   :   "abc"' '**Password:** hunter2' 'config["password"] = "hunter2"' "settings['api-key']: abc" \
+            'see https://alice:s3cret@db.example.test/x' 'postgres://app:pw@localhost/db' 'curl --user alice:s3cret https://x.test' \
+            'curl -u alice:s3cret https://x.test' 'mysqldump --password hunter2 db' 'mysql -uroot -phunter2 db'; do
   i=$((i+1)); mk "$H/github/auth$i/notes.md" 31000 202602010000; printf '\n%s\n' "$form" >> "$H/github/auth$i/notes.md"; touch -t 202602010000 "$H/github/auth$i/notes.md"
 done
 mk "$H/github/ent/notes.md" 31000 202602010000; printf '\nx Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MHF3ZXJ0eXVpb3BAc2Rm x\n' >> "$H/github/ent/notes.md"; touch -t 202602010000 "$H/github/ent/notes.md"
 printf '\nchecksum %s\n' "$(printf a | shasum -a 256 | cut -c1-64)" >> "$H/github/d6/notes.md"; touch -t 202601061200 "$H/github/d6/notes.md"
+printf '\nsee https://example.test/a@b and run psql -h db -U app\n' >> "$H/github/d5/notes.md"; touch -t 202601051200 "$H/github/d5/notes.md"
 mk "$H/github/locked/inner/n.md" 31000 202602010000; chmod 000 "$H/github/locked"
 mk "$H/github/unread/n.md" 31000 202602010000; chmod 000 "$H/github/unread/n.md"
 cutoff=$(date -j -f %Y%m%d%H%M 202701010000 +%s)
@@ -169,9 +172,10 @@ check "select: newest-first ids, the fill takes the newest leftover doc and the 
   "$(awk -F'\t' '$1 == "f01" {sub(".*/github/", "", $8); sub("/.*", "", $8); a = $8} $3 == "doc" && $4 == "extraction" {sub(".*/github/", "", $8); sub("/.*", "", $8); b = $8} END {print a, b}' "$M") $(grep -q '/d1/' "$M" && echo d1-present || echo d1-absent)"
 check "select: small slots by characters (the é file is s10k)" 's2k:2000:s2 s5k:5000:s5 s10k:10000:s10' \
   "$(awk -F'\t' '$2 != "main" {sub(".*/github/", "", $8); sub("/.*", "", $8); printf "%s%s:%s:%s", (n++ ? " " : ""), $2, $5, $8}' "$M")"
-check "select: every Authorization, token, cookie and password form, and a high-entropy token, are excluded" '0' \
+check "select: every Authorization, token, cookie, password, URL-userinfo and credential-argument form, and a high-entropy token, are excluded" '0' \
   "$(grep -cE '/auth[0-9]+/|/ent/' "$M")"
 check "select: a 64-hex checksum alone does not trip the entropy guard" '1' "$(grep -c '/d6/notes.md' "$M")"
+check "select: a plain URL and a psql call without a password stay in" '1' "$(grep -c '/d5/notes.md' "$M")"
 check "select: an unreadable folder and an unreadable file are counted in warnings that never name a file" '1,1,0' \
   "$(grep -c 'find could not read' "$TMP/select.err"),$(grep -c '1 file(s) could not be read' "$TMP/select.err"),$(grep -c "$H/github/" "$TMP/select.err")"
 mkdir -p "$TMP/home2/github/a"; mk "$TMP/home2/github/a/n.md" 25000 202601010000
@@ -374,6 +378,15 @@ variant; printf 'f01-on\t%s\tagree\nf01-on\t%s\tdisagree\n' "$(h f01-on)" "$(h f
 jq -c '.answer = "- redone"' "$B/facts/f02-on-1.json" > "$TMP/v/facts/f02-on-1.json"; render
 check "review: a duplicate line and a dropped stale verdict both warn" '1,1' \
   "$(grep -c 'a second line for f01-on' "$TMP/v/report.err"),$(grep -c 'stored verdict for f02-on graded an earlier answer' "$TMP/v/report.err")"
+
+variant; for r in 1 2 3; do mkf "$TMP/v" "ctl-on-$r" on ctl "" "$r" 17700 ok '{"usd":null}'; done; render
+check "report: controls without total_cost_usd still give the token fixed cost, with USD n/a" '- Fixed cost per session: 700 tokens (USD n/a).' "$(cell '^- Fixed')"
+variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-off-1" off job "f$i" 1 17000; done; render
+check "report: a zero baseline total names its reason instead of an empty incomplete" '1' "$(grep -c '^| Claude tokens .*| FAIL (incomplete: baseline total is zero) |$' "$TMP/v/results.md")"
+variant; jq 'del(.local_model)' "$B/meta.json" > "$TMP/v/meta.json"; render; rc=$?
+check "report: a run without a recorded local_model fails" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'records no local_model' "$TMP/v/report.err")"
+check "trace_facts: a non-numeric rep fails instead of dropping it" '1' \
+  "$(sed "s|@PATH@|$DOC|g" "$FX/ctl-off.jsonl" > "$TMP/t2.jsonl"; trace_facts "$TMP/tf2" "$TMP/t2.jsonl" n off ctl "" x "" 0 1 >/dev/null 2>&1 && echo 0 || echo 1)"
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"

@@ -142,10 +142,11 @@ else
   "## Definition of done", "",
   table(["Metric", "Baseline (plugin off)", "Delegated (plugin on)", "Target", "Result"]),
   (["Claude tokens per job (Σ T over \($n) main files)", ($S.off // "incomplete"), (if $S.on == null then "incomplete" else "\($S.on) (savings \($headline | pct))" end),
-    "≥ 80% fewer", gate($headline; $t_complete and $headline != null; $t_why; ($headline // 0) >= 0.8)] | row),
+    "≥ 80% fewer", gate($headline; $t_complete and $headline != null;
+      $t_why + (if $t_complete and $headline == null then ["baseline total is zero"] else [] end); ($headline // 0) >= 0.8)] | row),
   (["Usable answers", "\($u_off) of \($n)", "\($u_on) of \($n)", "≥ \($u_target) of 10", gate($u_on; ($u_why | length) == 0; $u_why; $u_on >= $u_target)] | row),
   "",
-  "- Fixed cost per session: \(if $fixed == null then "incomplete" else "\($fixed) tokens (\($C.on.usd - $C.off.usd | usd))" end).",
+  "- Fixed cost per session: \(if $fixed == null then "incomplete" else "\($fixed) tokens (\(if $C.on.usd == null or $C.off.usd == null then "USD n/a" else ($C.on.usd - $C.off.usd | usd) end))" end).",
   "- Break-even: \(if $fixed == null or $gain == null then "incomplete" elif $gain <= 0 then "never (delegation costs more per job)" else (($fixed / $gain) | ceil | tostring) + " job(s) per session" end)\(if ($corpus_why | length) > 0 and $gain != null then " (incomplete: \($corpus_why | join("; ")))" else "" end).",
   "- Not gated: Σ job USD off \($S.usd_off | usd), on \($S.usd_on | usd) (savings \(ratio($S.usd_on; $S.usd_off) | pct)); mean context growth off \($S.g_off | na), on \($S.g_on | na) tokens.",
   "- Operator review: \(if $op_n == 0 then "not done yet" else "agreed on \($op_agree) of \($op_n)" end).",

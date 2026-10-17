@@ -26,7 +26,7 @@ trace_facts() {
   local base="$1" stage="" ident
   ident=$(jq -nc --arg run "$3" --arg cfg "$4" --arg kind "$5" --arg id "$6" --argjson rep "$7" --argjson wall_s "${10}" \
     '{run: $run, cfg: $cfg, kind: $kind, id: $id, rep: $rep, wall_s: $wall_s}' 2>/dev/null) \
-    || ident=$(jq -nc --arg run "$3" --arg cfg "$4" --arg kind "$5" --arg id "$6" '{run: $run, cfg: $cfg, kind: $kind, id: $id}')
+    || { echo "trace_facts: rep '$7' or wall seconds '${10}' is not a number for $3" >&2; return 1; }
   jq -cR 'fromjson? // "__bad__"' "$2" > "$base.events" 2> "$base.log" || stage="parse"
   [ -n "$stage" ] || jq -s -L "$MDIR" --arg path "$8" --arg cfg "$4" --arg kind "$5" --argjson rc "$9" --arg ft "$FILE_TOOL" \
     -f "$MDIR/trace.jq" "$base.events" > "$base.trace" 2>> "$base.log" || stage="trace.jq"
