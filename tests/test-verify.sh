@@ -22,10 +22,10 @@ TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }
 PIDS=()
 trap 'for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$TMP"' EXIT
 
-# start_fake <name> <mode>: a fake endpoint on a random loopback port; sets EP and LOG
+# start_fake <name> <mode> [redirect-url]: a fake endpoint on a random loopback port; sets EP and LOG
 start_fake() {
   : > "$TMP/$1.log"
-  node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/$1.port" "$TMP/$1.log" "$2" &
+  node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/$1.port" "$TMP/$1.log" "$2" ${3:+"$3"} &
   PIDS+=($!)
   for _ in $(seq 1 50); do [ -s "$TMP/$1.port" ] && break; sleep 0.1; done
   EP="http://127.0.0.1:$(cat "$TMP/$1.port")"; LOG="$TMP/$1.log"
@@ -172,6 +172,15 @@ out=$(call "$ROOT" "$(claim_args "$ROOT/inside.txt")")
 if jq -e '.call.isError and (.call.text | contains("No models loaded"))' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" = 0 ]; then
   ok "no model loaded: 'No models loaded', and no chat request that could trigger a load"
 else bad "no model loaded ($(jq -c '.call' <<<"$out"))"; fi
+
+# --- a redirect is never followed, so file text cannot be forwarded off the endpoint ----------
+start_fake target verify; target_ep=$EP target_log=$LOG
+start_fake redirect verify-redirect "$target_ep"
+out=$(call "$ROOT" "$(claim_args "$ROOT/inside.txt")")
+if jq -e '.call.isError' >/dev/null <<<"$out" && [ "$(chat_count "$target_log")" = 0 ] && [ "$(chat_count "$LOG")" -ge 1 ] \
+   && ! grep -q canary <<<"$out"; then
+  ok "a 307 from the endpoint is not followed: the call fails and the redirect target gets nothing"
+else bad "redirect (target got $(chat_count "$target_log") chat requests; $(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
 
 # --- time: a stalled request is retried once; the call stops at its budget ------------------
 start_fake once verify-stall-once

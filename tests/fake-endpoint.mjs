@@ -1,4 +1,4 @@
-// Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file> [mode]
+// Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file> [mode] [redirect-url]
 // Writes its random port to <port-file> and appends one JSON line of request headers per request to <log-file>.
 // Modes:
 //   models    (default) answers every request with an OpenAI-style list of two fake chat models.
@@ -15,10 +15,11 @@
 //   verify-garbage-once  as verify, but a first-draw seed (seed % 1000 < 500) gets a cut-off answer of
 //             newlines (finish_reason "length"), as a temperature-1 sample sometimes does.
 //   verify-garbage       every answer is cut off.
+//   verify-redirect      as verify, but chat completions answer 307 to <redirect-url> (which must never see them).
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
 
-const [portFile, logFile, mode = 'models'] = process.argv.slice(2);
+const [portFile, logFile, mode = 'models', redirectUrl] = process.argv.slice(2);
 const json = (res, status, body) => {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
@@ -41,6 +42,10 @@ const verify = (req, res) => {
   req.on('end', () => {
     const body = JSON.parse(raw);
     appendFileSync(logFile, JSON.stringify({ url: req.url, body }) + '\n');
+    if (mode === 'verify-redirect') {
+      res.writeHead(307, { location: `${redirectUrl}/v1/chat/completions` });
+      return res.end();
+    }
     if (mode === 'verify-stall' || (mode === 'verify-stall-once' && !seen.has(body.seed))) {
       seen.add(body.seed);
       return; // never answer

@@ -141,17 +141,22 @@ class RequestTimeout extends Error {
 const cut = (s) => String(s).slice(0, ERROR_TEXT_CHARS);
 
 // One HTTP exchange. Errors carry the status and the upstream error field only, never a body
-// (a parse error's message would quote model output, which can echo file text).
+// (a parse error's message would quote model output, which can echo file text). Redirects are an
+// error, not followed: fetch would re-send the body, file text included, to wherever they point.
 async function fetchJson(url, init, timeoutMs, budget) {
   const timer = AbortSignal.timeout(timeoutMs);
   let res;
   let text;
   try {
-    res = await fetch(url, { ...init, signal: AbortSignal.any([timer, budget]) });
+    res = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.any([timer, budget]) });
+    if (res.status >= 300 && res.status < 400) {
+      throw Object.assign(new Error(`endpoint error (HTTP ${res.status}): redirects are not followed`), { status: res.status });
+    }
     text = await res.text();
   } catch (e) {
     if (budget.aborted) throw budget.reason;
     if (timer.aborted) throw new RequestTimeout();
+    if (e.status) throw e;
     throw new Error(`fetch failed (${cut(e.cause?.code ?? e.message)})`);
   }
   let json;
