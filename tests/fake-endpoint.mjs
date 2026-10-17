@@ -40,6 +40,7 @@
 //   batch-bad-once     as batch, but the first reply to each distinct request is not JSON.
 //   batch-length       as batch, but every reply is cut off (finish_reason "length").
 //   batch-flaky        as batch, but every other request (the 1st, 3rd, ...) fails with HTTP 500.
+//   batch-then-fail    as batch, but only the first request is answered; every later one fails with HTTP 500.
 //   batch-stall        logs the request and never answers.
 //   proxy     an HTTP proxy that must never be used: logs each request (absolute URL) and answers 502.
 import { createServer } from 'node:http';
@@ -151,6 +152,7 @@ const batch = (req, res) => {
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     });
     if (mode === 'batch-stall') return; // never answer
+    if (mode === 'batch-then-fail' && ++requests > 1) return json(res, 500, { error: { code: 'server_error' } });
     if (mode === 'batch-flaky' && ++requests % 2 === 1) return json(res, 500, { error: { code: 'server_error' } });
     if (mode === 'batch-bad' || (mode === 'batch-bad-once' && first)) return reply('not json');
     if (mode === 'batch-length') return reply('{"rows":[', 'length');

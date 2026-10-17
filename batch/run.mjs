@@ -5,7 +5,7 @@
 // job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars",
 // "reasoning_effort"?}. index.md is the one file Claude reads, so it never claims more than happened: a stub
 // says RUNNING until the final index replaces it, and its header says how many windows were answered.
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopback.mjs';
@@ -130,6 +130,7 @@ const loadJob = (path) => {
 let indexPath = null;
 const main = async () => {
   const { opt, files } = parseArgs(process.argv.slice(2));
+  rmSync(`${opt.out}/index.md`, { force: true }); // a refused re-run must not leave the previous run's index looking current
   const proxied = PROXY_VARS.filter((n) => Object.hasOwn(process.env, n));
   if (proxied.length) usage(`refusing to run: ${proxied.join(', ')} is defined and could route file text through a proxy; start with them unset (env -u ...)`);
   if (new Set(files.map((f) => basename(f))).size !== files.length) usage('input files must have distinct basenames (results are keyed by basename)');
@@ -217,9 +218,11 @@ const main = async () => {
   }
 
   const failed = stats.answered === 0;
-  const header = failed ? `**FAILED**: no window answered (last failure: ${last ?? 'none'})${aborted ? `; aborted after ${MAX_CONSECUTIVE_FAILED_REQUESTS} consecutive failed requests` : ''}.`
+  const base = failed ? `**FAILED**: no window answered (last failure: ${last ?? 'none'})${aborted ? `; aborted after ${MAX_CONSECUTIVE_FAILED_REQUESTS} consecutive failed requests` : ''}.`
     : aborted ? `**ABORTED** after ${MAX_CONSECUTIVE_FAILED_REQUESTS} consecutive failed requests (last failure: ${last}): ${stats.answered} of ${stats.windows} windows answered.`
     : `Completed: ${stats.answered} of ${stats.windows} windows answered.`;
+  const skipped = ['unreadable_input', 'line_over_cap', 'empty_input', 'duplicate_line_id'].reduce((n, t) => n + (stats.failures[t] ?? 0), 0);
+  const header = skipped ? base.replace(/\.$/, `; ${skipped} input problem${skipped > 1 ? 's' : ''} skipped.`) : base;
   const total = stats.kept + stats.dropped;
   const list = (o) => Object.entries(o).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
   const shown = stats.perFile.slice(0, MAX_FILES_LISTED);

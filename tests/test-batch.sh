@@ -200,7 +200,7 @@ if [ "$RC" -eq 0 ] && [ "$nm" -eq 5 ] \
    && jq -e -s '([.[] | select(.file == "a.txt") | .window] | unique) == [1,2,3,4] and ([.[] | select(.file == "m.txt") | .window] | unique) == [1]' "$TMP/out-mf/rows.jsonl" >/dev/null \
    && jq -e -s 'map(.type) | sort == ["duplicate_line_id","empty_input","unreadable_input"]' "$TMP/out-mf/failures.jsonl" >/dev/null \
    && jq -e -s '.[] | select(.type == "unreadable_input") | .file == "missing.txt" and .detail == "ENOENT"' "$TMP/out-mf/failures.jsonl" >/dev/null \
-   && grep -q 'across 5 of 5 files' "$TMP/out-mf/index.md" && grep -q '^Completed: 5 of 6 windows answered\.$' "$TMP/out-mf/index.md" \
+   && grep -q 'across 5 of 5 files' "$TMP/out-mf/index.md" && grep -q '^Completed: 5 of 6 windows answered; 3 input problems skipped\.$' "$TMP/out-mf/index.md" \
    && grep -q '^| missing.txt | 0 | 0 | 0 |$' "$TMP/out-mf/index.md"; then ok "several files: windows number per file; missing, empty and duplicate-id inputs are counted failures, the duplicate window is never sent"
 else bad "multi-file: rc=$RC requests=$nm $(sed -n 3,4p "$TMP/out-mf/index.md") $(jq -c '.type' "$TMP/out-mf/failures.jsonl" | tr '\n' ' ')"; fi
 
@@ -236,6 +236,23 @@ cat "$TMP/out-st/index.md" > "$TMP/st-while.md"
 kill "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null
 if grep -qE "^RUNNING since [0-9]{4}-.* \(pid $st_pid\) — not complete$" "$TMP/out-st/index.md" && grep -q RUNNING "$TMP/st-while.md"; then ok "index.md says RUNNING while the run is in flight and after it is killed"
 else bad "RUNNING stub: $(head -c 200 "$TMP/out-st/index.md")"; fi
+
+# --- an abort after some windows were answered ------------------------------------------------
+start_fake tf batch-then-fail
+run_batch "$EP" "$TMP/out-tf" "$TMP/w.txt" "$TMP/w6.txt"
+if [ "$RC" -eq 1 ] && grep -q '^\*\*ABORTED\*\* after 3 consecutive failed requests (last failure: http_error HTTP 500 server_error): 1 of 4 windows answered\.$' "$TMP/out-tf/index.md" && grep -q 'across 1 of 2 files' "$TMP/out-tf/index.md"; then ok "abort after one answered window: ABORTED header with 1 of 4 answered, exit 1, one of two files reached"
+else bad "abort header: rc=$RC $(sed -n 3,4p "$TMP/out-tf/index.md")"; fi
+
+# --- the header owns up to input problems; a refused re-run leaves no stale index ------------------
+if grep -q '^Completed: 5 of 6 windows answered; 3 input problems skipped\.$' "$TMP/out-mf/index.md"; then ok "header counts unreadable, empty and over-cap inputs next to the answered windows"
+else bad "input-problem header: $(sed -n 3p "$TMP/out-mf/index.md")"; fi
+printf 'Completed: 9 of 9 windows answered.\n' > "$TMP/out-a/index.md"
+HTTP_PROXY=http://127.0.0.1:9 run_batch "$EP" "$TMP/out-a" "$TMP/m.txt"
+rc1=$RC; stale1=$(grep -c Completed "$TMP/out-a/index.md" 2>/dev/null)
+printf 'Completed: 9 of 9 windows answered.\n' > "$TMP/out-a/index.md"
+JOB="$TMP/job-unknown-check.json" run_batch "$EP" "$TMP/out-a" "$TMP/m.txt"
+if [ "$rc1" -eq 2 ] && [ "$RC" -eq 2 ] && [ "${stale1:-0}" -eq 0 ] && ! grep -q Completed "$TMP/out-a/index.md" 2>/dev/null; then ok "a refused re-run (proxy, bad job) removes the previous index.md"
+else bad "stale index after refusal: rc=$rc1/$RC"; fi
 
 echo "batch pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
