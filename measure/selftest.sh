@@ -213,6 +213,7 @@ if grep -q '^Classify ' <<<"$p"; then
 else
   echo '{"structured_output":{"reference":["build failed"],"invented":[],"missed":[],"usable":true,"reason":"r"},"modelUsage":{"fake-judge":{}}}'
 fi
+exit "${FAKE_RC:-0}"
 EOF
 chmod +x "$TMP/fake-claude"
 export FAKE_LOG="$TMP/calls.log"; : > "$FAKE_LOG"
@@ -223,6 +224,9 @@ check "judge: a failed call fails the pass, names its rc, and stores no verdict"
   "$([ "$rc" -ne 0 ] && echo 1 || echo 0),$(grep -c 'claude rc=1' "$TMP/judge.err" | awk '{print ($1 > 0)}'),$(ls "$R"/judge/*.verdict.json 2>/dev/null | wc -l | tr -d ' ')"
 FAKE_BAD=1 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1; rc=$?
 check "judge: a verdict whose invented is not an array is rejected" '1,0' "$([ "$rc" -ne 0 ] && echo 1 || echo 0),$(ls "$R"/judge/*.verdict.json 2>/dev/null | wc -l | tr -d ' ')"
+FAKE_RC=3 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2> "$TMP/judge.err"; rc=$?
+check "judge: valid output followed by a nonzero exit is rejected, not stored" '1,1,0' \
+  "$([ "$rc" -ne 0 ] && echo 1 || echo 0),$(grep -c 'claude rc=3' "$TMP/judge.err" | awk '{print ($1 > 0)}'),$(ls "$R"/judge/*.verdict.json 2>/dev/null | wc -l | tr -d ' ')"
 : > "$FAKE_LOG"
 MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_JUDGE_JOBS=2 bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: one call per ok answer that passed the mechanical checks (FAILED f02-on and both mechanical failures of f03 skipped)" \

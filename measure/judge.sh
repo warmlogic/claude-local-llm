@@ -53,7 +53,7 @@ judge_one() {
     --json-schema "$(cat "$MDIR/judge-schema.json")" < "$RUN_DIR/judge/$aid.prompt" > "$out" 2> "$out.err")
   rc=$?
   rmdir "$work" 2>/dev/null
-  if jq -e '.structured_output | type == "object" and (.reference | type) == "array" and (.invented | type) == "array"
+  if [ "$rc" -eq 0 ] && jq -e '.structured_output | type == "object" and (.reference | type) == "array" and (.invented | type) == "array"
             and (.missed | type) == "array" and (.usable | type) == "boolean"' "$out" >/dev/null 2>&1; then
     jq --arg sha "$(answer_sha "$RUN_DIR/facts/$aid-1.json")" '.structured_output + {judge_models: (.modelUsage // {} | keys), answer_sha: $sha}' \
       "$out" > "$RUN_DIR/judge/$aid.verdict.json.new" && mv "$RUN_DIR/judge/$aid.verdict.json.new" "$RUN_DIR/judge/$aid.verdict.json" \
