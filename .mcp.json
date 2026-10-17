@@ -7,6 +7,14 @@
         "LOCAL_LLM_ENDPOINT_URL": "${user_config.endpoint_url}",
         "LOCAL_LLM_MODEL": "${user_config.model}"
       }
+    },
+    "local-verify": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch-verify.sh",
+      "env": {
+        "LOCAL_LLM_ALLOWED_DIRS": "${user_config.allowed_dirs}",
+        "LOCAL_LLM_ENDPOINT_URL": "${user_config.endpoint_url}",
+        "LOCAL_LLM_MODEL": "${user_config.model}"
+      }
     }
   }
 }

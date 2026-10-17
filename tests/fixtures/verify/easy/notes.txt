@@ -1,0 +1,5 @@
+Attendees: Priya, Tom, Alex (Dana absent)
+- Decision: ship v2.3 on Oct 28, not Oct 21, because the migration needs another QA pass.
+- Tom owns the migration runbook; Alex reviews it.
+- Priya raised a concern about the EU latency budget; no decision was made.
+- Next sync: Thursday.

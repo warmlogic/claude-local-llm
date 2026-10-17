@@ -1,0 +1,7 @@
+============ test session starts ============
+collected 142 items
+tests/test_api.py ........F.....           [ 10%]
+tests/test_db.py ..................s..     [ 25%]
+...
+FAILED tests/test_api.py::test_checkout_discount - AssertionError: expected 90.0, got 100.0
+=== 1 failed, 139 passed, 2 skipped in 48.21s ===

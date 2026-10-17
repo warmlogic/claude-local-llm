@@ -1,0 +1,1 @@
+Incident INC-4417 (sev2). Started 02:10 UTC, mitigated 03:05 UTC by rolling back the feature flag `fast_path`. Root cause: a null currency field from one partner (Acme Pay) crashed the pricing worker. ~1,200 orders delayed, none lost. Follow-up: add schema validation at ingest (owner: Mei).

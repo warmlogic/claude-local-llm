@@ -412,7 +412,7 @@ done
 # copy_plugin <dest> <endpoint-url>: temp plugin copy whose endpoint_url default is <endpoint-url>
 copy_plugin() {
   mkdir -p "$1" || die "mkdir $1"
-  cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" "$REPO/skills" "$REPO/hooks" "$1/" \
+  cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" "$REPO/server" "$REPO/skills" "$REPO/hooks" "$1/" \
     || die "copying the plugin to $1"
   jq --arg u "$2" '.userConfig.endpoint_url.default = $u' "$REPO/.claude-plugin/plugin.json" > "$1/.claude-plugin/plugin.json" \
     || die "rewriting plugin.json in $1"

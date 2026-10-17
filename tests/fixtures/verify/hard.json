@@ -1,0 +1,290 @@
+[
+ {
+  "file": "hard/log-0.txt",
+  "claim": "There are exactly 7 ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-0.txt",
+  "claim": "The db service logged exactly 2 WARN lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-0.txt",
+  "claim": "The api service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-0.txt",
+  "claim": "The first ERROR line came from the cache service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-0.txt",
+  "claim": "The db service logged more WARN lines than the cache service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-0.txt",
+  "claim": "The log covers more than 57 minutes from first to last line.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-1.txt",
+  "claim": "There are exactly 7 ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-1.txt",
+  "claim": "The cache service logged exactly 2 WARN lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-1.txt",
+  "claim": "The cache service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-1.txt",
+  "claim": "The first ERROR line came from the auth service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-1.txt",
+  "claim": "The db service logged more WARN lines than the auth service.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-1.txt",
+  "claim": "The log covers more than 55 minutes from first to last line.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-2.txt",
+  "claim": "There are exactly 3 ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-2.txt",
+  "claim": "The cache service logged exactly 3 WARN lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-2.txt",
+  "claim": "The api service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-2.txt",
+  "claim": "The first ERROR line came from the auth service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-2.txt",
+  "claim": "The api service logged more WARN lines than the auth service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-2.txt",
+  "claim": "The log covers more than 61 minutes from first to last line.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-3.txt",
+  "claim": "There are exactly 6 ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-3.txt",
+  "claim": "The cache service logged exactly 1 WARN lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-3.txt",
+  "claim": "The api service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-3.txt",
+  "claim": "The first ERROR line came from the db service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-3.txt",
+  "claim": "The api service logged more WARN lines than the cache service.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-3.txt",
+  "claim": "The log covers more than 50 minutes from first to last line.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-4.txt",
+  "claim": "There are exactly 6 ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-4.txt",
+  "claim": "The auth service logged exactly 3 WARN lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-4.txt",
+  "claim": "The db service logged no ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-4.txt",
+  "claim": "The first ERROR line came from the auth service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-4.txt",
+  "claim": "The cache service logged more WARN lines than the auth service.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-4.txt",
+  "claim": "The log covers more than 71 minutes from first to last line.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-5.txt",
+  "claim": "There are exactly 6 ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-5.txt",
+  "claim": "The auth service logged exactly 3 WARN lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-5.txt",
+  "claim": "The cache service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-5.txt",
+  "claim": "The first ERROR line came from the db service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-5.txt",
+  "claim": "The db service logged more WARN lines than the api service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-5.txt",
+  "claim": "The log covers more than 65 minutes from first to last line.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-6.txt",
+  "claim": "There are exactly 7 ERROR lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-6.txt",
+  "claim": "The db service logged exactly 3 WARN lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-6.txt",
+  "claim": "The cache service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-6.txt",
+  "claim": "The first ERROR line came from the cache service.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-6.txt",
+  "claim": "The auth service logged more WARN lines than the db service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-6.txt",
+  "claim": "The log covers more than 64 minutes from first to last line.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-7.txt",
+  "claim": "There are exactly 8 ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-7.txt",
+  "claim": "The api service logged exactly 2 WARN lines.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-7.txt",
+  "claim": "The cache service logged no ERROR lines.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-7.txt",
+  "claim": "The first ERROR line came from the auth service.",
+  "gold": "SUPPORTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-7.txt",
+  "claim": "The cache service logged more WARN lines than the db service.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ },
+ {
+  "file": "hard/log-7.txt",
+  "claim": "The log covers more than 57 minutes from first to last line.",
+  "gold": "CONTRADICTED",
+  "kind": "computed"
+ }
+]

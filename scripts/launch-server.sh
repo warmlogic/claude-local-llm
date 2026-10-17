@@ -30,26 +30,14 @@ fi
 echo "local-llm: allowed folders: $roots" >&2
 
 endpoint=${LOCAL_LLM_ENDPOINT_URL:-http://127.0.0.1:1234}
-hostport=${endpoint#*://}
-hostport=${hostport%%[/?#]*}
-case $endpoint in http://*|https://*) ;; *) hostport=invalid ;; esac
-case $hostport in *@*) hostport=invalid ;; esac
-case $hostport in
-  127.0.0.1*) rest=${hostport#127.0.0.1} ;;
-  localhost*) rest=${hostport#localhost} ;;
-  '[::1]'*) rest=${hostport#'[::1]'} ;;
-  *) rest=bad ;;
-esac
-case $rest in ''|:[0-9]*) ;; *) rest=bad ;; esac
-case ${rest#:} in
-  *[!0-9]*) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port (set endpoint_url in the plugin options): $endpoint" >&2; exit 2 ;;
-esac
+node ./scripts/check-endpoint.mjs "$endpoint" || exit 2  # loopback only (scripts/loopback.mjs)
 
 # houtini 3.3.4 also reads these (every process.env.* in its dist); drop any ambient value so only
 # what is exported below applies. Re-derive this list from the dist when the pin changes.
 unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
   HOUTINI_LM_MODEL HOUTINI_LM_THINKING HOUTINI_LM_STRUCTURED HOUTINI_LM_SERIALISE HOUTINI_LM_RETRY_RATELIMIT \
   HOUTINI_LM_PROVIDER HOUTINI_LM_MIN_TOKENS HOUTINI_LM_CROSS_PROCESS_LOCK HOUTINI_LM_CONTEXT_WINDOW
+. ./scripts/no-proxy.sh  # no proxy may carry the request off loopback
 export HOUTINI_LM_FILE_ROOTS=$roots
 export HOUTINI_LM_ENDPOINT_URL=$endpoint
 [ -z "${LOCAL_LLM_MODEL:-}" ] || export HOUTINI_LM_MODEL=$LOCAL_LLM_MODEL

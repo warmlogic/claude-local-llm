@@ -1,0 +1,7 @@
+diff --git a/deploy/values.yaml b/deploy/values.yaml
+-replicas: 3
++replicas: 5
+ image: registry.local/app:1.8.2
+-memoryLimit: 512Mi
++memoryLimit: 1Gi
++readinessProbe: /healthz

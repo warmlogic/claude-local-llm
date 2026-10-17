@@ -1,6 +1,8 @@
 // Resolve the allowed folders for houtini's HOUTINI_LM_FILE_ROOTS, using houtini's own semantics.
 // In: LOCAL_LLM_ALLOWED_DIRS (comma-separated; a leading $HOME, ${HOME} or ~ is expanded), HOME.
 // Out: the resolved roots joined with "," on stdout; warnings and errors on stderr; exit 2 on refusal.
+// Consumers: launch-server.sh (as houtini's HOUTINI_LM_FILE_ROOTS) and launch-verify.sh (as the verify
+// server's LOCAL_VERIFY_ROOTS, split on ","; no root can contain one).
 // Invariant: houtini 3.3.4 reads the variable as .split(/[:,]/).map(trim).filter(Boolean) and then
 // realpathSync()s each piece (dist/index.js). Each root printed here parses back to exactly itself,
 // so houtini reads precisely the folders resolved here and never a trimmed or split-off sibling.

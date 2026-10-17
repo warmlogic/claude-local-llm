@@ -188,6 +188,19 @@ if [ -s "$TMP/port" ]; then
   else
     bad "endpoint passthrough (requests: $(wc -l < "$TMP/requests.log" 2>/dev/null), $(jq -c '{init,stderr}' <<<"$out" | cut -c1-200))"
   fi
+  # no proxy: with Node's env proxy turned on, houtini's requests still go straight to the endpoint.
+  # Its positive control (the same environment does send a plain Node fetch to the proxy) is the
+  # "control:" case in tests/test-verify.sh, which this suite runs below.
+  node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/proxy-port" "$TMP/proxy.log" proxy &
+  PROXY_PID=$!
+  for _ in $(seq 1 50); do [ -s "$TMP/proxy-port" ] && break; sleep 0.1; done
+  pp="http://127.0.0.1:$(cat "$TMP/proxy-port" 2>/dev/null)"; : > "$TMP/proxy.log"; before=$(wc -l < "$TMP/requests.log")
+  out=$(NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--use-env-proxy HTTP_PROXY="$pp" http_proxy="$pp" HTTPS_PROXY="$pp" ALL_PROXY="$pp" NO_PROXY= no_proxy= \
+        LOCAL_LLM_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/port")" run_launcher "$A" list_models)
+  if [ -s "$TMP/proxy-port" ] && [ ! -s "$TMP/proxy.log" ] && [ "$(wc -l < "$TMP/requests.log")" -gt "$before" ]; then
+    ok "houtini with Node's env proxy on and *_PROXY set: the proxy gets nothing, the endpoint gets the requests"
+  else bad "houtini proxy bypass (proxy log: $(wc -l < "$TMP/proxy.log" 2>/dev/null) lines; $(jq -c '{init,stderr}' <<<"$out" | cut -c1-200))"; fi
+  kill "$PROXY_PID" 2>/dev/null
   # model pin: LOCAL_LLM_MODEL reaches houtini as HOUTINI_LM_MODEL; empty means no pin
   ep="http://127.0.0.1:$(cat "$TMP/port")"
   out=$(LOCAL_LLM_MODEL=fake-model LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A" discover)
@@ -305,7 +318,7 @@ if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-loca
    | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
   ok "approval hook allows the plugin's own skill"
 else bad "approval hook allows the plugin's own skill"; fi
-for t in mcp__plugin_local-llm_local-llm__code_task_files; do
+for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_local-verify__verify_claims; do
   if hook_out "{\"tool_name\":\"$t\",\"tool_input\":{}}" \
      | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
     ok "approval hook allows the plugin's read-only tool $t"
@@ -320,7 +333,12 @@ for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}
              '{"tool_name":"mcp__plugin_local-llm_local-llm__embed","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task_files2","tool_input":{}}' \
-             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify_claims","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify_claims2","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__verify_claims","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_other_local-verify__verify_claims","tool_input":{}}' \
+             '{"tool_name":"mcp__local-verify__verify_claims","tool_input":{}}' \
+             '{"tool_name":"MCP__PLUGIN_LOCAL-LLM_LOCAL-VERIFY__VERIFY_CLAIMS","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_other_local-llm__code_task_files","tool_input":{}}' \
              '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
   if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
@@ -330,8 +348,8 @@ if jq -e '.hooks.PreToolUse | any((.matcher | split("|") | index("Skill") != nul
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"
 else bad "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"; fi
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$REPO/hooks/hooks.json" 2>/dev/null)
-if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files" ]; then
-  ok "PreToolUse matcher covers exactly the skill and the read-only file tool"
+if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
+  ok "PreToolUse matcher covers exactly the skill and the two read-only file tools"
 else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------
@@ -413,6 +431,11 @@ if [ -n "$allowed" ] && [ -z "$missing" ]; then ok "every allowed-tools entry in
 else bad "skill allowed-tools entries missing from the names table:${missing:- (no allowed-tools line)}"; fi
 if [ "$(wc -l < "$skill")" -le 80 ]; then ok "skill stays within its 80-line budget"
 else bad "skill is over its 80-line budget ($(wc -l < "$skill") lines)"; fi
+
+# --- the local-verify server: its own offline suite (fake endpoint only) --------
+vt=$(bash "$SCRIPT_DIR/test-verify.sh" 2>&1); vt_rc=$?
+if [ "$vt_rc" -eq 0 ] && grep -q '^verify pass=[1-9][0-9]* fail=0$' <<<"$vt"; then ok "local-verify suite ($(tail -1 <<<"$vt"))"
+else bad "local-verify suite (rc=$vt_rc): $(grep -E 'FAIL|^verify pass' <<<"$vt" | head -5 | tr '\n' ';')"; fi
 
 # --- model-backed cases --------------------------------------------------------
 gen_text 20000 > "$TMP/root/twenty-k.txt"
