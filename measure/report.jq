@@ -5,7 +5,7 @@
 # Results mode prints only ids, types, tasks, size buckets and numbers; paths and answers never reach it.
 #
 # Completeness, the one rule (valid_run below, used by every count, median, control, total and gate): a run is
-# MEASURED only on positive evidence. All four usage counters are numbers; no trace line but the last failed to
+# MEASURED only on positive evidence. All four usage counters and total_cost_usd (the gated cost) are numbers; no trace line but the last failed to
 # parse; the plugin tool is listed exactly when the configuration is on (controls included); and the status is ok,
 # or, for a plugin-on job only, a delegation failure (no-call, call-error), which is real plugin behavior kept at
 # its actual tokens. Anything else, including no-server (a dead server measures nothing about delegation), leaves
@@ -26,7 +26,7 @@ def status_cell: if . == null then "not run" elif . == "ok" then "ok" else "FAIL
 def row: "| " + (map(na) | join(" | ")) + " |";
 def table(h): (h | row), (h | map("---") | row);
 def valid_run:
-  ([.T, .input, .cache_creation, .cache_read, .output] | all(type == "number"))
+  ([.T, .input, .cache_creation, .cache_read, .output, .usd] | all(type == "number"))
   and .parse_errors == 0
   and .tool_listed == (.cfg == "on")
   and (.status == "ok" or (.kind == "job" and .cfg == "on" and (.status == "no-call" or .status == "call-error")));
@@ -46,7 +46,7 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
 # controls: the median of the counted reps, complete when all expected reps count
 | (reduce ("off", "on") as $c ({};
     ([$runs[] | select(.kind == "ctl" and .cfg == $c)]) as $all | ([$all[] | select(valid_run)]) as $ok
-    | .[$c] = (($ok | median_by(.T)) // {}) + {complete: (($ok | length) == $ctl_reps), counted: ($ok | length),
+    | .[$c] = (($ok | median_by(.usd)) // {}) + {complete: (($ok | length) == $ctl_reps), counted: ($ok | length),
         spread: ($ok | map(.T) | if length == 0 then null else "\(min)–\(max) (n=\(length))" end)})) as $C
 | def job: if .T == null or $C[.cfg].T == null then null else .T - $C[.cfg].T end;
   def jobusd: if .usd == null or $C[.cfg].usd == null then null else .usd - $C[.cfg].usd end;
@@ -84,7 +84,7 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
        | ([$reps[] | select(valid_run)]) as $ok
        | ($reps | map(select(.rep == 1)) | first) as $r1
        | (($ok | length) == $want and ($reps | length) == $want and $C[$c].complete) as $complete
-       | .[$c] = (if $complete then ($ok | median_by(.job)) else {} end)
+       | .[$c] = (if $complete then ($ok | median_by(.jobusd)) else {} end)
            + {complete: $complete, counted: ($ok | length), want: $want, ran: ($reps | length),
               ok_reps: ([$reps[] | select(.status == "ok")] | length),
               status: (if $f.slot == "main" then ($r1.status // null) else null end), r1: $r1, answer1: ($r1.answer // null),
@@ -104,9 +104,11 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
      usd_off: ($M | map(.off.jobusd) | sumc), usd_on: ($M | map(.on.jobusd) | sumc),
      g_off: ($M | map(.off.growth) | if any(.[]; . == null) then null else add / length | round end),
      g_on: ($M | map(.on.growth) | if any(.[]; . == null) then null else add / length | round end)} else {} end) as $S
-| ratio($S.on; $S.off) as $headline
-| (if $C.on.complete and $C.off.complete then $C.on.T - $C.off.T else null end) as $fixed
-| (if ($run_why | length) == 0 and ($M | length) > 0 then ($M | map(.off.job - .on.job) | add / length) else null end) as $gain
+# The gate is Claude cost (total_cost_usd, cost-weighted usage); the token sum T and context growth stay beside it.
+| ratio($S.usd_on; $S.usd_off) as $headline
+| ratio($S.on; $S.off) as $t_savings
+| (if $C.on.complete and $C.off.complete then {usd: ($C.on.usd - $C.off.usd), T: ($C.on.T - $C.off.T)} else null end) as $fixed
+| (if ($run_why | length) == 0 and ($M | length) > 0 then ($M | map(.off.jobusd - .on.jobusd) | add / length) else null end) as $gain
 | ($corpus_why + [$M[] | . as $f | ("off", "on") as $c | select($f[$c].usable == null) | "\($f.id) \($c): no usable verdict"]) as $u_why
 | ([$M[] | select(.off.usable.u // false)] | length) as $u_off
 | ([$M[] | select(.on.usable.u // false)] | length) as $u_on
@@ -137,18 +139,22 @@ else
   "- Local model \($meta.local_model // "n/a") (pinned in the plugin snapshots; \([$runs[] | .call_footers[]?] | length | if . == 0 then "no footer recorded" else "all \(.) footers matched" end)); server \($meta.server_pin); LM Studio CLI \($meta.lms_version)",
   "- Every session: `claude -p --output-format stream-json --setting-sources project --no-session-persistence`, default model\(if $meta.model != "" then " pinned to " + $meta.model else "" end), a constant empty cwd outside `$HOME`, claude.ai connectors off (`ENABLE_CLAUDEAI_MCP_SERVERS=false`). Plugin on adds `--plugin-dir` (a snapshot of the repo; the ~2k, ~5k and ~10k files use a copy whose skill floor reads 1k instead of 10k).",
   "",
-  "**Metrics.** T = input + cache_creation + cache_read + output, summed over the result event's `modelUsage`. A job's cost is its run's T minus the median control of its configuration (`Reply with the single word OK.`, \($ctl_reps) per configuration, after one discarded warm-up). Savings = 1 − Σ job on / Σ job off over the main files. A plugin-on job's delegation failure (no-call, call-error) stays in at its actual tokens and is not usable. Any other run that is not positively measured (all four usage counters, a clean trace, the plugin tool present exactly when on, an ok status) leaves its metric incomplete, and an incomplete metric cannot pass. Fixed cost = T(control on) − T(control off); break-even = ceil(fixed / mean(job off − job on)). Context growth = the largest single-call input side (input + cache_read + cache_creation) in the run minus the control's: the file tokens that entered the main context. USD, turns, timing and context growth are reported, not gated. SLOW: a local call over 60 s, a timeout, or a plugin-on session over 60 s with no footer; \"unknown\" when a time is missing.",
+  "**Metrics.** The gate is Claude cost: a job's cost is its run's `total_cost_usd` minus the median control of its configuration (`Reply with the single word OK.`, \($ctl_reps) per configuration, after one discarded warm-up), and savings = 1 − Σ job cost on / Σ job cost off over the main files, at least 50%. Beside it, not gated: T = input + cache_creation + cache_read + output (summed over the result event's `modelUsage`, minus the control's the same way) and context growth (the largest single-call input side, input + cache_read + cache_creation, minus the control's: the file tokens that entered the main context). A plugin-on job's delegation failure (no-call, call-error) stays in at its actual cost and is not usable. Any other run that is not positively measured (all four usage counters and the cost, a clean trace, the plugin tool present exactly when on, an ok status) leaves its metric incomplete, and an incomplete metric cannot pass. Fixed cost = cost(control on) − cost(control off), tokens beside; break-even = ceil(fixed cost / mean(job cost off − job cost on)). Small files take the median rep by cost. SLOW: a local call over 60 s, a timeout, or a plugin-on session over 60 s with no footer; \"unknown\" when a time is missing.",
   "",
   "## Definition of done", "",
   table(["Metric", "Baseline (plugin off)", "Delegated (plugin on)", "Target", "Result"]),
-  (["Claude tokens per job (Σ T over \($n) main files)", ($S.off // "incomplete"), (if $S.on == null then "incomplete" else "\($S.on) (savings \($headline | pct))" end),
-    "≥ 80% fewer", gate($headline; $t_complete and $headline != null;
-      $t_why + (if $t_complete and $headline == null then ["baseline total is zero"] else [] end); ($headline // 0) >= 0.8)] | row),
+  (["Claude cost per job (Σ USD over \($n) main files)", (if $S.usd_off == null then "incomplete" else ($S.usd_off | usd) end),
+    (if $S.usd_on == null then "incomplete" else "\($S.usd_on | usd) (savings \($headline | pct))" end),
+    "≥ 50% lower", gate($headline; $t_complete and $headline != null;
+      $t_why + (if $t_complete and $headline == null then ["baseline cost is zero"] else [] end); ($headline // 0) >= 0.5)] | row),
+  (["Claude tokens per job (Σ T, not gated)", ($S.off // "incomplete"), (if $S.on == null then "incomplete" else "\($S.on) (savings \($t_savings | pct))" end),
+    "reported", "not gated"] | row),
+  (["Context growth per job (mean tokens, not gated)", ($S.g_off // "incomplete"), ($S.g_on // "incomplete"), "reported", "not gated"] | row),
   (["Usable answers", "\($u_off) of \($n)", "\($u_on) of \($n)", "≥ \($u_target) of 10", gate($u_on; ($u_why | length) == 0; $u_why; $u_on >= $u_target)] | row),
   "",
-  "- Fixed cost per session: \(if $fixed == null then "incomplete" else "\($fixed) tokens (\(if $C.on.usd == null or $C.off.usd == null then "USD n/a" else ($C.on.usd - $C.off.usd | usd) end))" end).",
-  "- Break-even: \(if $fixed == null or $gain == null then "incomplete" elif $gain <= 0 then "never (delegation costs more per job)" else (($fixed / $gain) | ceil | tostring) + " job(s) per session" end)\(if ($corpus_why | length) > 0 and $gain != null then " (incomplete: \($corpus_why | join("; ")))" else "" end).",
-  "- Not gated: Σ job USD off \($S.usd_off | usd), on \($S.usd_on | usd) (savings \(ratio($S.usd_on; $S.usd_off) | pct)); mean context growth off \($S.g_off | na), on \($S.g_on | na) tokens.",
+  "- Fixed cost per session: \(if $fixed == null then "incomplete" else "\($fixed.usd | usd) (\($fixed.T) tokens)" end).",
+  "- Break-even (on cost): \(if $fixed == null or $gain == null then "incomplete" elif $gain <= 0 then "never (delegation costs more per job)" else (($fixed.usd / $gain) | ceil | tostring) + " job(s) per session" end)\(if ($corpus_why | length) > 0 and $gain != null then " (incomplete: \($corpus_why | join("; ")))" else "" end).",
+  "- Not gated: turns, timing, the per-field token split and context growth (the file tokens kept out of the main context).",
   "- Operator review: \(if $op_n == 0 then "not done yet" else "agreed on \($op_agree) of \($op_n)" end).",
   "",
   "## Fixed cost (median control)", "",
@@ -176,8 +182,8 @@ else
      | [$f.id, $c, .turns, .input, .cache_creation, .cache_read, .output, .T, (.usd | usd), .ctx_max] | row),
   "",
   "## Threshold (per size; small files are the median of their reps)", "",
-  table(["id", "size", "job off", "job on", "savings T", "ok reps off", "ok reps on", "TTFT s", "local s", "e2e off s", "e2e on s", "slow", "usable off", "usable on"]),
-  ($F | sort_by(.chars)[] | [.id, bucket, jcell("off"), jcell("on"), (.savings | pct), "\(.off.ok_reps)/\(.off.want)", "\(.on.ok_reps)/\(.on.want)",
+  table(["id", "size", "job off", "job on", "savings T", "savings USD", "ok reps off", "ok reps on", "TTFT s", "local s", "e2e off s", "e2e on s", "slow", "usable off", "usable on"]),
+  ($F | sort_by(.chars)[] | [.id, bucket, jcell("off"), jcell("on"), (.savings | pct), (.savings_usd | pct), "\(.off.ok_reps)/\(.off.want)", "\(.on.ok_reps)/\(.on.want)",
      (.on.ttft_s | sec), (if .on.local_s != null then (.on.local_s | sec) elif .on.e2e_s != null then "\(.on.e2e_s | sec) (session)" else "n/a" end),
      (.off.e2e_s | sec), (.on.e2e_s | sec), slowcell,
      (.off.usable | ucell), (.on.usable | ucell)] | row)

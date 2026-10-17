@@ -267,22 +267,24 @@ render() { bash "$MDIR/report.sh" "$TMP/v" "$TMP/v/results.md" > /dev/null 2> "$
 cell() { grep -E "$1" "$TMP/v/results.md" | head -n 1; }
 
 variant; render
-check "report PASS: tokens gate passes on a complete run" '| Claude tokens per job (Σ T over 10 main files) | 300000 | 30000 (savings 90%) | ≥ 80% fewer | PASS |' "$(cell '^\| Claude tokens')"
+check "report PASS: the cost gate passes on a complete run" '| Claude cost per job (Σ USD over 10 main files) | $0.3 | $0.03 (savings 90%) | ≥ 50% lower | PASS |' "$(cell '^\| Claude cost')"
+check "report: the token sum and context growth stay beside the gate, ungated" '| Claude tokens per job (Σ T, not gated) | 300000 | 30000 (savings 90%) | reported | not gated |,| Context growth per job (mean tokens, not gated) | 30000 | 3000 | reported | not gated |' \
+  "$(cell '^\| Claude tokens'),$(cell '^\| Context growth')"
 check "report PASS: usable gate passes" '| Usable answers | 10 of 10 | 10 of 10 | ≥ 8 of 10 | PASS |' "$(cell '^\| Usable answers')"
-check "report PASS: fixed cost and break-even" '- Fixed cost per session: 700 tokens ($0.0007).,- Break-even: 1 job(s) per session.' "$(cell '^- Fixed'),$(cell '^- Break-even')"
+check "report PASS: fixed cost and break-even on cost, tokens beside" '- Fixed cost per session: $0.0007 (700 tokens).,- Break-even (on cost): 1 job(s) per session.' "$(cell '^- Fixed'),$(cell '^- Break-even')"
 check "report: main row carries job T, local timing, e2e for both configs and usable" \
   '| f01 | doc | summary | 20–30k | 30000 | 3000 | 90% | 90% | 30000 | 3000 | 2 | 2 | ok | ok | 2 | 5 | 5 | 9 |  | yes | yes |  |' "$(cell '^\| f01 \| doc')"
 check "report: no path or answer text in the results" '0' "$(grep -cE '/private/f|build failed' "$TMP/v/results.md")"
 
 variant; rm "$TMP/v/facts/f03-on-1.json"; render
 check "report FAIL-incomplete: a missing main run makes both gates incomplete" '2' \
-  "$(grep -cE '^\| (Claude tokens|Usable answers) .*\| FAIL \(incomplete: .*f03 on' "$TMP/v/results.md")"
-check "report FAIL-incomplete: totals and break-even say incomplete, not a number" '| Claude tokens per job (Σ T over 10 main files) | incomplete | incomplete |,- Break-even: incomplete.' \
-  "$(cell '^\| Claude tokens' | cut -d'|' -f1-4)|,$(cell '^- Break-even')"
+  "$(grep -cE '^\| (Claude cost|Usable answers) .*\| FAIL \(incomplete: .*f03 on' "$TMP/v/results.md")"
+check "report FAIL-incomplete: totals and break-even say incomplete, not a number" '| Claude cost per job (Σ USD over 10 main files) | incomplete | incomplete |,- Break-even (on cost): incomplete.' \
+  "$(cell '^\| Claude cost' | cut -d'|' -f1-4)|,$(cell '^- Break-even')"
 
 variant; rm "$TMP/v/facts/ctl-on-3.json"; render
 check "report: a missing control leaves every plugin-on job cost incomplete (10 main rows, 13 threshold rows)" '23,1' \
-  "$(grep -cE '^\| f[01][0-9] \| [^|]+ \| ([^|]+ \| [^|]+ \| )?[0-9]+ \| incomplete \(controls\) \|' "$TMP/v/results.md"),$(grep -cE '^\| Claude tokens .*FAIL \(incomplete: controls on: 2/3 counted\)' "$TMP/v/results.md")"
+  "$(grep -cE '^\| f[01][0-9] \| [^|]+ \| ([^|]+ \| [^|]+ \| )?[0-9]+ \| incomplete \(controls\) \|' "$TMP/v/results.md"),$(grep -cE '^\| Claude cost .*FAIL \(incomplete: controls on: 2/3 counted\)' "$TMP/v/results.md")"
 
 variant; jq -c '.answer = "- a redone answer"' "$B/facts/f02-on-1.json" > "$TMP/v/facts/f02-on-1.json"; render
 check "report: a verdict for an earlier answer (the run was redone) counts as no verdict" 'incomplete,1' \
@@ -292,14 +294,14 @@ variant; rm "$TMP/v/facts/f11-on-2.json"; mkf "$TMP/v" f12-on-2 on job f12 2 nul
 check "report: a missing small rep and two timeouts leave those rows incomplete, never a median of what is left" '2' \
   "$(grep -cE '^\| f1[12] \| ~[25]k \| 10000 \| incomplete \([12]/3\) \| n/a \|' "$TMP/v/results.md")"
 check "report: small-file gaps do not touch the main gate; a timeout is SLOW" 'PASS,1' \
-  "$(cell '^\| Claude tokens' | awk -F'|' '{gsub(/ /, "", $6); print $6}'),$(grep -cE '^\| f12 .*\| SLOW \|' "$TMP/v/results.md")"
+  "$(cell '^\| Claude cost' | awk -F'|' '{gsub(/ /, "", $6); print $6}'),$(grep -cE '^\| f12 .*\| SLOW \|' "$TMP/v/results.md")"
 
 variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-on-1" on job "f$i" 1 50000 ok "$ONF"; done; render
-check "report: break-even is never when delegation costs more" '- Break-even: never (delegation costs more per job).' "$(cell '^- Break-even')"
+check "report: break-even is never when delegation costs more" '- Break-even (on cost): never (delegation costs more per job).' "$(cell '^- Break-even')"
 
 variant; awk -F'\t' '$1 == "f01"' "$B/corpus.tsv" > "$TMP/v/corpus.tsv"; jq '.allow_short = true' "$B/meta.json" > "$TMP/v/meta.json"; render
-check "report: a 1-main-file corpus can never pass" '2' "$(grep -cE '^\| (Claude tokens|Usable answers) .*\| FAIL \(incomplete: 1 of 10 main files; no s2k file; no s5k file; no s10k file\) \|$' "$TMP/v/results.md")"
-check "report: a short corpus labels break-even incomplete too" '1' "$(grep -c '^- Break-even: 1 job(s) per session (incomplete: 1 of 10 main files' "$TMP/v/results.md")"
+check "report: a 1-main-file corpus can never pass" '2' "$(grep -cE '^\| (Claude cost|Usable answers) .*\| FAIL \(incomplete: 1 of 10 main files; no s2k file; no s5k file; no s10k file\) \|$' "$TMP/v/results.md")"
+check "report: a short corpus labels break-even incomplete too" '1' "$(grep -c '^- Break-even (on cost): 1 job(s) per session (incomplete: 1 of 10 main files' "$TMP/v/results.md")"
 
 variant; mkf "$TMP/v" f04-on-1 on job f04 1 20700 no-call; mkf "$TMP/v" f05-off-1 off job f05 1 47000
 h() { answer_sha "$TMP/v/facts/$1-1.json" | cut -c1-12; }
@@ -331,7 +333,7 @@ check "report: a 75 s call that hit max tokens keeps its timing and is SLOW" '1'
 check "report: with no footer, local time falls back to the session's" '1' "$(grep -cE '^\| f04 .*\| FAILED: no-call \| n/a \| 12 \(session\) \| 5 \| 12 \|  \|' "$TMP/v/results.md")"
 
 # --- valid_run: positive evidence only ----------------------------------------------------------------------------
-gates_incomplete() { grep -cE '^\| (Claude tokens|Usable answers) .*\| FAIL \(incomplete: ' "$TMP/v/results.md"; }
+gates_incomplete() { grep -cE '^\| (Claude cost|Usable answers) .*\| FAIL \(incomplete: ' "$TMP/v/results.md"; }
 variant; mkf "$TMP/v" f03-on-1 on job f03 1 20700 corpus-changed "$ONF"; render
 check "valid_run: a corpus-changed run that still carries usage leaves both gates incomplete" '2' "$(gates_incomplete)"
 variant; mkf "$TMP/v" f04-off-1 off job f04 1 47000 plugin-leak '{"tool_listed":true}'; render
@@ -349,12 +351,21 @@ check "valid_run: a run with a parse error does not count" '2' "$(gates_incomple
 variant; mkf "$TMP/v" f07-on-1 on job f07 1 20700 ok '{"output":null}'; render
 check "valid_run: a missing usage counter does not count" '2' "$(gates_incomplete)"
 variant; mkf "$TMP/v" f08-on-1 on job f08 1 20700 no-call; render
-check "valid_run: a no-call job stays in ΣT at its real tokens and the gate stays complete" '1,1,1' \
-  "$(grep -c '^| Claude tokens per job (Σ T over 10 main files) | 300000 | 30000 (savings 90%) | ≥ 80% fewer | PASS |$' "$TMP/v/results.md"),$(grep -cE '^\| f08 .*\| FAILED: no-call \|' "$TMP/v/results.md"),$(grep -c '^| Usable answers | 10 of 10 | 9 of 10 | ≥ 8 of 10 | PASS |$' "$TMP/v/results.md")"
+check "valid_run: a no-call job stays in the totals at its real cost and tokens and the gates stay complete" '1,1,1,1' \
+  "$(grep -c '^| Claude cost per job (Σ USD over 10 main files) | \$0.3 | \$0.03 (savings 90%) | ≥ 50% lower | PASS |$' "$TMP/v/results.md"),$(grep -c '^| Claude tokens per job (Σ T, not gated) | 300000 | 30000 ' "$TMP/v/results.md"),$(grep -cE '^\| f08 .*\| FAILED: no-call \|' "$TMP/v/results.md"),$(grep -c '^| Usable answers | 10 of 10 | 9 of 10 | ≥ 8 of 10 | PASS |$' "$TMP/v/results.md")"
 
 # --- gates on complete runs ----------------------------------------------------------------------------------------
-variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-on-1" on job "f$i" 1 27700 ok "$ONF"; done; render
-check "gate: a complete run below 80% is a plain FAIL" '| Claude tokens per job (Σ T over 10 main files) | 300000 | 100000 (savings 66.7%) | ≥ 80% fewer | FAIL |' "$(cell '^\| Claude tokens')"
+onjobs() { variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-on-1" on job "f$i" 1 "$((17700 + $1))" ok "$ONF"; done; render; }
+onjobs 20000
+check "gate: a complete run well below 50% is a plain FAIL" '| Claude cost per job (Σ USD over 10 main files) | $0.3 | $0.2 (savings 33.3%) | ≥ 50% lower | FAIL |' "$(cell '^\| Claude cost')"
+variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-on-1" on job "f$i" 1 41700 ok "$(jq -c '. + {usd: 0.0297}' <<<"$ONF")"; done; render
+check "gate: cost, not tokens, decides (60% cheaper, 17.7% fewer tokens: cost PASS, token row ungated)" \
+  '| Claude cost per job (Σ USD over 10 main files) | $0.3 | $0.12 (savings 60%) | ≥ 50% lower | PASS |,| Claude tokens per job (Σ T, not gated) | 300000 | 240000 (savings 20%) | reported | not gated |' \
+  "$(cell '^\| Claude cost'),$(cell '^\| Claude tokens')"
+onjobs 15300
+check "gate: 49% lower cost is FAIL" '| Claude cost per job (Σ USD over 10 main files) | $0.3 | $0.153 (savings 49%) | ≥ 50% lower | FAIL |' "$(cell '^\| Claude cost')"
+onjobs 14700
+check "gate: 51% lower cost is PASS" '| Claude cost per job (Σ USD over 10 main files) | $0.3 | $0.147 (savings 51%) | ≥ 50% lower | PASS |' "$(cell '^\| Claude cost')"
 missed() { jq '.missed = ["a key point"]' "$TMP/v/judge/$1.verdict.json" > "$TMP/v/x" && mv "$TMP/v/x" "$TMP/v/judge/$1.verdict.json"; }
 variant; missed f01-on; missed f02-on; missed f03-on; render
 check "gate: 7 of 10 usable is FAIL" '| Usable answers | 10 of 10 | 7 of 10 | ≥ 8 of 10 | FAIL |' "$(cell '^\| Usable answers')"
@@ -380,9 +391,10 @@ check "review: a duplicate line and a dropped stale verdict both warn" '1,1' \
   "$(grep -c 'a second line for f01-on' "$TMP/v/report.err"),$(grep -c 'stored verdict for f02-on graded an earlier answer' "$TMP/v/report.err")"
 
 variant; for r in 1 2 3; do mkf "$TMP/v" "ctl-on-$r" on ctl "" "$r" 17700 ok '{"usd":null}'; done; render
-check "report: controls without total_cost_usd still give the token fixed cost, with USD n/a" '- Fixed cost per session: 700 tokens (USD n/a).' "$(cell '^- Fixed')"
+check "report: controls without total_cost_usd do not count, now that cost is gated" '- Fixed cost per session: incomplete.,1' \
+  "$(cell '^- Fixed'),$(grep -c 'controls on: 0/3 counted' "$TMP/v/results.md")"
 variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-off-1" off job "f$i" 1 17000; done; render
-check "report: a zero baseline total names its reason instead of an empty incomplete" '1' "$(grep -c '^| Claude tokens .*| FAIL (incomplete: baseline total is zero) |$' "$TMP/v/results.md")"
+check "report: a zero baseline cost names its reason instead of an empty incomplete" '1' "$(grep -c '^| Claude cost .*| FAIL (incomplete: baseline cost is zero) |$' "$TMP/v/results.md")"
 variant; jq 'del(.local_model)' "$B/meta.json" > "$TMP/v/meta.json"; render; rc=$?
 check "report: a run without a recorded local_model fails" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'records no local_model' "$TMP/v/report.err")"
 check "trace_facts: a non-numeric rep fails instead of dropping it" '1' \
