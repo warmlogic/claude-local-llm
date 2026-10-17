@@ -2,8 +2,8 @@
 // verify_claims (see verify-claims.mjs). Start it through scripts/launch-verify.sh, which resolves
 // the allowed folders and checks the endpoint; this file re-checks both and refuses to start
 // without them, so running it directly cannot read outside a fence or talk to a remote host. It also
-// refuses to start when a proxy is set without NO_PROXY='*': with Node's env proxy on, fetch would
-// route the loopback request, file text included, through it (the launcher scrubs these too).
+// refuses to start when any proxy variable or NODE_USE_ENV_PROXY is defined: with Node's env proxy
+// on, fetch would route the loopback request, file text included, through it (the launcher unsets them).
 // Env: LOCAL_VERIFY_ROOTS (resolved roots, comma-joined), LOCAL_LLM_ENDPOINT_URL, LOCAL_LLM_MODEL,
 //      LOCAL_VERIFY_REQUEST_TIMEOUT_MS, LOCAL_VERIFY_BUDGET_MS (tests shorten these).
 // Protocol: newline-delimited JSON-RPC 2.0; initialize, ping, tools/list, tools/call, and
@@ -32,20 +32,14 @@ const positiveInt = (name, fallback) => {
   return Number.isInteger(n) && n > 0 ? n : die(`${name} must be a positive integer`);
 };
 
-const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
-// The proxy variables fetch could use, or none. Any set *_PROXY counts unless NO_PROXY / no_proxy are
-// all '*', whether or not the env proxy looks switched on: Node turns it on through NODE_USE_ENV_PROXY,
-// --use-env-proxy, or NODE_OPTIONS with its own quoting rules, and parsing those here would be one
-// more way to get it wrong. The launcher clears these variables, so only a direct start can trip this.
-function unexemptedProxyVars(env) {
-  const exempt = [env.NO_PROXY, env.no_proxy].filter((v) => v !== undefined && v !== '');
-  const isExempt = exempt.length > 0 && exempt.every((v) => v.trim() === '*');
-  return isExempt ? [] : PROXY_VARS.filter((n) => env[n]);
-}
-const proxied = unexemptedProxyVars(process.env);
+// Any of these DEFINED, even empty, refuses the start. NO_PROXY is never consulted: Node reads
+// no_proxy ?? NO_PROXY with its own precedence, and every attempt to judge an exemption here missed a
+// case. The launcher (scripts/no-proxy.sh) unsets exactly this set, so only a direct start can trip it.
+const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NODE_USE_ENV_PROXY'];
+const proxied = PROXY_VARS.filter((n) => Object.hasOwn(process.env, n));
 if (proxied.length) {
-  die(`refusing to start: ${proxied.join(', ')} is set without NO_PROXY='*', so Node's env proxy could send ` +
-    "requests (file text included) through a proxy; start through scripts/launch-verify.sh, or set NO_PROXY='*'");
+  die(`refusing to start: ${proxied.join(', ')} is defined, and Node's env proxy could send requests (file text ` +
+    'included) through a proxy; start through scripts/launch-verify.sh, which unsets them');
 }
 
 const endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234';

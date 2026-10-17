@@ -308,18 +308,37 @@ for variant in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy" 'NODE_OPTIO
   if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ] && [ "$(chat_count "$LOG")" = $((before + 1)) ]; then
     ok "launcher with $variant and *_PROXY set: the proxy gets nothing, the endpoint gets the request"
   else bad "proxy bypass with $variant (proxy log $(wc -l < "$proxy_log") lines; $(brief "$out"))"; fi
-  : > "$proxy_log"
-  out=$(env "${proxy_env[@]}" "$variant" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
-  if did_not_start "$out" "without NO_PROXY='*'" && [ ! -s "$proxy_log" ]; then
-    ok "server started directly with $variant and *_PROXY set refuses to start; the proxy gets nothing"
-  else bad "direct start with $variant (proxy log $(wc -l < "$proxy_log") lines; $(jq -c '{init,exit,stderr}' <<<"$out" | cut -c1-300))"; fi
+done
+# Started directly, the server refuses if any proxy variable or NODE_USE_ENV_PROXY is defined at all,
+# empty included, and never consults NO_PROXY (Node reads no_proxy ?? NO_PROXY, so an empty
+# lowercase value beats NO_PROXY='*').
+PROXY_NAMES=(HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NODE_USE_ENV_PROXY)
+unset_all=(); for n in "${PROXY_NAMES[@]}" NO_PROXY no_proxy; do unset_all+=(-u "$n"); done
+direct() { # <env assignments...>: start the server directly and call it once
+  env "${unset_all[@]}" "$@" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" \
+    node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)"
+}
+for mode in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy"; do
+  missed=""; n=0
+  for name in "${PROXY_NAMES[@]}"; do
+    for value in "" "$proxy_ep"; do
+      : > "$proxy_log"; n=$((n + 1))
+      out=$(direct "$mode" "$name=$value")
+      { did_not_start "$out" "$name is defined" || did_not_start "$out" "NODE_USE_ENV_PROXY is defined"; } && [ ! -s "$proxy_log" ] \
+        || missed="$missed $name='${value:+set}'"
+    done
+  done
+  : > "$proxy_log"; n=$((n + 1))
+  out=$(direct "$mode" HTTP_PROXY="$proxy_ep" NO_PROXY='*' no_proxy=)
+  did_not_start "$out" "HTTP_PROXY" && [ ! -s "$proxy_log" ] || missed="$missed codex-case(HTTP_PROXY+NO_PROXY='*'+no_proxy='')"
+  if [ -z "$missed" ]; then ok "direct start with $mode: all $n cases refuse (each variable empty and set, and HTTP_PROXY with NO_PROXY='*', no_proxy=''); the proxy gets nothing"
+  else bad "direct start with $mode: started or reached the proxy for:$missed"; fi
 done
 : > "$proxy_log"
-out=$(env "${proxy_env[@]}" NODE_USE_ENV_PROXY=1 NO_PROXY='*' no_proxy='*' LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" \
-      node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
+out=$(direct NODE_OPTIONS=--use-env-proxy NO_PROXY='*')
 if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ]; then
-  ok "started directly with the env proxy on but NO_PROXY='*': it runs, and the proxy gets nothing"
-else bad "direct start with NO_PROXY='*' ($(jq -c '{init,stderr,call}' <<<"$out" | cut -c1-300))"; fi
+  ok "direct start with --use-env-proxy but no proxy variable defined runs normally"
+else bad "direct start without proxy variables ($(jq -c '{init,stderr,call}' <<<"$out" | cut -c1-300))"; fi
 
 # --- time: one retry on a stall, one redraw of a cut-off answer, the call budget ---------------
 start_fake once verify-stall-once
