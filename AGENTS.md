@@ -57,6 +57,10 @@ scripts/
   loopback.mjs       # the loopback endpoint check, shared by both launchers and the verify server
   check-endpoint.mjs # CLI wrapper the launchers call
   no-proxy.sh        # sourced by both launchers: drops proxy settings, exempts every host
+batch/
+  flatten-transcripts.mjs # session .jsonl -> one line per block: L<n>, role, kind, text (cut at 2000 chars)
+  run.mjs            # batch runner: one prompt over many text windows on the local model; writes rows, dropped, failures, index.md
+  jobs/friction.json # pilot job: user/Claude friction in transcripts (correction, stuck, tool_error, permission_denial)
 server/
   verify-server.mjs  # stdio MCP (initialize, ping, tools/list, tools/call); re-checks roots and endpoint
   verify-claims.mjs  # the verify_claims tool: arguments, self-consistency sampling, partial results
@@ -66,6 +70,7 @@ server/
 tests/
   test-fence.sh      # fence + launcher + model-backed cases; runs test-verify.sh
   test-verify.sh     # local-verify suite, offline against the fake endpoint
+  test-batch.sh      # batch runner suite, offline against the fake endpoint's `batch` modes; test-fence.sh runs it
   eval-verify.mjs    # verifier live eval on the spike's sets (needs LM Studio; not per-commit)
   mcp-call.mjs       # minimal stdio MCP client used by the tests (`--list` sends tools/list)
   mcp-raw.mjs        # sends raw lines (malformed ones too, or two calls at once) and collects the replies
@@ -94,6 +99,17 @@ tests/
 - **verify_claims is the spike's method, and its output is a hint.** Each claim gets k samples (default 10) at temperature 1.0 with `reasoning_effort: "none"`, each with the spike's three options (SUPPORTED, CONTRADICTED, NOT_IN_SOURCE) in a seeded shuffled order and the answer forced to that enum by JSON schema; the votes collapse to SUPPORTED vs NOT_SUPPORTED (a tie is NOT_SUPPORTED), which is the form that scored 48/48 with no false accepts in the spike. `p_supported` is the SUPPORTED vote share and `agreement` the share that agrees with the label. The model is the pinned `model` option, else the chat model `/api/v0/models` reports loaded, else (a server without that API) the only non-embedding model `/v1/models` lists; when the load state cannot be known, or several chat models are loaded, it says so and asks for the model option instead of naming a model LM Studio might load, and when only embeddings models are loaded it says no chat model is loaded. The caller declares `kind`: a claim is `{text, kind: "lookup"}` only when it is a plain fact checkable by finding one passage (no counts, order, comparisons, dates or quantifiers), and a bare string is `computed`. A regex classifier was tried first and dropped: each review round found claims it misfiled, and the caller, who wrote the claim, knows what checking it takes. The spike's confident errors (7 unanimous wrong of 48) were all computed claims. Every result carries `auto_accept: false` until local-llm-9dl sets a threshold from real answers.
 - **verify_claims bounds its time.** Requests from every call share 4 slots (LM Studio's default parallelism for one model). Each request times out after 45 s and is retried once with the same body (the spike saw a single request hang); a sample whose answer is cut off (the schema allows leading whitespace, and a temperature-1 sample can spend all 100 tokens on newlines) is redrawn once with another seed, and two such draws fail the claim with a diagnostic (finish_reason, and whether the content was empty, non-JSON or off-enum). Nothing else is retried. A call stops at a 240 s budget, and a request still queued for a slot leaves the queue when its call's budget runs out. A failed sample stops its claim's other samples. A claim that cannot finish (budget, two timeouts, a failed request) comes back `NOT_RUN` with a reason beside the claims that did (each claim's own failure logged to stderr with its stack; a budget overrun or cancel is logged once for the call), with `partial: true` and an `error`; the call fails outright only when no claim finished. Budget and timeout errors say "send fewer claims or a smaller k". `LOCAL_VERIFY_REQUEST_TIMEOUT_MS` and `LOCAL_VERIFY_BUDGET_MS` override the two times (positive integers, else the server refuses to start); the tests use them.
 - **Tool names** for a plugin server are `mcp__plugin_<plugin>_<server>__<tool>`: houtini's are `mcp__plugin_local-llm_local-llm__<tool>` (`code_task_files`, `discover`, ...) and the verifier is `mcp__plugin_local-llm_local-verify__verify_claims`. Use the full name in `allowed-tools` and permission rules.
+
+## Batch runner
+
+`batch/run.mjs` is outside the MCP surface: no fence, no plugin wiring, node stdlib only. Claude starts one job (for example in the background) and reads back only `index.md`, so thousands of lines never enter its context. It is for many-window text mining, not for the per-file delegation the skill covers.
+
+```bash
+node batch/flatten-transcripts.mjs <out_dir> <session.jsonl>...   # optional: transcripts -> <out_dir>/<session>.txt
+node batch/run.mjs --job batch/jobs/friction.json --out <dir> <input files...>
+```
+
+A job is `{"prompt", "row_schema", "check": "quote-in-line" | "none", "max_window_chars"}`. Each input is split into windows of whole lines; each window is one temperature-0 chat call with a strict `json_schema` reply of `{rows: [row_schema]}`. Rows get `file` and `window`. With `quote-in-line` a row must carry `line` (an `L<n>` id from the window) and a `quote` that is a substring of that line (exact, then whitespace-normalized); failures go to `dropped.jsonl` with a reason. Outputs in `--out`: `rows.jsonl`, `dropped.jsonl`, `failures.jsonl` (`line_over_cap`, `http_error`, `finish_length`, `malformed_reply` after one retry, `endpoint_unreachable`; three in a row abort the run), and `index.md` (under 60 lines: counts per file and per `kind`, kept and dropped, failures by type, windows, wall time, token totals). The endpoint comes from `LOCAL_LLM_ENDPOINT_URL` (default `http://127.0.0.1:1234`) and must pass `scripts/loopback.mjs`. Windows run sequentially; the model is whatever LM Studio has loaded. Transcript text is private: never commit flattened files or rows.
 
 ## Unversioned
 
