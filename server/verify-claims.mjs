@@ -10,9 +10,10 @@
 // beside the claims that did; the call fails outright only when no claim finished.
 // File text never appears in a result or an error.
 import { basename, isAbsolute } from 'node:path';
+import { inspect } from 'node:util';
 import { isLoopbackEndpoint, loopbackError } from '../scripts/loopback.mjs';
 import { fetchJson, pickModel, RequestTimeout, upstreamCode, withSlot } from './endpoint.mjs';
-import { MAX_FILE_BYTES, readFenced } from './fence.mjs';
+import { formatSize, MAX_FILE_BYTES, readFenced } from './fence.mjs';
 
 export const DEFAULT_K = 10;
 export const MAX_K = 20;
@@ -173,9 +174,10 @@ async function sampleLabel(cfg, model, state, claim, seed, signal) {
 const round3 = (x) => Math.round(x * 1000) / 1000;
 
 // All k votes for one claim, or a NOT_RUN result. A failed sample stops the claim's other samples.
-async function judgeClaim(cfg, model, state, claim, ci, k, budget) {
+// Returns {result, error}: the error that stopped the claim, kept so the call can rethrow it.
+async function judgeClaim(cfg, model, state, claim, ci, k, signalIn) {
   const stop = new AbortController();
-  const signal = AbortSignal.any([budget, stop.signal]);
+  const signal = AbortSignal.any([signalIn, stop.signal]);
   const base = { claim: claim.text, kind: claim.kind, auto_accept: false };
   try {
     const labels = await Promise.all(
@@ -187,30 +189,26 @@ async function judgeClaim(cfg, model, state, claim, ci, k, budget) {
       ),
     );
     const p = labels.filter((l) => l === 'SUPPORTED').length / k;
-    return {
-      ...base,
-      label: p > 0.5 ? 'SUPPORTED' : 'NOT_SUPPORTED',
-      p_supported: round3(p),
-      agreement: round3(Math.max(p, 1 - p)),
-    };
+    const result = { ...base, label: p > 0.5 ? 'SUPPORTED' : 'NOT_SUPPORTED', p_supported: round3(p), agreement: round3(Math.max(p, 1 - p)) };
+    return { result };
   } catch (e) {
-    return { ...base, label: 'NOT_RUN', reason: e.message };
+    console.error(`local-verify: claim ${ci} NOT_RUN: ${inspect(e)}`); // stderr is the MCP log
+    return { result: { ...base, label: 'NOT_RUN', reason: e.message }, error: e };
   }
 }
 
-export async function verifyClaims(cfg, args) {
+// cancel: aborts when the client cancels the request (notifications/cancelled).
+export async function verifyClaims(cfg, args, cancel = new AbortController().signal) {
   if (!isLoopbackEndpoint(cfg.endpoint)) throw new Error(loopbackError(cfg.endpoint));
   const { paths, claims, k } = validateArgs(args);
-  const texts = await Promise.all(
-    paths.map((p) =>
-      readFenced(p, cfg.roots).catch((e) => {
-        throw new Error(`cannot use ${p}: ${e.message}`);
-      }),
-    ),
-  );
+  const reads = await Promise.allSettled(paths.map((p) => readFenced(p, cfg.roots)));
+  const failed = reads.flatMap((r, i) => (r.status === 'rejected' ? [`${paths[i]}: ${r.reason.message}`] : []));
+  if (failed.length === 1) throw new Error(`cannot use ${failed[0]}`);
+  if (failed.length) throw new Error(`cannot use ${failed.length} paths: ${failed.join('; ')}`);
+  const texts = reads.map((r) => r.value);
   const total = texts.reduce((n, t) => n + Buffer.byteLength(t), 0);
   if (total > MAX_INPUT_BYTES) {
-    throw new Error(`the files total ${(total / 1048576).toFixed(1)} MB, over the 1 MB combined limit; send fewer files`);
+    throw new Error(`the files total ${formatSize(total)}, over the 1 MB combined limit (${MAX_INPUT_BYTES} bytes); send fewer files`);
   }
   const state = texts.map((t, i) => `=== ${basename(paths[i])} ===\n${t}`).join('\n\n');
 
@@ -219,12 +217,14 @@ export async function verifyClaims(cfg, args) {
     () => budget.abort(new Error(`verify_claims ran past its ${cfg.budgetMs} ms budget; ${RETRY_HINT}`)),
     cfg.budgetMs,
   );
+  const signal = AbortSignal.any([budget.signal, cancel]);
   try {
-    const model = await pickModel(cfg, budget.signal);
-    const results = await Promise.all(claims.map((c, ci) => judgeClaim(cfg, model, state, c, ci, k, budget.signal)));
-    const notRun = results.filter((r) => r.label === 'NOT_RUN');
-    if (notRun.length === results.length) throw new Error(notRun[0].reason);
-    return notRun.length ? { model, k, partial: true, error: notRun[0].reason, results } : { model, k, results };
+    const model = await pickModel(cfg, signal);
+    const judged = await Promise.all(claims.map((c, ci) => judgeClaim(cfg, model, state, c, ci, k, signal)));
+    const results = judged.map((j) => j.result);
+    const firstError = judged.find((j) => j.error)?.error;
+    if (judged.every((j) => j.error)) throw new Error(firstError.message, { cause: firstError });
+    return firstError ? { model, k, partial: true, error: firstError.message, results } : { model, k, results };
   } finally {
     clearTimeout(budgetTimer);
     budget.abort(new Error('the call is over')); // nothing of this call may keep a slot or a request
