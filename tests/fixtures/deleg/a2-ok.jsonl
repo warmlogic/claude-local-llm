@@ -1,5 +1,6 @@
-{"type":"assistant","message":{"id":"g1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"assistant","message":{"id":"g1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}},{"type":"tool_use","id":"schema1","name":"ToolSearch","input":{"query":"select:mcp__plugin_local-llm_local-llm__code_task_files"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"schema1","content":"File tool schema loaded."}]}}
 {"type":"assistant","message":{"id":"g2","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/notes-0412.md"],"task":"classify"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"Meeting notes.\n---\nModel: m | 5\u21929 tokens | 1s | text \u00b7 1 file(s) read"}]}}
 {"type":"assistant","message":{"id":"g3","content":[{"type":"text","text":"Meeting notes."}]}}
