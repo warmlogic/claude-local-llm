@@ -16,10 +16,10 @@ SECRET_NAME_RE='(^|/)\.env|(^|[._/-])(secrets?|credentials?|passwords?|passwd|to
 LOCK_RE='(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock|Cargo\.lock|Gemfile\.lock|go\.sum|composer\.lock)$|\.lock$'
 SECRET_BODY_RE='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AIza[0-9A-Za-z_-]{35}|(password|passwd|secret|api[_-]?key|access[_-]?token)["'\'']?[[:space:]]*[:=][[:space:]]*["'\'']?[^[:space:]"'\'']{12,}'
 # Conservative on purpose: a borderline file is excluded. A credential keyword next to a value, in any case and in
-# headers, JSON or config ("Authorization: Bearer x", "\"token\": \"x\"", "password    = x", "**Password:** x", any spacing
-# or quoting before the separator), and bare Bearer or Basic
+# headers, JSON or config ("Authorization: Bearer x", "\"token\": \"x\"", "password    = x", "**Password:** x", 'config["password"] = x': any
+# run of non-alphanumeric characters on the line before the separator), and bare Bearer or Basic
 # credentials. measure/entropy.mjs then drops any file with a high-entropy token, which no pattern list can name.
-CRED_RE='(authorization|bearer|basic|token|secret|password|passwd|api[_-]?key|cookie|set-cookie|private[_-]?key|client[_-]?secret|session)["'\''[:space:]*_]*[:=][[:space:]]*[^[:space:]]|(bearer|basic)[[:space:]]+[A-Za-z0-9._~+/=-]{8,}'
+CRED_RE='(authorization|bearer|basic|token|secret|password|passwd|api[_-]?key|cookie|set-cookie|private[_-]?key|client[_-]?secret|session)[^[:alnum:]]*[:=][[:space:]]*[^[:space:]]|(bearer|basic)[[:space:]]+[A-Za-z0-9._~+/=-]{8,}'
 
 TRANSCRIPT_RE='transcript|meeting|standup|1on1|1-on-1|interview|call-notes'
 LOG_NAME_RE='(^|[_.-])(logs?|stderr|stdout|trace)([_.-]|$)|^(train|run|job)_'

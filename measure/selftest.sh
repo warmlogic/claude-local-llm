@@ -150,7 +150,7 @@ mk "$H/github/x7/future.md" 31000 203001010000
 i=0
 for form in 'Authorization: Bearer abcdefgh12345678' 'authorization: Basic dXNlcjpwYXNz' '{"headers": {"Authorization": "Bearer abc.def.ghi"}}' \
             "curl -H 'Authorization: Bearer xyz12345678' https://example.test" 'Bearer abcdefgh12345678 was sent' '"token": "abc123def"' \
-            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2' 'password    = hunter2' '"api_key"   :   "abc"' '**Password:** hunter2'; do
+            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2' 'password    = hunter2' '"api_key"   :   "abc"' '**Password:** hunter2' 'config["password"] = "hunter2"' "settings['api-key']: abc"; do
   i=$((i+1)); mk "$H/github/auth$i/notes.md" 31000 202602010000; printf '\n%s\n' "$form" >> "$H/github/auth$i/notes.md"; touch -t 202602010000 "$H/github/auth$i/notes.md"
 done
 mk "$H/github/ent/notes.md" 31000 202602010000; printf '\nx Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MHF3ZXJ0eXVpb3BAc2Rm x\n' >> "$H/github/ent/notes.md"; touch -t 202602010000 "$H/github/ent/notes.md"
