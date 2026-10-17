@@ -70,7 +70,7 @@ if (files.length > 0) {
   const lines = files.map(({ path, size }) => {
     const prefix = `local-llm: ${path} is about ${number(size)} bytes (a char proxy).`;
     if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices, or use batch/run.mjs for many-window jobs.`;
-    return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too.`;
+    return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message; these calls are independent. Do this before reading the file, including the user's own project files. Use the stated size; do not run \`wc -c\` again.`;
   });
   const fitting = files.filter((f) => f.size <= capChars);
   if (fitting.length > 1 && fitting.reduce((sum, f) => sum + f.size, 0) > capChars) {

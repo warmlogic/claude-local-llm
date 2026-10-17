@@ -2,7 +2,7 @@
 
 Offload file-heavy, low-stakes text jobs from Claude Code to a model running locally in LM Studio.
 
-When you ask Claude to summarize, classify, extract from, or draft from a big log or document (from about 30k characters through the loaded model's context cap; about 45k without a size hint), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The local model reads the file and returns a short answer, so the bulk of the file stays out of Claude's context; only the answer, and any lines Claude spot-checks, reach it. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and spot-checks it.
+When you ask Claude to summarize, classify, extract from, or draft from a big log or document (from about 30k characters through the loaded model's context cap; about 45k without a size hint), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The local model reads the file and returns a short answer, so the bulk of the file stays out of Claude's context; only the answer, and any lines Claude spot-checks, reach it. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and checks it in proportion to what depends on it.
 
 Status:
 

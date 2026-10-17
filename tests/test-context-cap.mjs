@@ -139,6 +139,8 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   assert.equal(lines.length, 4);
   for (const line of lines.slice(0, 2)) {
     assert.match(line, /invoke the local-llm:delegate-local skill/);
+    assert.match(line, /Skill tool and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message; these calls are independent/);
+    assert.match(line, /Use the stated size; do not run `wc -c` again/);
     assert.match(line, /bytes \(a char proxy\)/);
     assert.match(line, /32,768 tokens, about 45,875 chars; loaded/);
   }
@@ -151,6 +153,28 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   assert.doesNotMatch(await hint(f.endpoint, [50000, 50000]), /together/); // oversized files never get a delegate-per-file line
   const large = await fake(65536);
   assert.doesNotMatch(await hint(large.endpoint, [30000, 30000]), /files together/);
+});
+test('skill reuses hinted sizes and pairs independent skill and schema loads', () => {
+  const skill = readFileSync(join(repo, 'skills/delegate-local/SKILL.md'), 'utf8');
+  assert.match(skill, /With a size hint, use its stated size; do not run `wc -c`/);
+  assert.match(skill, /Without a hint, get the size without reading the file: `wc -c <file>`/);
+  assert.match(skill, /\| Schema lookup \| ToolSearch query `select:mcp__plugin_local-llm_local-llm__code_task_files` \|/);
+  assert.match(skill, /Skill call and the schema lookup in the same assistant message: they are independent/);
+  assert.match(skill, /Wait for both results before calling the file tool/);
+});
+test('skill scales spot-checks to stakes while retaining verification safeguards', () => {
+  const skill = readFileSync(join(repo, 'skills/delegate-local/SKILL.md'), 'utf8');
+  const verify = skill.split('## How to verify\n')[1].split('\n## ')[0];
+  assert.match(verify, /footer is present and says `N file\(s\) read` for all the paths/);
+  assert.match(verify, /Reject an empty answer, any flag in the table, or an `Error:` result/);
+  assert.match(verify, /For extraction ask for JSON and parse it; reject malformed output/);
+  assert.match(verify, /No spot-check when no single fact in the answer is load-bearing/);
+  assert.match(verify, /When a value, number, name or quoted line matters to the user's question \(extractions, drafts that quote the file\), use one targeted Grep for it \(a few lines\)/);
+  assert.match(verify, /never read a successfully delegated file in full by any means/);
+  assert.match(verify, /Flags and partial reads: see When it fails/);
+  const fails = skill.split('## When it fails\n')[1];
+  assert.match(fails, /Input-specific\*\* \(too big, path not allowed, a quality flag, a partial `x\/y file\(s\) read`\): do that one job yourself/);
+  assert.match(verify, /When the local model produced the answer, say so in a few words/);
 });
 test('hook follows a larger loaded context', async () => {
   const f = await fake(65536);
