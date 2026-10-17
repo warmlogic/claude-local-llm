@@ -15,6 +15,9 @@ check() { # check <label> <expected> <actual>
 TMP=$(mktemp -d) || { echo "mktemp failed"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
 cp "$FX/doc.md" "$TMP/doc.md"
+# judge.sh wraps each call in timeout; a pass-through shim keeps this test free of coreutils
+mkdir -p "$TMP/bin" && printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' > "$TMP/bin/timeout" && chmod +x "$TMP/bin/timeout"
+export PATH="$TMP/bin:$PATH"
 DOC="$TMP/doc.md"
 
 # --- footer.jq ---------------------------------------------------------------------------------------------
@@ -84,6 +87,7 @@ cat > "$TMP/fake-claude" <<'EOF'
 #!/usr/bin/env bash
 # Fake judge: logs each call, refuses a prompt that still names the local model, and answers by task.
 p=$(cat); echo call >> "$FAKE_LOG"
+if [ -n "${FAKE_FAIL:-}" ]; then exit 1; fi
 if grep -qi 'local model' <<<"$p"; then echo '{}'; exit 0; fi
 if grep -q '^Classify ' <<<"$p"; then
   echo '{"structured_output":{"reference":["report-or-analysis"],"invented":[],"missed":["kind"],"usable":true,"reason":"r"},"modelUsage":{"fake-judge":{}}}'
@@ -95,12 +99,18 @@ chmod +x "$TMP/fake-claude"
 export FAKE_LOG="$TMP/calls.log"; : > "$FAKE_LOG"
 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" --mech-only >/dev/null 2>&1
 check "judge --mech-only starts no session" '0' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+FAKE_FAIL=1 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1; rc=$?
+check "judge: a failed judge call fails the pass and stores no verdict" '1,0' "$([ "$rc" -ne 0 ] && echo 1 || echo 0),$(ls "$R"/judge/*.verdict.json 2>/dev/null | wc -l | tr -d ' ')"
+: > "$FAKE_LOG"
 MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_JUDGE_JOBS=2 bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: one call per ok answer that passed the mechanical checks (FAILED f02-on skipped)" '5' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 check "judge: verdicts stored, blinded prompt accepted" 'f01-off f01-on f02-off f11-off f11-on' \
   "$(cd "$R/judge" && ls ./*.verdict.json | sed 's|^\./||; s|\.verdict\.json$||' | tr '\n' ' ' | sed 's/ $//')"
 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: stored verdicts are not re-judged" '5' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+note=$(sed -n "s/^ATTRIBUTION_NOTE='\\(.*\\)'$/\\1/p" "$MDIR/judge.sh")
+check "judge: blinding drops the attribution note and keeps claims about the local model" 'drop,keep,0' \
+  "$(printf '%s\n' '_Summarized by the local model._' 'The local model requires 128 GB RAM.' | jq -R --arg n "$note" 'if test($n; "i") then "drop" else "keep" end' | jq -rs 'join(",")'),$(grep -c 'by the local model' "$R/judge/f01-on.prompt")"
 
 bash "$MDIR/report.sh" "$R" "$TMP/results.md" >/dev/null 2>&1
 RES="$TMP/results.md"
@@ -119,6 +129,10 @@ printf 'f01-on\tdisagree\tmissed the open question\nf02-off\tagree\t\n' > "$R/re
 bash "$MDIR/report.sh" "$R" "$TMP/results.md" >/dev/null 2>&1
 check "report: an operator disagreement flips usable and is counted" '2' \
   "$(grep -cE '^\| f01 \| .* \| yes \| no \(op\) \|  \|$|^- Operator review: agreed on 1 of 2\.$' "$RES")"
+
+echo "an edit after the freeze" >> "$DOC"
+bash "$MDIR/judge.sh" "$R" --mech-only >/dev/null 2>&1
+check "judge: a file changed since the freeze is marked, never graded against new text" '"corpus-changed"' "$(jq -c .reason "$R/judge/f01-off.mech.json")"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]

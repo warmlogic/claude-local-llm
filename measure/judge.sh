@@ -5,7 +5,7 @@
 #   judge.sh <run-dir> --mech-only  mechanical checks only; never starts a session
 # Writes <run-dir>/judge/<id>-<cfg>.mech.json and, per judged answer, .prompt, .out.json and .verdict.json.
 # The judge sees the full file, the task, the usable definition and the answer, never the configuration: short
-# answer lines naming the local model (the skill's attribution note) are dropped before it reads the answer.
+# the skill's attribution note (a line like "_Summarized by the local model._") is dropped before it reads the answer.
 # Env: MEASURE_JUDGE_MODEL (opus), MEASURE_JUDGE_JOBS (4 in parallel), MEASURE_CLAUDE (claude; tests use a fake).
 set -uo pipefail
 
@@ -15,6 +15,9 @@ JUDGE_MODEL="${MEASURE_JUDGE_MODEL:-opus}"
 JOBS="${MEASURE_JUDGE_JOBS:-4}"
 CLAUDE="${MEASURE_CLAUDE:-claude}"
 JUDGE_TIMEOUT_SEC=300
+# The skill's attribution note ("_Summarized by the local model._", "(Extracted by the local LLM (qwen).)"): a whole
+# line that is the attribution and nothing else. A line making any other claim about the local model stays.
+ATTRIBUTION_NOTE='^[\s_*(>-]*(summari[sz]ed|classified|extracted|produced|generated|drafted|written|answered|done)\s+(by|with|using)\s+(the\s+)?local\s+(model|llm)(\s*\([^)]{0,60}\))?[\s.!_*)]*$'
 # shellcheck source=lib.sh
 . "$MDIR/lib.sh"
 [ -n "$TIMEOUT" ] || { echo "judge: timeout (or gtimeout) is required" >&2; exit 1; }
@@ -30,8 +33,8 @@ judge_one() {
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
   jq -rn --rawfile file "$path" --arg prompt "$(task_field "$task" prompt "$path")" \
     --arg usable "$(task_field "$task" usable)" --arg ref "$(task_field "$task" reference)" \
-    --slurpfile f "$RUN_DIR/facts/$aid-1.json" '
-    ($f[0].answer // "" | split("\n") | map(select((length < 160 and test("local (model|llm)"; "i")) | not)) | join("\n")) as $answer
+    --slurpfile f "$RUN_DIR/facts/$aid-1.json" --arg note "$ATTRIBUTION_NOTE" '
+    ($f[0].answer // "" | split("\n") | map(select(test($note; "i") | not)) | join("\n")) as $answer
     | "You are grading one answer that an assistant gave to a task about a file. The full file comes first.\n\n"
       + "<file>\n" + $file + "\n</file>\n\n<task>\n" + $prompt + "\n</task>\n\n"
       + "Usable means: " + $usable + "\n\n"
@@ -63,6 +66,13 @@ for f in "$RUN_DIR"/facts/f*-1.json; do
   aid=$(basename "$f" .json); aid="${aid%-1}"; id="${aid%-*}"
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
   [ -n "$path" ] || die "$id is not in the run's manifest"
+  # Grade only against the text that was measured: a file that changed or vanished since the manifest froze it
+  # is marked, never graded against different text.
+  if [ "$(shasum -a 256 "$path" 2>/dev/null | cut -c1-64)" != "$(manifest "$id" 7)" ]; then
+    echo '{"ok":false,"reason":"corpus-changed","extra_text":false}' > "$RUN_DIR/judge/$aid.mech.json"
+    echo "  judge $aid: the file changed since the manifest froze it; not graded" >&2
+    continue
+  fi
   jq '.answer // ""' "$f" | jq -c -L "$MDIR" --arg task "$task" --rawfile file "$path" --argjson labels "$labels" \
     -f "$MDIR/mechanical.jq" > "$RUN_DIR/judge/$aid.mech.json" || die "mechanical check failed to run for $aid"
   [ "${2:-}" = --mech-only ] && continue
@@ -73,5 +83,5 @@ done
 [ "${2:-}" = --mech-only ] && exit 0
 [ "${#todo[@]}" -gt 0 ] || { echo "  judge: nothing to judge"; exit 0; }
 echo "  judge: ${#todo[@]} answers, $JOBS at a time, model $JUDGE_MODEL"
-printf '%s\n' "${todo[@]}" | xargs -P "$JOBS" -I{} bash "$0" "$RUN_DIR" --one {}
-exit 0
+printf '%s\n' "${todo[@]}" | xargs -P "$JOBS" -I{} bash "$0" "$RUN_DIR" --one {} \
+  || die "some answers got no verdict; rerun bash measure/judge.sh $RUN_DIR (stored verdicts are kept), then bash measure/run.sh --report $RUN_DIR"
