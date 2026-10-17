@@ -2,3 +2,5 @@
 .claude/worktrees/
 .DS_Store
 tests/.tmp-*
+# roborev snapshots
+/.roborev/
