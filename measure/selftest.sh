@@ -13,7 +13,7 @@ check() { # check <label> <expected> <actual>
   if [ "$2" = "$3" ]; then echo "  measure selftest PASS: $1"; else echo "  measure selftest FAIL: $1 (want $2, got $3)"; fails=$((fails+1)); fi
 }
 TMP=$(mktemp -d) || { echo "mktemp failed"; exit 1; }
-trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
+trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT   # undoes the chmod 000 fixtures first
 # judge.sh wraps each call in timeout; a pass-through shim keeps this test free of coreutils
 mkdir -p "$TMP/bin" && printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' > "$TMP/bin/timeout" && chmod +x "$TMP/bin/timeout"
 export PATH="$TMP/bin:$PATH"
@@ -52,6 +52,15 @@ check "trace: tool missing from init" '"no-server"' "$(facts on-noserver on job 
 check "trace: cut-off trace without a result" '["unknown",null]' "$(facts cut on job 0 | jq -c '[.status, .T]')"
 check "trace: exit 124 is a timeout" '"timeout"' "$(facts on-ok on job 124 | jq -c .status)"
 check "trace: the plugin tool in a plugin-off run" '"plugin-leak"' "$(facts on-ok off job 0 | jq -c .status)"
+check "trace: empty usage is facts-error with T null, never T = 0" '["facts-error","usage",null]' "$(facts usage-empty off ctl 0 | jq -c '[.status, .stage, .T]')"
+check "trace: a modelUsage entry missing a counter is facts-error, not a zero" '["facts-error",null]' "$(facts usage-missing off ctl 0 | jq -c '[.status, .T]')"
+check "trace: a non-numeric usage counter is facts-error" '["facts-error",null]' "$(facts usage-string off ctl 0 | jq -c '[.status, .T]')"
+check "trace: a bad line before the last is facts-error at stage parse" '["facts-error","parse",1]' "$(facts midparse on job 0 | jq -c '[.status, .stage, .parse_errors]')"
+check "trace: is_error wins over a missing result, and subtype is kept" '["is-error","error_during_execution"]' "$(facts is-error off ctl 0 | jq -c '[.status, .subtype]')"
+check "trace: a plugin-off control that lists the tool is plugin-leak" '"plugin-leak"' "$(facts ctl-on off ctl 0 | jq -c .status)"
+check "trace: a plugin-on control without the tool is no-server" '"no-server"' "$(facts ctl-off on ctl 0 | jq -c .status)"
+check "trace: a baseline Grep in content mode that matched is a read" '"ok"' "$(facts off-grep off job 0 | jq -c .status)"
+check "trace: a Read whose result is an error is not a read" '"base-no-read"' "$(facts off-readerr off job 0 | jq -c .status)"
 check "trace: a failing stage is facts-error naming it" '["facts-error","trace.jq"]' \
   "$(facts on-ok on job not-a-number | jq -c '[.status, .stage]')"
 
@@ -95,6 +104,14 @@ check "lower_floor: the current skill gets a 1k floor in its description and bod
 printf -- '---\ndescription: big files (over 10k characters)\n---\nDelegate anything over 10k.\n' > "$TMP/SKILL2.md"; cp "$TMP/SKILL2.md" "$TMP/SKILL2.orig"
 lower_floor "$TMP/SKILL2.md"; rc=$?
 check "lower_floor: a reworded skill fails loudly and stays untouched" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(cmp -s "$TMP/SKILL2.md" "$TMP/SKILL2.orig" && echo 1 || echo 0)"
+mkdir -p "$TMP/fh/t"
+check "work_dir: refuses a TMPDIR under \$HOME and creates nothing there" '1,0' \
+  "$( (HOME="$TMP/fh" TMPDIR="$TMP/fh/t" work_dir >/dev/null) && echo 0 || echo 1),$(ls -A "$TMP/fh/t" | wc -l | tr -d ' ')"
+check "work_dir: refuses to recreate a resumed cwd under \$HOME" '1' "$( (HOME="$TMP/fh" work_dir "$TMP/fh/t/x" >/dev/null) && echo 0 || echo 1)"
+printf 'f02\tmain\tdoc\tsummary\t300\tT\t%s\t%s\n' "$(sha256_of "$DOC")" "$TMP/locked.md" > "$L/corpus.tsv"; cp "$DOC" "$TMP/locked.md"; chmod 000 "$TMP/locked.md"
+snapshot_ok "$L" f02; rc=$?; chmod 644 "$TMP/locked.md"
+check "snapshot_ok: an unreadable file is a copy failure (snapshot-failed), not corpus-changed" '2' "$rc"
+check "task_field: a missing field fails instead of printing null" '1' "$(task_field nosuch prompt >/dev/null 2>&1 && echo 0 || echo 1)"
 printf 'f01\tmain\nf02\tmain\nf11\ts2k\n' > "$TMP/short.tsv"
 check "corpus_shortfall names what a full run lacks" '2 of 10 main files, no s5k file, no s10k file' "$(corpus_shortfall "$TMP/short.tsv")"
 
@@ -102,7 +119,7 @@ check "corpus_shortfall names what a full run lacks" '2 of 10 main files, no s5k
 H="$TMP/home"
 mk() { # mk <path> <chars> <touch-stamp> [char]: unique text of exactly <chars> characters
   mkdir -p "$(dirname "$1")"
-  awk -v n="$2" -v seed="$1" -v ch="${4:-}" 'BEGIN{ if (ch != "") { for (i = 0; i < n; i++) printf "%s", ch; exit }
+  awk -v n="$2" -v seed="$(printf '%s' "${1#"$TMP"}" | tr '/._-' '    ')" -v ch="${4:-}" 'BEGIN{ if (ch != "") { for (i = 0; i < n; i++) printf "%s", ch; exit }
     s = "seed " seed "\n"; while (length(s) < n) { i++; s = s sprintf("line %d of the text about %s\n", i, seed) }
     printf "%s", substr(s, 1, n) }' > "$1"
   touch -t "$3" "$1"
@@ -128,6 +145,18 @@ mk "$H/github/.hidden/h.md" 31000 202602010000
 mk "$H/github/x5/.git/x.md" 31000 202602010000
 mk "$TMP/outside/real.md" 31000 202602010000; mkdir -p "$H/github/x6"; ln -s "$TMP/outside/real.md" "$H/github/x6/link.md"
 mk "$H/github/x7/future.md" 31000 203001010000
+# every credential form, in otherwise eligible files newer than all kept ones; values stay short so only the
+# credential patterns, not the entropy guard, can catch them
+i=0
+for form in 'Authorization: Bearer abcdefgh12345678' 'authorization: Basic dXNlcjpwYXNz' '{"headers": {"Authorization": "Bearer abc.def.ghi"}}' \
+            "curl -H 'Authorization: Bearer xyz12345678' https://example.test" 'Bearer abcdefgh12345678 was sent' '"token": "abc123def"' \
+            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2'; do
+  i=$((i+1)); mk "$H/github/auth$i/notes.md" 31000 202602010000; printf '\n%s\n' "$form" >> "$H/github/auth$i/notes.md"; touch -t 202602010000 "$H/github/auth$i/notes.md"
+done
+mk "$H/github/ent/notes.md" 31000 202602010000; printf '\nx Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MHF3ZXJ0eXVpb3BAc2Rm x\n' >> "$H/github/ent/notes.md"; touch -t 202602010000 "$H/github/ent/notes.md"
+printf '\nchecksum %s\n' "$(printf a | shasum -a 256 | cut -c1-64)" >> "$H/github/d6/notes.md"; touch -t 202601061200 "$H/github/d6/notes.md"
+mk "$H/github/locked/inner/n.md" 31000 202602010000; chmod 000 "$H/github/locked"
+mk "$H/github/unread/n.md" 31000 202602010000; chmod 000 "$H/github/unread/n.md"
 cutoff=$(date -j -f %Y%m%d%H%M 202701010000 +%s)
 HOME="$H" bash "$MDIR/select-corpus.sh" "$cutoff" > "$TMP/manifest.tsv" 2> "$TMP/select.err"; rc=$?
 M="$TMP/manifest.tsv"
@@ -140,7 +169,11 @@ check "select: newest-first ids, the fill takes the newest leftover doc and the 
   "$(awk -F'\t' '$1 == "f01" {sub(".*/github/", "", $8); sub("/.*", "", $8); a = $8} $3 == "doc" && $4 == "extraction" {sub(".*/github/", "", $8); sub("/.*", "", $8); b = $8} END {print a, b}' "$M") $(grep -q '/d1/' "$M" && echo d1-present || echo d1-absent)"
 check "select: small slots by characters (the é file is s10k)" 's2k:2000:s2 s5k:5000:s5 s10k:10000:s10' \
   "$(awk -F'\t' '$2 != "main" {sub(".*/github/", "", $8); sub("/.*", "", $8); printf "%s%s:%s:%s", (n++ ? " " : ""), $2, $5, $8}' "$M")"
-check "select: warnings never name a file" '0' "$(grep -c "$H/github/" "$TMP/select.err")"
+check "select: every Authorization, token, cookie and password form, and a high-entropy token, are excluded" '0' \
+  "$(grep -cE '/auth[0-9]+/|/ent/' "$M")"
+check "select: a 64-hex checksum alone does not trip the entropy guard" '1' "$(grep -c '/d6/notes.md' "$M")"
+check "select: an unreadable folder and an unreadable file are counted in warnings that never name a file" '1,1,0' \
+  "$(grep -c 'find could not read' "$TMP/select.err"),$(grep -c '1 file(s) could not be read' "$TMP/select.err"),$(grep -c "$H/github/" "$TMP/select.err")"
 mkdir -p "$TMP/home2/github/a"; mk "$TMP/home2/github/a/n.md" 25000 202601010000
 HOME="$TMP/home2" bash "$MDIR/select-corpus.sh" "$cutoff" > /dev/null 2> "$TMP/select2.err"; rc=$?
 check "select: a missing root is a warning, not silence" '0,1' "$rc,$(grep -c 'catalyst does not exist' "$TMP/select2.err")"
@@ -160,6 +193,7 @@ jq -c '.answer = "{\"kind\": \"other\", \"topic\": \"t\", \"evidence\": \"not in
 cat > "$TMP/fake-claude" <<'EOF'
 #!/usr/bin/env bash
 # Fake judge: logs each call, refuses a prompt that still carries the attribution note, and answers by task.
+[ "${1:-}" != --version ] || { echo "0.0.0 (fake)"; exit 0; }
 p=$(cat); echo call >> "$FAKE_LOG"
 [ -z "${FAKE_FAIL:-}" ] || exit 1
 if [ -n "${FAKE_BAD:-}" ]; then echo '{"structured_output":{"reference":[],"invented":"none","missed":[],"usable":true,"reason":"r"}}'; exit 0; fi
@@ -194,8 +228,8 @@ check "judge: blinding drops the attribution note and keeps claims about the loc
   "$(printf '%s\n' '_Summarized by the local model._' 'The local model requires 128 GB RAM.' | jq -R --arg n "$note" 'if test($n; "i") then "drop" else "keep" end' | jq -rs 'join(",")'),$(grep -c 'by the local model' "$R/judge/f01-on.prompt")"
 echo "an edit after the freeze" >> "$DOC"; mv "$R/files/f02" "$TMP/f02.away"
 bash "$MDIR/judge.sh" "$R" --mech-only >/dev/null 2>&1
-check "judge: grading reads the run's copy, not the live file, and a job without one is never graded" '[true,"corpus-changed"]' \
-  "$(jq -sc '[.[0].ok, .[1].reason]' "$R/judge/f01-off.mech.json" "$R/judge/f02-off.mech.json")"
+check "judge: grading reads the run's copy, not the live file, and a missing copy is incomplete (ok null), not a fail" '[true,null,"no graded copy"]' \
+  "$(jq -sc '[.[0].ok, .[1].ok, .[1].reason]' "$R/judge/f01-off.mech.json" "$R/judge/f02-off.mech.json")"
 cp "$FX/doc.md" "$DOC"
 
 # --- report.sh on synthetic runs: the completeness rule ------------------------------------------------------------
@@ -206,6 +240,7 @@ mkf() { # mkf <dir> <name> <cfg> <kind> <id> <rep> <T|null> [status] [extra-json
     '{run: $run, cfg: $cfg, kind: $kind, id: $id, rep: $rep, status: $st, T: $T, input: 2, cache_creation: 0,
       cache_read: (if $T == null then null else $T - 6 end), output: 4, usd: (if $T == null then null else $T / 1000000 end),
       turns: 2, duration_ms: 5000, wall_s: 5, ctx_max: (if $T == null then null else $T - 2 end), models: ["claude-fixture"],
+      parse_errors: 0, tool_listed: ($cfg == "on"), plugin_denials: [],
       footer: null, call_footers: [], answer: "- the build failed", denials: [], usage_match: true} + $x' > "$1/facts/$2.json"
 }
 ONF='{"footer":{"model":"local-fixture","ttft_ms":2000,"total_s":5.0,"files_read":1,"files_total":1,"flags":[]},"call_footers":[{"model":"local-fixture","ttft_ms":2000,"total_s":5.0,"flags":[]}],"duration_ms":9000}'
@@ -290,6 +325,64 @@ mkf "$TMP/v" f04-on-1 on job f04 1 20700 no-call '{"duration_ms":12000}'; render
 check "report: an unrecorded end date renders as such" '1' "$(grep -c 'to (not recorded);' "$TMP/v/results.md")"
 check "report: a 75 s call that hit max tokens keeps its timing and is SLOW" '1' "$(grep -cE '^\| f03 .*\| FAILED: call-error \| 3 \| 75 \| 5 \| 81 \| SLOW \|' "$TMP/v/results.md")"
 check "report: with no footer, local time falls back to the session's" '1' "$(grep -cE '^\| f04 .*\| FAILED: no-call \| n/a \| 12 \(session\) \| 5 \| 12 \|  \|' "$TMP/v/results.md")"
+
+# --- valid_run: positive evidence only ----------------------------------------------------------------------------
+gates_incomplete() { grep -cE '^\| (Claude tokens|Usable answers) .*\| FAIL \(incomplete: ' "$TMP/v/results.md"; }
+variant; mkf "$TMP/v" f03-on-1 on job f03 1 20700 corpus-changed "$ONF"; render
+check "valid_run: a corpus-changed run that still carries usage leaves both gates incomplete" '2' "$(gates_incomplete)"
+variant; mkf "$TMP/v" f04-off-1 off job f04 1 47000 plugin-leak '{"tool_listed":true}'; render
+check "valid_run: a plugin-leak run with usage leaves both gates incomplete" '2' "$(gates_incomplete)"
+variant; mkf "$TMP/v" f04-off-1 off job f04 1 47000 ok '{"tool_listed":true}'; render
+check "valid_run: plugin presence must match the config even when the status says ok" '2' "$(gates_incomplete)"
+variant; mkf "$TMP/v" ctl-on-1 on ctl "" 1 17700 ok '{"tool_listed":false}'; render
+check "valid_run: a plugin-on control without the tool (dead server) does not count" '1' "$(grep -c 'controls on: 2/3 counted' "$TMP/v/results.md")"
+variant; mkf "$TMP/v" ctl-on-1 on ctl "" 1 17700 no-call; render
+check "valid_run: a delegation-failure status counts only for a plugin-on job, never a control" '1' "$(grep -c 'controls on: 2/3 counted' "$TMP/v/results.md")"
+variant; mkf "$TMP/v" f05-on-1 on job f05 1 20700 no-server '{"tool_listed":false}'; render
+check "valid_run: no-server on a job leaves the gates incomplete" '2' "$(gates_incomplete)"
+variant; mkf "$TMP/v" f06-off-1 off job f06 1 47000 ok '{"parse_errors":1}'; render
+check "valid_run: a run with a parse error does not count" '2' "$(gates_incomplete)"
+variant; mkf "$TMP/v" f07-on-1 on job f07 1 20700 ok '{"output":null}'; render
+check "valid_run: a missing usage counter does not count" '2' "$(gates_incomplete)"
+variant; mkf "$TMP/v" f08-on-1 on job f08 1 20700 no-call; render
+check "valid_run: a no-call job stays in ΣT at its real tokens and the gate stays complete" '1,1,1' \
+  "$(grep -c '^| Claude tokens per job (Σ T over 10 main files) | 300000 | 30000 (savings 90%) | ≥ 80% fewer | PASS |$' "$TMP/v/results.md"),$(grep -cE '^\| f08 .*\| FAILED: no-call \|' "$TMP/v/results.md"),$(grep -c '^| Usable answers | 10 of 10 | 9 of 10 | ≥ 8 of 10 | PASS |$' "$TMP/v/results.md")"
+
+# --- gates on complete runs ----------------------------------------------------------------------------------------
+variant; for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$TMP/v" "f$i-on-1" on job "f$i" 1 27700 ok "$ONF"; done; render
+check "gate: a complete run below 80% is a plain FAIL" '| Claude tokens per job (Σ T over 10 main files) | 300000 | 100000 (savings 66.7%) | ≥ 80% fewer | FAIL |' "$(cell '^\| Claude tokens')"
+missed() { jq '.missed = ["a key point"]' "$TMP/v/judge/$1.verdict.json" > "$TMP/v/x" && mv "$TMP/v/x" "$TMP/v/judge/$1.verdict.json"; }
+variant; missed f01-on; missed f02-on; missed f03-on; render
+check "gate: 7 of 10 usable is FAIL" '| Usable answers | 10 of 10 | 7 of 10 | ≥ 8 of 10 | FAIL |' "$(cell '^\| Usable answers')"
+check "gate: usable true with a missed point reads no (judge bool differs)" 'no (judge bool differs)' "$(cell '^\| f01 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $22); print $22}')"
+variant; missed f01-on; missed f02-on; render
+check "gate: 8 of 10 usable is PASS" '| Usable answers | 10 of 10 | 8 of 10 | ≥ 8 of 10 | PASS |' "$(cell '^\| Usable answers')"
+variant; echo '{"ok":false,"reason":"evidence not verbatim","extra_text":false}' > "$TMP/v/judge/f05-on.mech.json"; rm "$TMP/v/judge/f06-on.mech.json"
+echo '{"ok":null,"reason":"no graded copy","extra_text":false}' > "$TMP/v/judge/f07-on.mech.json"; render
+check "usable: a failed mechanical check is no with its note; a missing check or graded copy is incomplete" 'no,1,incomplete,incomplete' \
+  "$(cell '^\| f05 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $22); print $22}'),$(grep -c 'on mechanical: evidence not verbatim' "$TMP/v/results.md"),$(cell '^\| f06 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $22); print $22}'),$(cell '^\| f07 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $22); print $22}')"
+
+# --- timing, notes, header, review warnings ------------------------------------------------------------------------
+variant; mkf "$TMP/v" f04-on-1 on job f04 1 20700 no-call '{"duration_ms":70000}'
+mkf "$TMP/v" f05-on-1 on job f05 1 20700 ok '{"call_footers":[{"model":"local-fixture","ttft_ms":10,"total_s":null,"flags":[]}],"plugin_denials":["Skill"]}'; render
+check "slow: no footer falls back to the session time; a missing call time is unknown, not fast" 'SLOW,unknown' \
+  "$(cell '^\| f04 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $20); print $20}'),$(cell '^\| f05 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $20); print $20}')"
+check "notes: plugin permission denials are shown" '1' "$(grep -cE '^\| f05 .*on PLUGIN denied: Skill' "$TMP/v/results.md")"
+variant; for f in "$TMP"/v/facts/*.json; do jq -c '.call_footers = [] | .footer = null' "$f" > "$TMP/v/x" && mv "$TMP/v/x" "$f"; done; render
+check "header: no footer-match claim when no footer was recorded" '1,0' "$(grep -c 'no footer recorded' "$TMP/v/results.md"),$(grep -c 'footers matched' "$TMP/v/results.md")"
+variant; printf 'f01-on\t%s\tagree\nf01-on\t%s\tdisagree\n' "$(h f01-on)" "$(h f01-on)" > "$TMP/v/review-verdicts.tsv"
+jq -c '.answer = "- redone"' "$B/facts/f02-on-1.json" > "$TMP/v/facts/f02-on-1.json"; render
+check "review: a duplicate line and a dropped stale verdict both warn" '1,1' \
+  "$(grep -c 'a second line for f01-on' "$TMP/v/report.err"),$(grep -c 'stored verdict for f02-on graded an earlier answer' "$TMP/v/report.err")"
+
+# --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
+MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; sha256_of "$MDIR/select-corpus.sh" > "$MH/corpus.rule"
+runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS=off "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
+mkdir -p "$TMP/rh"; : > "$FAKE_LOG"
+MEASURE_ONLY="f01 f99" runsh; rc=$?
+check "run.sh: an unknown MEASURE_ONLY id is an error, before any session" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'MEASURE_ONLY names f99' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+MEASURE_ONLY=f01 runsh; rc=$?
+check "run.sh: a missing cutoff is an error, not a guess from the manifest's mtime" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'corpus.cutoff is missing' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]
