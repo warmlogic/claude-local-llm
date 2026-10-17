@@ -13,6 +13,7 @@ set -uo pipefail
 
 MDIR="$(cd "$(dirname "$0")" && pwd -P)"
 RUN_DIR="${1:?usage: judge.sh <run-dir> [--mech-only]}"
+RUN_DIR="$(cd "$RUN_DIR" && pwd -P)" || { echo "judge.sh: no run dir $1" >&2; exit 2; }  # absolute: each call runs from a temp cwd
 JUDGE_MODEL="${MEASURE_JUDGE_MODEL:-opus}"
 JOBS="${MEASURE_JUDGE_JOBS:-4}"
 CLAUDE="${MEASURE_CLAUDE:-claude}"
