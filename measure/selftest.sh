@@ -104,6 +104,12 @@ check "lower_floor: the current skill gets a 1k floor in its description and bod
 printf -- '---\ndescription: big files (over 10k characters)\n---\nDelegate anything over 10k.\n' > "$TMP/SKILL2.md"; cp "$TMP/SKILL2.md" "$TMP/SKILL2.orig"
 lower_floor "$TMP/SKILL2.md"; rc=$?
 check "lower_floor: a reworded skill fails loudly and stays untouched" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(cmp -s "$TMP/SKILL2.md" "$TMP/SKILL2.orig" && echo 1 || echo 0)"
+copy_plugin "$MDIR/.." "$TMP/snap1"; rc=$?
+mkdir -p "$TMP/repo2" && cp -R "$MDIR/../.claude-plugin" "$MDIR/../.mcp.json" "$MDIR/../package.json" "$MDIR/../scripts" "$MDIR/../skills" "$MDIR/../hooks" "$TMP/repo2/" \
+  && mkdir -p "$TMP/repo2/server" && echo x > "$TMP/repo2/server/index.mjs"   # a checkout that ships a server
+copy_plugin "$TMP/repo2" "$TMP/snap2"; rc2=$?
+check "copy_plugin: copies server/ only when the checkout has one" "0,$([ -e "$MDIR/../server" ] && echo 1 || echo 0),1,0,1" \
+  "$rc,$([ -e "$TMP/snap1/server" ] && echo 1 || echo 0),$([ -s "$TMP/snap1/skills/delegate-local/SKILL.md" ] && echo 1 || echo 0),$rc2,$([ -s "$TMP/snap2/server/index.mjs" ] && echo 1 || echo 0)"
 mkdir -p "$TMP/fh/t"
 check "work_dir: refuses a TMPDIR under \$HOME and creates nothing there" '1,0' \
   "$( (HOME="$TMP/fh" TMPDIR="$TMP/fh/t" work_dir >/dev/null) && echo 0 || echo 1),$(ls -A "$TMP/fh/t" | wc -l | tr -d ' ')"

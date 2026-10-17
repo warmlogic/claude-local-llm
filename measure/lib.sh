@@ -51,6 +51,15 @@ work_dir() {
   (cd "$d" && pwd -P)
 }
 
+# copy_plugin <repo> <dest>: a snapshot of the plugin the harness loads with --plugin-dir. server/ (a bundled MCP
+# server) is copied when the checkout has one, so the snapshot matches the plugin before and after it ships one.
+copy_plugin() {
+  local part parts=(.claude-plugin .mcp.json package.json scripts skills hooks)
+  [ -e "$1/server" ] && parts+=(server)
+  mkdir -p "$2" || return 1
+  for part in "${parts[@]}"; do cp -R "$1/$part" "$2/" || return 1; done
+}
+
 # results_path <run-dir> <repo>: where a run's table goes. Only a full run writes the committed docs/results.md;
 # a partial run (MEASURE_ONLY) or a run with a short corpus (MEASURE_ALLOW_SHORT) keeps it in the run dir.
 results_path() {

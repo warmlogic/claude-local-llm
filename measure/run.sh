@@ -94,8 +94,7 @@ if [ "$MODE" = new ]; then
 
   # Plugin snapshots: this checkout's plugin with the local model pinned, and a copy whose skill floor is 1k.
   for d in plugin plugin-lowfloor; do
-    mkdir -p "$RUN_DIR/$d" && cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" \
-      "$REPO/skills" "$REPO/hooks" "$RUN_DIR/$d/" || die "copying the plugin to $RUN_DIR/$d"
+    copy_plugin "$REPO" "$RUN_DIR/$d" || die "copying the plugin to $RUN_DIR/$d"
     jq --arg m "$LOCAL_MODEL" '.userConfig.model.default = $m' "$REPO/.claude-plugin/plugin.json" > "$RUN_DIR/$d/.claude-plugin/plugin.json" \
       || die "pinning the model in $RUN_DIR/$d"
   done

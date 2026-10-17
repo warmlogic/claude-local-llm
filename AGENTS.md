@@ -100,7 +100,8 @@ measure/
   mechanical.jq      # JSON shape and verbatim checks before the judge
   judge.sh           # one blind judge call per answer; judge-schema.json is its verdict schema
   report.sh          # facts + verdicts -> docs/results.md and the private review sheet (report.jq renders)
-  lib.sh             # rules shared by run.sh, judge.sh and the self-test (file integrity, output path, floor edit)
+  lib.sh             # rules shared by run.sh, judge.sh and the self-test (file integrity, output path, floor edit,
+                     #   plugin snapshot: server/ is copied when the checkout has one)
   entropy.mjs        # the corpus's high-entropy token guard (counts only on stderr)
   selftest.sh        # offline: synthetic traces and runs, a fake $HOME, a fake judge
   fixtures/          # synthetic stream-json traces and a synthetic file for selftest.sh
