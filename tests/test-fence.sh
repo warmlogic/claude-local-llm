@@ -354,8 +354,9 @@ else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------
 SH="$REPO/scripts/size-hint.mjs"
-hint_out() { printf '%s' "$1" | node "$SH"; }
 SHD="$TMP/hint"; mkdir -p "$SHD/a dir"
+# the hook's allowed folders come from CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS (set here to the fixture folder), else the manifest default
+hint_out() { printf '%s' "$1" | CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="${HINT_ALLOWED-$SHD}" node "$SH"; }
 head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/big.txt"; head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/a dir/big file.txt"
 head -c 9999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/zero | tr '\0' 'a' > "$SHD/small.txt"
 for n in 1 2 3 4; do head -c 11000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
@@ -400,7 +401,7 @@ filler=$(awk 'BEGIN{for(i=0;i<400;i++) printf "word%d ", i}')
 h=$(hint_out "$(hint_json "$filler $SHD/big.txt")")
 if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: a path after 400 filler words gets the hint"
 else bad "size hint: path after 400 filler words (${h:0:100})"; fi
-h=$(printf '%s' "$(hint_json "Classify ~/big.txt")" | HOME="$SHD" node "$SH")
+h=$(printf '%s' "$(hint_json "Classify ~/big.txt")" | HOME="$SHD" CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$SHD" node "$SH")
 if jq -e '.hookSpecificOutput.additionalContext | contains("/big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: expands ~/ against HOME"
 else bad "size hint: ~/ path (${h:0:100})"; fi
 h=$(hint_out "$(hint_json "Compare \"$SHD/big.txt\" with $SHD/big.txt and big.txt")")
@@ -411,6 +412,42 @@ t0=$SECONDS
 for _ in 1 2 3 4 5; do hint_out "$(hint_json "$long_prompt")" >/dev/null; done
 if [ $((SECONDS - t0)) -le 5 ]; then ok "size hint: five runs on a 200 KB prompt finish within 5 s"
 else bad "size hint: five runs took $((SECONDS - t0)) s"; fi
+# the hint is withheld outside allowed_dirs and for secret-like names, and still given for an allowed, ordinary file
+OTHER="$TMP/hint-other"; mkdir -p "$OTHER"
+h=$(HINT_ALLOWED="$OTHER" hint_out "$(hint_json "Classify $SHD/big.txt")")
+if [ -z "$h" ]; then ok "size hint: silent for a file outside allowed_dirs"
+else bad "size hint: silent outside allowed_dirs ($h)"; fi
+h=$(HINT_ALLOWED="$OTHER,$SHD" hint_out "$(hint_json "Classify $SHD/big.txt")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: a file in the second allowed folder still gets the hint"
+else bad "size hint: second allowed folder ($h)"; fi
+ln -s "$SHD" "$OTHER/escape"
+h=$(HINT_ALLOWED="$OTHER" hint_out "$(hint_json "Classify $OTHER/escape/big.txt")")
+if [ -z "$h" ]; then ok "size hint: silent for a symlink out of the allowed folder"
+else bad "size hint: symlink out of allowed_dirs ($h)"; fi
+h=$(HINT_ALLOWED="$TMP/no-such-folder" hint_out "$(hint_json "Classify $SHD/big.txt")")
+if [ -z "$h" ]; then ok "size hint: silent when no allowed folder resolves"
+else bad "size hint: unresolvable allowed_dirs ($h)"; fi
+HOMEX="$TMP/hint-home"; mkdir -p "$HOMEX/github"; head -c 12000 /dev/zero | tr '\0' 'a' > "$HOMEX/github/proj.txt"
+h=$(printf '%s' "$(hint_json "Classify $HOMEX/github/proj.txt")" | env -u CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS HOME="$HOMEX" node "$SH")
+if jq -e '.hookSpecificOutput.additionalContext | contains("proj.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: with the option unset, the manifest default (\$HOME/github) allows a file in it"
+else bad "size hint: manifest default allows ($h)"; fi
+h=$(printf '%s' "$(hint_json "Classify $SHD/big.txt")" | env -u CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS HOME="$HOMEX" node "$SH")
+if [ -z "$h" ]; then ok "size hint: with the option unset, a file outside the manifest default is silent"
+else bad "size hint: outside manifest default ($h)"; fi
+for n in .env .env.local server.pem tls.KEY id_rsa id_ed25519.txt AWS-Credentials.json my-Secrets.txt client_secret.json; do
+  head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/$n"
+  if [ -z "$(hint_out "$(hint_json "Classify $SHD/$n")")" ]; then ok "size hint: silent for a secret-like name: $n"
+  else bad "size hint: silent for a secret-like name: $n"; fi
+done
+for n in environment-notes.md keyboard-notes.md idea_list.md monkey.txt; do
+  head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/$n"
+  h=$(hint_out "$(hint_json "Classify $SHD/$n")")
+  if jq -e --arg n "$n" '.hookSpecificOutput.additionalContext | contains($n + " is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an ordinary name still gets the hint: $n"
+  else bad "size hint: an ordinary name still gets the hint: $n ($h)"; fi
+done
+ln -s "$SHD/.env" "$SHD/linked-notes.md"
+if [ -z "$(hint_out "$(hint_json "Classify $SHD/linked-notes.md")")" ]; then ok "size hint: silent for an ordinary name that links to a secret-like file"
+else bad "size hint: symlink to a secret-like file"; fi
 if jq -e '.hooks.UserPromptSubmit | any(.[]; any(.hooks[]; (.command | contains("scripts/size-hint.mjs"))))' "$REPO/hooks/hooks.json" >/dev/null 2>&1; then ok "hooks.json registers scripts/size-hint.mjs on UserPromptSubmit"
 else bad "hooks.json registers scripts/size-hint.mjs on UserPromptSubmit"; fi
 

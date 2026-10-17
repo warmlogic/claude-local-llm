@@ -34,7 +34,7 @@ Small inputs. Decisions, judgment, security review, multi-file edits, or anythin
 
 ## How to call
 
-Use the file tool with absolute `paths` and a precise `task`: what to produce, how long, and the shape you need ("a 5-bullet summary", "JSON array of {time, level, message} for every ERROR"). One call per job. If the file tool is deferred (named but its schema not loaded), load it with ToolSearch first; calling it unloaded returns a Bad call error.
+Use the file tool with absolute `paths` and a precise `task`: what to produce, how long, and the shape you need ("a 5-bullet summary", "JSON array of {time, level, message} for every ERROR"). One call per job. If the file tool is deferred (named but its schema not loaded), load it with ToolSearch first; calling it unloaded fails before reaching the tool.
 
 ## How to verify
 

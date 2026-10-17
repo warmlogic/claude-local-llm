@@ -118,7 +118,7 @@ The plugin ships what it needs, so you do not add an allow rule.
 
 - A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) allows exactly three things, by exact name: a `Skill` call for `local-llm:delegate-local`, and the read-only tools `mcp__plugin_local-llm_local-llm__code_task_files` and `mcp__plugin_local-llm_local-verify__verify_claims`. That is why a plain "use the local model to summarize ..." needs no prompt either. Every other tool, including the server's other tools (`chat`, `discover`, ...), is left to Claude Code's normal permission flow. A deny rule on the tool itself still wins over the hook: denying `mcp__plugin_local-llm_local-llm__code_task_files` removes the tool, and Claude reads the file itself. A `Read(...)` deny rule on a folder does not stop the plugin's tools; `allowed_dirs` does.
 - The skill's `allowed-tools` line covers `code_task_files` for the turn that loads the skill.
-- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) adds a one-line hint when your prompt names an existing file of 10,000 bytes or more, nudging Claude toward the skill. It only stats the files; it never reads them.
+- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) adds a one-line instruction when your prompt names an existing file of 10,000 bytes or more, telling Claude to invoke the skill before reading a big file for read-only text jobs. It says nothing for a file outside your allowed folders or one whose name looks secret-like (`.env*`, `*.pem`, `*.key`, `id_*`, names containing `credential` or `secret`). It only stats the files; it never reads them.
 - The skill sends Claude to the Read and Grep tools for the rest, because compound shell commands can still prompt in any session.
 
 ## Privacy and security

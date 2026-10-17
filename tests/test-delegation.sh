@@ -482,7 +482,7 @@ run_claude() {
   [ -z "$SOURCES" ] || args+=(--setting-sources "$SOURCES")
   [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
   [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
-  args+=(--add-dir "$FIX")
+  [ -n "${RUN_CWD:-}" ] || args+=(--add-dir "$FIX")   # the project cases (h, j) run inside their target: an added dir would show the repo path
   (cd "${RUN_CWD:-$WORK}" && "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
 }
 
