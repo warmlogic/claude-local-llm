@@ -108,10 +108,13 @@ async function postRetryingStall(cfg, body, signal) {
   }
 }
 
-// {label} for a valid answer, else {why}: a description that holds no model text.
+// {label} for a valid answer, else {why}: a description that holds no upstream text at all; even
+// finish_reason is reported only from a known set.
+const FINISH_REASONS = new Set(['stop', 'length', 'content_filter', 'tool_calls', 'function_call']);
 function readAnswer(out) {
   const choice = out?.choices?.[0];
-  const parts = [`finish_reason ${typeof choice?.finish_reason === 'string' ? choice.finish_reason.slice(0, 20) : 'missing'}`];
+  const finish = choice?.finish_reason;
+  const parts = [`finish_reason ${FINISH_REASONS.has(finish) ? finish : finish === undefined ? 'missing' : 'unrecognized'}`];
   if (out?.error !== undefined) parts.push(`error field ${upstreamCode(out) ?? 'present'}`);
   const content = choice?.message?.content;
   if (typeof content !== 'string' || !content.trim()) return { why: [...parts, 'empty content'].join(', ') };

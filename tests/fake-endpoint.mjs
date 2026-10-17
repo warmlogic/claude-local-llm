@@ -10,7 +10,8 @@
 //             loaded embeddings model), and a chat completion answers after a short delay from a marker in
 //             the CLAIM line: "[yes]" -> SUPPORTED; "[split]" -> SUPPORTED on even seeds, CONTRADICTED on
 //             odd; "[stall]" -> never answers; "[fail]" -> HTTP 500 whose error message echoes the prompt;
-//             "[echo400]" -> HTTP 400 likewise; "[html]" -> a non-JSON 200; else NOT_IN_SOURCE. Logs the
+//             "[echo400]" -> HTTP 400 likewise; "[html]" -> a non-JSON 200; "[badfinish]" -> non-JSON content
+//             and a finish_reason that echo the prompt; else NOT_IN_SOURCE. Logs the
 //             parsed request body and the number of chat requests in flight (inflight) as it arrives.
 //   verify-stall-once  as verify, but the first request for each seed never answers.
 //   verify-stall       chat completions never answer.
@@ -81,6 +82,7 @@ const verify = (req, res) => {
     setTimeout(() => {
       if (claim.includes('[fail]')) return json(res, 500, { error: { message: `upstream echo: ${prompt}`, code: 'server_error' } });
       if (claim.includes('[echo400]')) return json(res, 400, { error: `bad request: ${prompt}` });
+      if (claim.includes('[badfinish]')) return answer(res, `not json ${prompt}`, `canary-finish ${prompt}`);
       if (claim.includes('[html]')) {
         res.setHeader('content-type', 'text/html');
         return res.end(`<html>${prompt}</html>`);

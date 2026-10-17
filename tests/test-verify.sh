@@ -257,6 +257,12 @@ upstream_case() { # <label> <claim> <message-fragment>
 upstream_case "a 400 whose message echoes the prompt: status only, no file text" "[echo400] x" "endpoint error (HTTP 400)"
 upstream_case "a 500 with an error field: status and allowlisted code, not retried" "[fail] x" "endpoint error (HTTP 500, server_error)"
 upstream_case "a non-JSON 200: a fixed message, no body" "[html] x" "non-JSON response (HTTP 200)"
+before=$(chat_count "$LOG")
+out=$(call "$(claims_on "$INSIDE" '["[badfinish] x"]' 1)")
+if jq -e '.call.isError and (.call.text | contains("finish_reason unrecognized, non-JSON content"))' >/dev/null <<<"$out" \
+   && ! grep -q canary <<<"$out" && [ "$(chat_count "$LOG")" = $((before + 2)) ]; then
+  ok "an answer whose finish_reason and content echo the prompt: neither is reported"
+else bad "echoing finish_reason ($(brief "$out"))"; fi
 
 # --- outages and redirects ------------------------------------------------------------------
 dead_port=$(node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
