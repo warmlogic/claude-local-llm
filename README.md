@@ -182,6 +182,8 @@ On a healthy start, stderr shows `local-llm: allowed folders: <comma-separated r
 
 On a cold `npx` cache the first start downloads `@houtini/lm`, which needs network and can take a few seconds. If Claude Code reports the server timed out, run `/mcp` and reconnect. Later starts use the cache.
 
+Behind a proxy that first download fails, because the launcher clears the proxy variables (a proxy would otherwise also carry the local model's traffic, file text included). Pre-warm the cache once from a shell that still has the proxy set, outside any project with a `node_modules`: `npx -y @houtini/lm@3.3.4 </dev/null` (it starts, sees no input and exits). Later starts use the cache.
+
 ### `outside the allowed roots` (or `READ FAILED`)
 
 The file is not under any folder in `allowed_dirs`. Add its folder in the plugin options, or the symlink you used points elsewhere. If the folder is already listed, check the server log for `allowed folder not found, skipping` (a typo in the path). Claude will read the file itself in the meantime and tell you why.
