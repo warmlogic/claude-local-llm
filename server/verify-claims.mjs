@@ -18,7 +18,8 @@ export const MAX_PATHS = 10;
 const MAX_CLAIM_CHARS = 1000;
 const PARALLEL_SLOTS = 4; // LM Studio's default parallel slots for one loaded model
 const SAMPLE_TEMPERATURE = 1.0;
-const SAMPLE_MAX_TOKENS = 40;
+const SAMPLE_MAX_TOKENS = 100; // a label needs about 10; the rest absorbs leading whitespace
+const REDRAW_SEED_OFFSET = 500; // above any sample index (k <= MAX_K), so redraw seeds never collide
 const ERROR_TEXT_CHARS = 200; // upstream error messages are cut to this
 
 const INSTRUCTIONS = 'Is the CLAIM supported by the STATE? Judge only from the STATE.\nCLAIM: ';
@@ -175,6 +176,32 @@ const postOnce = (cfg, body, budget) =>
     budget,
   );
 
+// A stalled request is retried once, with the same body.
+async function postRetryingStall(cfg, body, budget) {
+  try {
+    return await postOnce(cfg, body, budget);
+  } catch (e) {
+    if (!(e instanceof RequestTimeout)) throw e;
+  }
+  try {
+    return await postOnce(cfg, body, budget);
+  } catch (e) {
+    if (e instanceof RequestTimeout) throw new Error(`a request timed out twice (${cfg.requestTimeoutMs} ms each)`);
+    throw e;
+  }
+}
+
+const parseLabel = (out) => {
+  try {
+    const label = JSON.parse(out.choices[0].message.content).label;
+    return label in CRITERIA ? label : null;
+  } catch {
+    return null;
+  }
+};
+
+// One vote. The schema allows leading whitespace, and at temperature 1 a sample can spend its whole
+// token budget on newlines; such a non-answer is redrawn once with another seed (same option order).
 async function sampleLabel(cfg, model, state, claim, seed, budget) {
   const order = shuffled(Object.keys(CRITERIA), seed);
   const body = {
@@ -204,27 +231,13 @@ async function sampleLabel(cfg, model, state, claim, seed, budget) {
       },
     },
   };
-  const out = await withSlot(async () => {
-    try {
-      return await postOnce(cfg, body, budget);
-    } catch (e) {
-      if (!(e instanceof RequestTimeout)) throw e;
-      try {
-        return await postOnce(cfg, body, budget); // a stalled request is retried once
-      } catch (e2) {
-        if (e2 instanceof RequestTimeout) throw new Error(`a request timed out twice (${cfg.requestTimeoutMs} ms each)`);
-        throw e2;
-      }
+  return withSlot(async () => {
+    for (const s of [seed, seed + REDRAW_SEED_OFFSET]) {
+      const label = parseLabel(await postRetryingStall(cfg, { ...body, seed: s }, budget));
+      if (label) return label;
     }
+    throw new Error('the model returned no valid label twice for one sample');
   });
-  let label;
-  try {
-    label = JSON.parse(out.choices[0].message.content).label;
-  } catch {
-    throw new Error('the model returned no parseable label');
-  }
-  if (!(label in CRITERIA)) throw new Error('the model returned a label outside the options');
-  return label;
 }
 
 // The pinned model, else the one LM Studio reports loaded (its /api/v0/models), else the first

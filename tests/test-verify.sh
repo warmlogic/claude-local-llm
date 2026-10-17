@@ -184,6 +184,18 @@ out=$(call "$ROOT" "$(jq -nc --arg p "$ROOT/inside.txt" '{paths:[$p], claims:["[
 if jq -e '.call.isError and (.call.text | contains("timed out twice"))' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" = 2 ]; then
   ok "a request that stalls twice fails the call after one retry"
 else bad "stall twice ($(chat_count "$LOG") requests; $(jq -c '.call' <<<"$out"))"; fi
+start_fake garbage1 verify-garbage-once
+out=$(call "$ROOT" "$(jq -nc --arg p "$ROOT/inside.txt" '{paths:[$p], claims:["[yes] x"], k:3}')")
+if jq -e '.call.isError == false and (.call.text | fromjson | .results[0].p_supported == 1)' >/dev/null <<<"$out" \
+   && [ "$(chat_count "$LOG")" = 6 ] && jq -se '[.[] | select(.body) | .body.seed] | sort == [0,1,2,500,501,502]' "$LOG" >/dev/null; then
+  ok "a cut-off answer is redrawn once with another seed (6 requests for k=3)"
+else bad "redraw ($(chat_count "$LOG") requests; $(jq -c '.call' <<<"$out"))"; fi
+start_fake garbage verify-garbage
+out=$(call "$ROOT" "$(jq -nc --arg p "$ROOT/inside.txt" '{paths:[$p], claims:["[yes] x"], k:1}')")
+if jq -e '.call.isError and (.call.text | contains("no valid label twice"))' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" = 2 ]; then
+  ok "a sample cut off twice fails the call"
+else bad "cut off twice ($(chat_count "$LOG") requests; $(jq -c '.call' <<<"$out"))"; fi
+start_fake stall2 verify-stall
 t0=$(date +%s)
 out=$(call "$ROOT" "$(jq -nc --arg p "$ROOT/inside.txt" '{paths:[$p], claims:["[yes] x","[yes] y"], k:4}')" \
       LOCAL_VERIFY_REQUEST_TIMEOUT_MS=60000 LOCAL_VERIFY_BUDGET_MS=500)

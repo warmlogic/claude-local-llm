@@ -12,6 +12,9 @@
 //             Logs the parsed request body too.
 //   verify-stall-once  as verify, but the first request for each seed never answers.
 //   verify-stall       chat completions never answer.
+//   verify-garbage-once  as verify, but a first-draw seed (seed % 1000 < 500) gets a cut-off answer of
+//             newlines (finish_reason "length"), as a temperature-1 sample sometimes does.
+//   verify-garbage       every answer is cut off.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
 
@@ -41,6 +44,9 @@ const verify = (req, res) => {
     if (mode === 'verify-stall' || (mode === 'verify-stall-once' && !seen.has(body.seed))) {
       seen.add(body.seed);
       return; // never answer
+    }
+    if (mode === 'verify-garbage' || (mode === 'verify-garbage-once' && body.seed % 1000 < 500)) {
+      return json(res, 200, { choices: [{ message: { role: 'assistant', content: '\n\n\n{\n  "label": "S' }, finish_reason: 'length' }] });
     }
     json(res, 200, { choices: [{ message: { role: 'assistant', content: JSON.stringify({ label: verifyLabel(body) }) } }] });
   });
