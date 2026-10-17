@@ -302,7 +302,7 @@ proxy_env=(HTTP_PROXY="$proxy_ep" http_proxy="$proxy_ep" HTTPS_PROXY="$proxy_ep"
 env "${proxy_env[@]}" NODE_USE_ENV_PROXY=1 node -e "fetch('$EP/v1/models').catch(() => {})" >/dev/null 2>&1
 if [ -s "$proxy_log" ]; then ok "control: Node's env proxy does catch a loopback fetch in this environment"
 else bad "control: the proxy saw nothing, so the proxy cases below prove nothing"; fi
-for variant in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy"; do
+for variant in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy" 'NODE_OPTIONS="--use-env-proxy"' "PROXY_FLAG_UNSET=1"; do
   : > "$proxy_log"; before=$(chat_count "$LOG")
   out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)" "${proxy_env[@]}" "$variant")
   if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ] && [ "$(chat_count "$LOG")" = $((before + 1)) ]; then
@@ -310,7 +310,7 @@ for variant in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy"; do
   else bad "proxy bypass with $variant (proxy log $(wc -l < "$proxy_log") lines; $(brief "$out"))"; fi
   : > "$proxy_log"
   out=$(env "${proxy_env[@]}" "$variant" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
-  if did_not_start "$out" "refusing to start: Node's env proxy is on" && [ ! -s "$proxy_log" ]; then
+  if did_not_start "$out" "without NO_PROXY='*'" && [ ! -s "$proxy_log" ]; then
     ok "server started directly with $variant and *_PROXY set refuses to start; the proxy gets nothing"
   else bad "direct start with $variant (proxy log $(wc -l < "$proxy_log") lines; $(jq -c '{init,exit,stderr}' <<<"$out" | cut -c1-300))"; fi
 done

@@ -2,8 +2,8 @@
 // verify_claims (see verify-claims.mjs). Start it through scripts/launch-verify.sh, which resolves
 // the allowed folders and checks the endpoint; this file re-checks both and refuses to start
 // without them, so running it directly cannot read outside a fence or talk to a remote host. It also
-// refuses to start when Node's env proxy is on and a proxy is set without NO_PROXY='*': fetch would
-// route the loopback request, file text included, through that proxy (the launcher scrubs these too).
+// refuses to start when a proxy is set without NO_PROXY='*': with Node's env proxy on, fetch would
+// route the loopback request, file text included, through it (the launcher scrubs these too).
 // Env: LOCAL_VERIFY_ROOTS (resolved roots, comma-joined), LOCAL_LLM_ENDPOINT_URL, LOCAL_LLM_MODEL,
 //      LOCAL_VERIFY_REQUEST_TIMEOUT_MS, LOCAL_VERIFY_BUDGET_MS (tests shorten these).
 // Protocol: newline-delimited JSON-RPC 2.0; initialize, ping, tools/list, tools/call, and
@@ -33,21 +33,19 @@ const positiveInt = (name, fallback) => {
 };
 
 const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
-const isProxyFlag = (arg) => /^--use-env-proxy(?:=|$)/.test(arg);
-// The proxy variables that fetch would use, or none: the env proxy must be on (NODE_USE_ENV_PROXY,
-// or --use-env-proxy in execArgv or NODE_OPTIONS), a proxy set, and NO_PROXY / no_proxy not all '*'.
-function activeProxyVars(env, execArgv) {
-  const flag = env.NODE_USE_ENV_PROXY ?? '';
-  const isOn = (flag !== '' && !/^(?:0|false)$/i.test(flag)) || execArgv.some(isProxyFlag)
-    || (env.NODE_OPTIONS ?? '').split(/\s+/).some(isProxyFlag);
+// The proxy variables fetch could use, or none. Any set *_PROXY counts unless NO_PROXY / no_proxy are
+// all '*', whether or not the env proxy looks switched on: Node turns it on through NODE_USE_ENV_PROXY,
+// --use-env-proxy, or NODE_OPTIONS with its own quoting rules, and parsing those here would be one
+// more way to get it wrong. The launcher clears these variables, so only a direct start can trip this.
+function unexemptedProxyVars(env) {
   const exempt = [env.NO_PROXY, env.no_proxy].filter((v) => v !== undefined && v !== '');
-  const isNeutral = exempt.length > 0 && exempt.every((v) => v.trim() === '*');
-  return isOn && !isNeutral ? PROXY_VARS.filter((n) => env[n]) : [];
+  const isExempt = exempt.length > 0 && exempt.every((v) => v.trim() === '*');
+  return isExempt ? [] : PROXY_VARS.filter((n) => env[n]);
 }
-const proxied = activeProxyVars(process.env, process.execArgv);
+const proxied = unexemptedProxyVars(process.env);
 if (proxied.length) {
-  die(`refusing to start: Node's env proxy is on and ${proxied.join(', ')} is set, so requests (file text included) ` +
-    "would go through a proxy; start through scripts/launch-verify.sh, or set NO_PROXY='*'");
+  die(`refusing to start: ${proxied.join(', ')} is set without NO_PROXY='*', so Node's env proxy could send ` +
+    "requests (file text included) through a proxy; start through scripts/launch-verify.sh, or set NO_PROXY='*'");
 }
 
 const endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234';
