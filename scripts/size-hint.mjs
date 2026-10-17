@@ -21,10 +21,11 @@ try {
 const prompt = typeof input.prompt === 'string' ? input.prompt : '';
 const cwd = typeof input.cwd === 'string' && isAbsolute(input.cwd) ? input.cwd : process.cwd();
 
-// A quoted span (so a path may contain spaces) or a whitespace-delimited token that holds no quote characters, so
-// ("/a dir/x.txt") yields the quoted span. The tokens inside a quoted span are candidates too, which keeps a stray
+// A quoted span (so a path may contain spaces) or a whitespace-delimited token that holds no wrapping quote, so
+// ("/a dir/x.txt") yields the quoted span while customer's-notes.md stays one token (an apostrophe between word
+// characters is part of the token). The tokens inside a quoted span are candidates too, which keeps a stray
 // apostrophe in prose from hiding a path.
-const CANDIDATE = /"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s"'`]+)/g;
+const CANDIDATE = /"([^"\n]+)"|(?<!\w)'([^'\n]+)'|`([^`\n]+)`|((?:[^\s"'`]|(?<=\w)'(?=\w))+)/g;
 const clean = (t) => t.replace(/^[\s"'`(<[{@]+/, '').replace(/[\s"'`)>\]},.;:!?]+$/, '');
 const isPathLike = (t) => t.includes('/') || t.startsWith('~') || /\.[A-Za-z0-9]{1,10}$/.test(t);
 

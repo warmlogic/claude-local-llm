@@ -336,6 +336,10 @@ else bad "size hint: relative path ($h)"; fi
 h=$(hint_out "$(hint_json "Summarize (\"$SHD/a dir/big file.txt\")")")
 if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a parenthesized quoted path with spaces"
 else bad "size hint: parenthesized quoted path with spaces ($h)"; fi
+head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/customer's-notes.md"
+h=$(hint_out "$(hint_json "Summarize $SHD/customer's-notes.md please")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("customer'"'"'s-notes.md is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an unquoted path with an apostrophe in its name"
+else bad "size hint: apostrophe in a file name ($h)"; fi
 h=$(hint_out "$(hint_json "Don't summarize 'x' for me, just $SHD/big.txt")")
 if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an apostrophe in prose does not hide a path"
 else bad "size hint: apostrophe in prose ($h)"; fi
