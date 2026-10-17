@@ -57,7 +57,12 @@ for (const m of prompt.matchAll(CANDIDATE)) {
   for (const inner of span.matchAll(/\S+/g)) { if (done()) break; consider(inner[0]); }
 }
 if (files.length > 0) {
-  const { contextTokens, capChars, source } = await getContextCap();
+  // The plugin's endpoint_url and model options reach hooks as CLAUDE_PLUGIN_OPTION_* (once set), not via .mcp.json's env.
+  const env = process.env;
+  const { contextTokens, capChars, source } = await getContextCap({
+    endpoint: env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL || env.LOCAL_LLM_ENDPOINT_URL || undefined,
+    model: env.CLAUDE_PLUGIN_OPTION_MODEL ?? env.LOCAL_LLM_MODEL ?? undefined,
+  });
   const number = (n) => n.toLocaleString('en-US');
   const context = `${number(contextTokens)} tokens, about ${number(capChars)} chars; ${source}`;
   const lines = files.map(({ path, size }) => {

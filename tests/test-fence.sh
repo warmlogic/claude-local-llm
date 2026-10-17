@@ -448,6 +448,15 @@ if node --test "$SCRIPT_DIR/test-context-cap.mjs" > "$TMP/context-tests.log" 2>&
   ok "context bounds suite (helper, hook and batch integration)"
 else bad "context bounds suite: $(tail -15 "$TMP/context-tests.log" | tr '\n' ';')"; fi
 
+# the hook reads the plugin's own endpoint_url and model options (Claude Code exports them to hooks as CLAUDE_PLUGIN_OPTION_*)
+node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/context16.port" "$TMP/context16.log" context 16384 &
+CTX16_PID=$!
+for _ in $(seq 1 50); do [ -s "$TMP/context16.port" ] && break; sleep 0.1; done
+h=$(printf '%s' "$(hint_json "Classify $SHD/big.txt")" | env -u LOCAL_LLM_ENDPOINT_URL -u LOCAL_LLM_MODEL CLAUDE_PLUGIN_OPTION_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/context16.port")" CLAUDE_PLUGIN_OPTION_MODEL=fake-context node "$SH")
+if jq -e '.hookSpecificOutput.additionalContext | contains("too big for the loaded model")' >/dev/null <<<"$h"; then ok "size hint: follows the plugin's endpoint_url and model options (16k context makes a 35k file too big)"
+else bad "size hint: plugin endpoint_url option ignored ($h)"; fi
+kill "$CTX16_PID" 2>/dev/null; wait "$CTX16_PID" 2>/dev/null
+
 # --- the local-verify server: its own offline suite (fake endpoint only) --------
 vt=$(bash "$SCRIPT_DIR/test-verify.sh" 2>&1); vt_rc=$?
 if [ "$vt_rc" -eq 0 ] && grep -q '^verify pass=[1-9][0-9]* fail=0$' <<<"$vt"; then ok "local-verify suite ($(tail -1 <<<"$vt"))"
