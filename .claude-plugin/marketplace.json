@@ -1,6 +1,9 @@
 {
   "name": "warmlogic-local-llm",
-  "owner": { "name": "warmlogic" },
+  "description": "Marketplace for the local-llm plugin (this repo)",
+  "owner": {
+    "name": "warmlogic"
+  },
   "plugins": [
     {
       "name": "local-llm",

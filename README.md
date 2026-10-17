@@ -97,7 +97,7 @@ claude plugin marketplace add "$HOME/github/claude-local-llm"
 claude plugin install local-llm@warmlogic-local-llm
 ```
 
-It then loads in every session, under the id `local-llm@warmlogic-local-llm` (use that id with `plugin configure` below instead of `local-llm@inline`). The plugin is unversioned, so every merge to `main` is a release. Pull the clone, then run `claude plugin marketplace update warmlogic-local-llm` and `claude plugin update local-llm@warmlogic-local-llm`, and restart or `/reload-plugins`. To remove it: `claude plugin uninstall local-llm@warmlogic-local-llm`, then `claude plugin marketplace remove warmlogic-local-llm`.
+It then loads in every session, under the id `local-llm@warmlogic-local-llm`. A local-path marketplace installs whatever the clone has checked out, so keep the clone on `main`. The configure commands below use the per-session id `local-llm@inline`. For the permanent install, run them without `--plugin-dir` and with the installed id, e.g. `claude plugin configure local-llm@warmlogic-local-llm`. The plugin is unversioned, so every merge to `main` is a release. Pull the clone, then run `claude plugin marketplace update warmlogic-local-llm` and `claude plugin update local-llm@warmlogic-local-llm`, and restart or `/reload-plugins`. To remove it: `claude plugin uninstall local-llm@warmlogic-local-llm`, then `claude plugin marketplace remove warmlogic-local-llm`.
 
 The plugin has three options (declared as `userConfig` in `.claude-plugin/plugin.json`):
 
