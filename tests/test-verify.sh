@@ -159,8 +159,9 @@ if jq -e '.call.isError and (.call.text | contains("outside the allowed folders"
   ok "one path outside the roots fails the whole call"
 else bad "one path outside the roots fails the whole call ($(brief "$out"))"; fi
 out=$(call "$(jq -nc --arg a "$ROOT/missing.txt" --arg b "$TMP/outside/secret.txt" --arg c "$INSIDE" '{paths:[$a,$b,$c], claims:["[yes] x"]}')")
-if jq -e --arg a "$ROOT/missing.txt: no such file" --arg b "$TMP/outside/secret.txt: path resolves" \
-     '.call.isError and (.call.text | contains("cannot use 2 paths") and contains($a) and contains($b))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
+# The outside path's wording depends on whether $TMP is behind a symlink (macOS /var), so match its parts.
+if jq -e --arg a "$ROOT/missing.txt: no such file" --arg b "$TMP/outside/secret.txt: path " \
+     '.call.isError and (.call.text | contains("cannot use 2 paths") and contains($a) and contains($b) and contains("outside the allowed folders"))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
   ok "several bad paths: every one is listed with its cause"
 else bad "several bad paths ($(brief "$out"))"; fi
 before=$(chat_count "$LOG")
