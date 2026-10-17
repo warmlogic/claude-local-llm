@@ -3,14 +3,19 @@
 // Runs one extraction prompt over many text files on the local model (LM Studio, loopback only), window by
 // window, and writes rows.jsonl, dropped.jsonl, failures.jsonl and a short index.md. See AGENTS.md "Batch runner".
 // job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars"}
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { isLoopbackEndpoint, loopbackError } from '../scripts/loopback.mjs';
 
 const REQUEST_TIMEOUT_MS = 180_000;
 const MAX_TOKENS = 4000;
 const MAX_CONSECUTIVE_UNREACHABLE = 3;
 const MAX_FILES_LISTED = 25;
+
+// With any of these defined, Node's env proxy could send the window text through a proxy: refuse to start
+// (scripts/no-proxy.sh unsets the same set for the launchers). NO_PROXY is never consulted.
+const PROXY_VARS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NODE_USE_ENV_PROXY'];
 
 const die = (msg) => { console.error(`run.mjs: ${msg}`); process.exit(2); };
 
@@ -90,6 +95,9 @@ const main = async () => {
     else files.push(args[i]);
   }
   if (!opt.job || !opt.out || files.length === 0) die('usage: run.mjs --job <job.json> --out <dir> <input files...>');
+  const proxied = PROXY_VARS.filter((n) => Object.hasOwn(process.env, n));
+  if (proxied.length) die(`refusing to run: ${proxied.join(', ')} is defined and could route file text through a proxy; start with them unset (env -u ...)`);
+  if (new Set(files.map((f) => basename(f))).size !== files.length) die('input files must have distinct basenames (results are keyed by basename)');
   const endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234';
   if (!isLoopbackEndpoint(endpoint)) die(loopbackError(endpoint));
   let job;
@@ -179,4 +187,4 @@ const main = async () => {
   process.exit(aborted ? 1 : 0);
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) main();

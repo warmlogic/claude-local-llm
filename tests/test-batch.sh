@@ -135,5 +135,27 @@ if [ "$(count "$f")" -eq 5 ] && [ "$(sed -n 1p "$f")" = "$(printf 'L1\tuser\ttex
    && [ "$(sed -n 5p "$f" | cut -f4)" = "${long:0:2000}…" ]; then ok "flatten: ids, roles and kinds; thinking, empty and non-message entries skipped; newlines folded; blocks cut at 2000 chars"
 else bad "flatten output: $(cut -c1-80 "$f")"; fi
 
+# --- direct-run guards: proxy, distinct basenames, paths with spaces -------------------
+: > "$LOG"
+start_fake px batch
+HTTP_PROXY=http://127.0.0.1:9 run_batch "$EP" "$TMP/out-px" "$TMP/m.txt"
+rc1=$RC; grep -q 'HTTP_PROXY' "$TMP/run.out"; g1=$?
+NODE_USE_ENV_PROXY=1 run_batch "$EP" "$TMP/out-px" "$TMP/m.txt"
+if [ "$rc1" -eq 2 ] && [ "$g1" -eq 0 ] && [ "$RC" -eq 2 ] && [ ! -e "$TMP/out-px/rows.jsonl" ] && [ "$(jq -s '[.[] | select(.body)] | length' "$LOG")" -eq 0 ]; then ok "a proxy variable defined refuses the run before any request"
+else bad "proxy guard: rc=$rc1/$RC $(head -c 200 "$TMP/run.out")"; fi
+mkdir -p "$TMP/d1" "$TMP/d2"; cp "$TMP/m.txt" "$TMP/d1/same.txt"; cp "$TMP/m.txt" "$TMP/d2/same.txt"
+run_batch "$EP" "$TMP/out-dup" "$TMP/d1/same.txt" "$TMP/d2/same.txt"
+if [ "$RC" -eq 2 ] && grep -q 'distinct basenames' "$TMP/run.out" && [ ! -e "$TMP/out-dup/rows.jsonl" ]; then ok "run.mjs refuses inputs with the same basename"
+else bad "duplicate basenames: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
+mkdir -p "$TMP/d1/x" "$TMP/d2/x"; cp "$TMP/s.jsonl" "$TMP/d1/x/s.jsonl"; cp "$TMP/s.jsonl" "$TMP/d2/x/s.jsonl"
+node "$FLAT" "$TMP/flat-dup" "$TMP/d1/x/s.jsonl" "$TMP/d2/x/s.jsonl" > "$TMP/flat.out" 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$TMP/flat-dup/s.txt" ]; then ok "flatten refuses two inputs that map to one output file"
+else bad "flatten duplicates: rc=$rc"; fi
+mkdir -p "$TMP/sp ace #1/scripts"; cp -R "$REPO/batch" "$TMP/sp ace #1/batch"; cp "$REPO/scripts/loopback.mjs" "$TMP/sp ace #1/scripts/"
+LOCAL_LLM_ENDPOINT_URL="$EP" node "$TMP/sp ace #1/batch/run.mjs" --job "$TMP/job.json" --out "$TMP/out-sp" "$TMP/m.txt" > "$TMP/run.out" 2>&1
+node "$TMP/sp ace #1/batch/flatten-transcripts.mjs" "$TMP/flat-sp" "$TMP/s.jsonl" > /dev/null 2>&1
+if [ -s "$TMP/out-sp/index.md" ] && [ -s "$TMP/flat-sp/s.txt" ]; then ok "both scripts run from a directory with spaces and a # in its path"
+else bad "path with spaces: index=$(ls "$TMP/out-sp" 2>&1 | head -3) $(head -c 200 "$TMP/run.out")"; fi
+
 echo "batch pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
