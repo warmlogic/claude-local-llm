@@ -30,20 +30,7 @@ fi
 echo "local-llm: allowed folders: $roots" >&2
 
 endpoint=${LOCAL_LLM_ENDPOINT_URL:-http://127.0.0.1:1234}
-hostport=${endpoint#*://}
-hostport=${hostport%%[/?#]*}
-case $endpoint in http://*|https://*) ;; *) hostport=invalid ;; esac
-case $hostport in *@*) hostport=invalid ;; esac
-case $hostport in
-  127.0.0.1*) rest=${hostport#127.0.0.1} ;;
-  localhost*) rest=${hostport#localhost} ;;
-  '[::1]'*) rest=${hostport#'[::1]'} ;;
-  *) rest=bad ;;
-esac
-case $rest in ''|:[0-9]*) ;; *) rest=bad ;; esac
-case ${rest#:} in
-  *[!0-9]*) echo "local-llm: endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port (set endpoint_url in the plugin options): $endpoint" >&2; exit 2 ;;
-esac
+node ./scripts/check-endpoint.mjs "$endpoint" || exit 2  # loopback only (scripts/loopback.mjs)
 
 # houtini 3.3.4 also reads these (every process.env.* in its dist); drop any ambient value so only
 # what is exported below applies. Re-derive this list from the dist when the pin changes.
