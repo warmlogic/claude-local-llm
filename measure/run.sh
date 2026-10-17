@@ -98,8 +98,8 @@ if [ "$MODE" = new ]; then
     jq --arg m "$LOCAL_MODEL" '.userConfig.model.default = $m' "$REPO/.claude-plugin/plugin.json" > "$RUN_DIR/$d/.claude-plugin/plugin.json" \
       || die "pinning the model in $RUN_DIR/$d"
   done
-  lower_floor "$RUN_DIR/plugin-lowfloor/skills/delegate-local/SKILL.md" \
-    || die "could not lower the skill's 10k floor: the size-range sentences (10k with 60k) changed; update lower_floor in measure/lib.sh"
+  lower_floor "$RUN_DIR/plugin-lowfloor" \
+    || die "could not lower the 30k delegation floor: the skill's size-range sentences (30k with the cap) or MIN_DELEGATE_CHARS changed; update lower_floor in measure/lib.sh"
 
   WORK=$(work_dir) || die "the session cwd must sit outside \$HOME; set TMPDIR to a folder outside it"
   cutoff_epoch=$(cat "$MEASURE_HOME/corpus.cutoff" 2>/dev/null) && [[ "$cutoff_epoch" =~ ^[0-9]+$ ]] \

@@ -101,12 +101,16 @@ snapshot_ok "$L" f01; rc=$?
 live_unchanged "$L" f01; rc2=$?
 check "snapshot_ok and live_unchanged: a changed live file fails the job (job() writes corpus-changed)" '1,1,0' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$([ $rc2 -ne 0 ] && echo 1 || echo 0),$(grep -c edited "$L/files/f01")"
-cp "$MDIR/../skills/delegate-local/SKILL.md" "$TMP/SKILL.md"; lower_floor "$TMP/SKILL.md"; rc=$?
-check "lower_floor: the current skill gets a 1k floor in its description and body, no 10k left" '0,1,1,0' \
-  "$rc,$(grep -cE '^description:.*about 1k to 60k' "$TMP/SKILL.md"),$(grep -vE '^description:' "$TMP/SKILL.md" | grep -cE '(^|[^0-9])1k.*60k'),$(grep -c '10k' "$TMP/SKILL.md")"
-printf -- '---\ndescription: big files (over 10k characters)\n---\nDelegate anything over 10k.\n' > "$TMP/SKILL2.md"; cp "$TMP/SKILL2.md" "$TMP/SKILL2.orig"
-lower_floor "$TMP/SKILL2.md"; rc=$?
-check "lower_floor: a reworded skill fails loudly and stays untouched" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(cmp -s "$TMP/SKILL2.md" "$TMP/SKILL2.orig" && echo 1 || echo 0)"
+LF="$TMP/lf"; mkdir -p "$LF/skills/delegate-local" "$LF/scripts"
+cp "$MDIR/../skills/delegate-local/SKILL.md" "$LF/skills/delegate-local/"; cp "$MDIR/../scripts/context-cap.mjs" "$LF/scripts/"
+lower_floor "$LF"; rc=$?
+check "lower_floor: the current skill and size hint get a 1k floor, no 30k left in the skill" '0,1,1,0,1' \
+  "$rc,$(grep -cE '^description:.*about 1k characters up to' "$LF/skills/delegate-local/SKILL.md"),$(grep -vE '^description:' "$LF/skills/delegate-local/SKILL.md" | grep -cE '(^|[^0-9])1k.*cap'),$(grep -c '30k' "$LF/skills/delegate-local/SKILL.md"),$(grep -c '^export const MIN_DELEGATE_CHARS = 1_000;' "$LF/scripts/context-cap.mjs")"
+LF2="$TMP/lf2"; mkdir -p "$LF2/skills/delegate-local" "$LF2/scripts"
+printf -- '---\ndescription: big files (over 30k characters)\n---\nDelegate anything over 30k.\n' > "$LF2/skills/delegate-local/SKILL.md"
+cp "$MDIR/../scripts/context-cap.mjs" "$LF2/scripts/"; cp -R "$LF2" "$TMP/lf2.orig"
+lower_floor "$LF2"; rc=$?
+check "lower_floor: a reworded skill fails loudly and both files stay untouched" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(diff -r "$LF2" "$TMP/lf2.orig" >/dev/null && echo 1 || echo 0)"
 copy_plugin "$MDIR/.." "$TMP/snap1"; rc=$?
 mkdir -p "$TMP/repo2" && cp -R "$MDIR/../.claude-plugin" "$MDIR/../.mcp.json" "$MDIR/../package.json" "$MDIR/../scripts" "$MDIR/../skills" "$MDIR/../hooks" "$TMP/repo2/" \
   && mkdir -p "$TMP/repo2/server" && echo x > "$TMP/repo2/server/index.mjs"   # a checkout that ships a server
