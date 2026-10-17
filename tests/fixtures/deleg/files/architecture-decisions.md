@@ -1,0 +1,12 @@
+AD-0001 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0001
+AD-0002 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0002
+AD-0003 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0003
+AD-0004 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0004
+AD-0005 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0005
+AD-0006 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0006
+AD-0007 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0007
+AD-0008 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0008
+AD-0009 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0009
+AD-0010 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0010
+AD-0011 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0011
+AD-0012 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0012

@@ -362,7 +362,7 @@ for n in 1 2 3 4; do head -c 11000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; 
 # the prompt goes through stdin: a 260 KB value would exceed a single argument's limit on some systems
 hint_json() { printf '%s' "$1" | jq -Rsc --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:.}'; }
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
-if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 bytes; if the job is a bounded read-only text task (summarize, classify, extract), the delegate-local skill applies."))' >/dev/null <<<"$h"; then
+if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 bytes. If this turn\u0027s job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too."))' >/dev/null <<<"$h"; then
   ok "size hint: emits for a big absolute path"
 else bad "size hint: emits for a big absolute path ($h)"; fi
 h=$(hint_out "$(hint_json "Classify big.txt please.")")

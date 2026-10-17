@@ -1,0 +1,4 @@
+{"type": "assistant", "message": {"id": "g0", "content": [{"type": "tool_use", "id": "g1", "name": "Grep", "input": {"pattern": "AD-0003", "path": "/work/acme-billing/docs/architecture-decisions.md"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "g1", "content": "3:AD-0003 Decision: the billing team keeps the invoice queue on the shared broker, status accepted. AD-E0003"}]}}
+{"type": "assistant", "message": {"id": "t0", "content": [{"type": "text", "text": "It looks fine."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "It looks fine.", "permission_denials": []}

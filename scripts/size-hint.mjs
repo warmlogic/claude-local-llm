@@ -1,6 +1,6 @@
 // UserPromptSubmit hook. When the prompt names an existing regular file of at least 10,000 bytes (absolute, ~/, or
-// relative to the hook input's cwd), adds a one-line hint per file (at most 3) so Claude considers the
-// delegate-local skill on a big file instead of reading part of it. It only stats paths: file contents are never
+// relative to the hook input's cwd), adds a one-line instruction per file (at most 3) to invoke the
+// delegate-local skill before reading a big file itself. It only stats paths: file contents are never
 // read, and nothing is printed otherwise.
 // Candidates are scanned lazily (no spreads, so a huge prompt cannot overflow the stack) and only path-like ones are
 // stat'ed: they contain a "/", start with "~", or end in an extension. The cap is on stat calls, not on tokens scanned.
@@ -44,7 +44,7 @@ function consider(token) {
     const st = statSync(path);
     if (!st.isFile() || st.size < MIN_BYTES || hinted.has(path)) return;
     hinted.add(path);
-    lines.push(`local-llm: ${path} is about ${st.size.toLocaleString('en-US')} bytes; if the job is a bounded read-only text task (summarize, classify, extract), the delegate-local skill applies.`);
+    lines.push(`local-llm: ${path} is about ${st.size.toLocaleString('en-US')} bytes. If this turn's job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too.`);
   } catch {
     // stat failed (missing path, no permission, name too long, ...): not a file to hint about
   }
