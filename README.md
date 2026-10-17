@@ -2,7 +2,7 @@
 
 Offload file-heavy, low-stakes text jobs from Claude Code to a model running locally in LM Studio.
 
-When you ask Claude to summarize, classify, extract from, or draft from a big log or document (about 10k to 60k characters), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The local model reads the file and returns a short answer, so the file's tokens never reach Claude. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and spot-checks it.
+When you ask Claude to summarize, classify, extract from, or draft from a big log or document (about 10k to 60k characters), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The local model reads the file and returns a short answer, so the bulk of the file stays out of Claude's context; only the answer, and any lines Claude spot-checks, reach it. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and spot-checks it.
 
 Status:
 
@@ -108,8 +108,9 @@ The plugin ships what it needs, so you do not add an allow rule.
 
 ## Privacy and security
 
-- **File contents never leave your machine.** The model runs in LM Studio on loopback, and the launcher refuses any `endpoint_url` that is not `127.0.0.1`, `localhost`, or `[::1]`.
-- **One outbound call carries the model id.** At startup, and every 7 days per model, houtini-lm (the MCP server the plugin pins) asks `huggingface.co` for the loaded model's metadata, which sends the model id (for example `incoai/Qwen3.6-35B-A3B-Splash`), never file text. Houtini 3.3.4 has no setting to turn this off. The accurate claim is "file contents never leave the machine", not "nothing leaves the machine". Houtini also keeps a cache at `~/.houtini-lm/model-cache.db`.
+- **The local model's inference never leaves your machine.** The model runs in LM Studio on loopback, and the launcher refuses any `endpoint_url` that is not `127.0.0.1`, `localhost`, or `[::1]`, so the file is never sent to a remote model server.
+- **Some text still reaches Claude.** The model's answer does, and an extraction answer can quote the file verbatim. When Claude spot-checks a fact it runs Grep in content mode, which returns matching lines. When LM Studio is down, Claude reads the file itself. Do not point `allowed_dirs` at, or ask for jobs on, files you would not show Claude.
+- **One outbound call carries the model id.** At startup, and every 7 days per model, houtini-lm (the MCP server the plugin pins) asks `huggingface.co` for the loaded model's metadata, which sends the model id (for example `incoai/Qwen3.6-35B-A3B-Splash`), never file text. Houtini 3.3.4 has no setting to turn this off. So the claim is "the file is never sent to a remote model server", not "nothing leaves the machine". Houtini also keeps a cache at `~/.houtini-lm/model-cache.db`.
 - **The API key is a dummy.** LM Studio needs no key. The launcher sets `HOUTINI_LM_API_KEY=not-needed` because otherwise houtini falls back to `OPENROUTER_API_KEY` from your environment and would use it as the credential. The launcher also clears the other environment variables houtini reads, so nothing ambient changes its routing.
 - **Reads are fenced to `allowed_dirs` and read-only.** Every path is resolved through symlinks before it is compared with the roots, so these are refused: a path outside the roots (`outside the allowed roots`), a symlink that points out of a root, a sibling folder that shares a prefix (`repo-evil` next to `repo`), and any file over 1 MB. The launcher also refuses to start with no usable root, with `/` as a root, or with a relative path, because houtini reads any absolute path when its roots are unset.
 - **Output is treated as data.** The skill tells Claude to ignore any instructions it finds in the local model's answer or in the file.
