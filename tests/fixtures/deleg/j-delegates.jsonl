@@ -1,0 +1,6 @@
+{"type": "assistant", "message": {"id": "s0", "content": [{"type": "tool_use", "id": "s1", "name": "Skill", "input": {"skill": "local-llm:delegate-local"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "s1", "content": "Launching skill"}]}}
+{"type": "assistant", "message": {"id": "d0", "content": [{"type": "tool_use", "id": "d1", "name": "mcp__plugin_local-llm_local-llm__code_task_files", "input": {"paths": ["/work/acme-billing/docs/architecture-decisions.md"], "task": "argue whether the decision is right"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "d1", "content": "It is right.\n---\nModel: m | 5→9 tokens | 1s | text · 1 file(s) read"}]}}
+{"type": "assistant", "message": {"id": "t0", "content": [{"type": "text", "text": "The local model argued it is right."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "The local model argued it is right.", "permission_denials": []}

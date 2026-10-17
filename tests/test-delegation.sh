@@ -8,7 +8,7 @@
 #
 # Each case runs DELEG_RUNS times (default 5) in a headless session with the plugin loaded via --plugin-dir
 # and no --allowedTools, then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
-# DELEG_RUNS). Cases a, a2, b and g need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
+# DELEG_RUNS). Cases a, a2, b, g, h and j need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
 #   a  20k-char file, "summarize <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
@@ -22,8 +22,14 @@
 #   e  one session, two turns, endpoint down. Turn 1 (file A): as c, and the final reply tells the user (the
 #      judge says: mentions the outage, gives a cause, gives a way to retry). Turn 2 (claude -p --resume, file B):
 #      Claude reads B, makes no code_task_files call, and no assistant text block mentions the outage.
+#   h  a real-looking project: a git-initialized acme-billing/ with README.md, src/ and a 25k-char
+#      docs/architecture-decisions.md under the temp root (no tests/, .tmp or plugin name in the path), the session cwd
+#      in it, allowed_dirs pointed at it, and "Summarize <path> in 5 bullets.": as a. Real files carry real names and
+#      sit in projects; the prompt that works at a neutral path must also work here
+#   j  the same doc with a judgment prompt ("Is the decision in <path> the right call? Argue it."): NOT delegated,
+#      Claude reads the file itself (as b). The guard against an instruction so strong it hands judgment to the local model
 #   f  no permission prompt for the plugin: no permission_denials entry for the Skill call or the plugin's tools in
-#      any inspectable trace of a-g (other denials, i.e. Claude's own compound Bash, are printed, not gated)
+#      any inspectable trace of a-j (other denials, i.e. Claude's own compound Bash, are printed, not gated)
 # A trace that does not parse or has no result event is "unknown" and fails its case, as does a non-zero claude exit.
 #
 # Exposure answers "did the file's content reach Claude's context?" without enumerating read commands: every line
@@ -41,7 +47,7 @@
 # headless or subagent user. Whether a text mentions the outage is judged by one cheap model call (haiku, no tools),
 # not by patterns over English; DELEG_JUDGE_CHECK=1 scores the judge against labeled messages.
 #
-# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
+# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g h j")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
 # default a new mktemp dir that is kept)  DELEG_ALLOWED_TOOLS (passed to --allowedTools; setting it voids the
 # no-prompt result, since it grants the permissions under test)  DELEG_JUDGE (stub = canned verdicts from
 # tests/fixtures/deleg/judge.json)  DELEG_SETTING_SOURCES (default "project": the user's settings, allow rules,
@@ -54,7 +60,7 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 FX="$SCRIPT_DIR/fixtures/deleg"
 RUNS="${DELEG_RUNS:-5}"
 case "$RUNS" in ''|*[!0-9]*|0|0[0-9]*) echo "FAIL: DELEG_RUNS must be an integer >= 1, got '$RUNS'" >&2; exit 1 ;; esac
-CASES="${DELEG_CASES:-a a2 b c d e g}"
+CASES="${DELEG_CASES:-a a2 b c d e g h j}"
 SOURCES="${DELEG_SETTING_SOURCES-project}"
 RUN_TIMEOUT_SEC=300
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
@@ -173,7 +179,11 @@ check_a() { jq -e --argjson max "$EXPOSURE_MAX" '.ok and (.is_error | not) and .
 check_a2() { check_a "$1"; }
 # g: as a, and the plugin never prompted (no plugin-tool or skill denial)
 check_g() { check_a "$1" && jq -e '.plugin_denied | length == 0' >/dev/null <<<"$1"; }
+# h: as a, on a real-looking project doc
+check_h() { check_a "$1"; }
 check_b() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
+# j: a judgment job on a big doc is not delegated: as b, Claude reads the file itself
+check_j() { check_b "$1"; }
 # c and d: the tool was tried, failed the expected way, was not called again, and Claude then read the file itself
 check_c() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed
   and .late_delegate_calls == 0 and .exposure_after >= $min' >/dev/null <<<"$1"; }
@@ -259,6 +269,11 @@ selftest() {
   expect "a2: Claude partially Reads the document instead (exposure 0.4)" fail a2 a2-partial-read notes-0412.md
   expect "g: asked plainly, delegated, no plugin denial" pass g g-ok notes-0412.md
   expect "g: delegated but the tool call was denied" fail g g-denied notes-0412.md
+  expect "h: a project doc summarized by the local model" pass h h-ok architecture-decisions.md
+  expect "h: Claude read the project doc itself" fail h h-reads-itself architecture-decisions.md
+  expect "j: a judgment job on the doc, Claude reads it" pass j j-ok architecture-decisions.md
+  expect "j: a judgment job delegated to the local model" fail j j-delegates architecture-decisions.md
+  expect "j: one Grep line is not a read" fail j j-grep-only architecture-decisions.md
   expect "b: Read of the small file, no delegation" pass b b-ok app-2k.log
   expect "b: Bash cat of the small file" pass b b-bash-cat app-2k.log
   expect "b: the 2k file was delegated" fail b b-delegates app-2k.log
@@ -371,7 +386,9 @@ FIX=$(cd "$FIX" && pwd -P)
 PLUGINS=$(mktemp -d) || die "mktemp for plugin copies"
 WORK=$(mktemp -d) || die "mktemp for the session cwd"   # outside the repo: no project memory, no ancestor node_modules
 FAKE_PID=""
-trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; rm -rf "$FIX" "$PLUGINS" "$WORK"' EXIT
+PROJROOT=$(mktemp -d) || die "mktemp for the project"
+PROJROOT=$(cd "$PROJROOT" && pwd -P)
+trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; rm -rf "$FIX" "$PLUGINS" "$WORK" "$PROJROOT"' EXIT
 
 # gen_log <chars>: deterministic synthetic app log of whole lines, at or just under <chars>; each line starts and ends with a unique marker
 gen_log() { # gen_log <chars> [<date>T<hour>]: the second argument gives a file its own token namespace
@@ -399,24 +416,50 @@ gen_prose() {
     }
     printf "%s", s}'
 }
+# gen_adr <chars>: deterministic architecture-decision prose of whole lines, at or just under <chars>; each line starts and ends with a unique marker
+gen_adr() {
+  awk -v n="$1" 'BEGIN{
+    split("billing|invoicing|payments|ledger|notifications|reporting", area, "|")
+    split("keep the invoice queue on the shared broker|move retries into the worker pool|store receipts in object storage|split the ledger writer from the reader|batch nightly exports instead of streaming|pin the payment gateway client to one region", dec, "|")
+    split("it keeps operations simple|it cuts the on-call load|it fits the current team size|it avoids a second datastore|it keeps the audit trail in one place|it is cheaper than the alternatives", why, "|")
+    while (1) {
+      i++
+      l = sprintf("AD-%04d Decision: the %s team will %s because %s; status accepted, revisit after %d months. AD-E%04d\n", i, area[i%6+1], dec[(i*5)%6+1], why[(i*7)%6+1], (i*13)%11+2, i)
+      if (length(s) + length(l) > n) break
+      s = s l
+    }
+    printf "%s", s}'
+}
 gen_log 20000 > "$FIX/app-20k.log"
 gen_log 2000 > "$FIX/app-2k.log"
 gen_log 20000 2026-03-05T14 > "$FIX/app-20k-b.log"
 gen_prose 25000 > "$FIX/notes-0412.md"
-for f_n in app-20k.log:20000 app-2k.log:2000 app-20k-b.log:20000 notes-0412.md:25000; do
-  size=$(wc -c < "$FIX/${f_n%%:*}"); target=${f_n##*:}
-  { [ "$size" -le "$target" ] && [ "$size" -gt $((target - 300)) ] && [ "$(tail -c 1 "$FIX/${f_n%%:*}" | od -An -c | tr -d ' ')" = '\n' ]; } \
+# the project case: a real-looking git-initialized project with a meaningfully named doc, under the temp root
+PROJ="$PROJROOT/acme-billing"
+mkdir -p "$PROJ/docs" "$PROJ/src" || die "mkdir $PROJ"
+printf '# acme-billing\n\nInvoicing and payments for Acme.\n' > "$PROJ/README.md"
+printf 'def main():\n    pass\n' > "$PROJ/src/main.py"
+DOC="$PROJ/docs/architecture-decisions.md"
+gen_adr 25000 > "$DOC"
+git -C "$PROJ" init -q && git -C "$PROJ" add -A \
+  && git -C "$PROJ" -c user.name=dev -c user.email=dev@example.com -c core.hooksPath=/dev/null commit -q -m "Initial commit" || die "git init in $PROJ"
+for f_n in app-20k.log:20000 app-2k.log:2000 app-20k-b.log:20000 notes-0412.md:25000 "$DOC":25000; do
+  case "${f_n%%:*}" in /*) fpath=${f_n%%:*} ;; *) fpath="$FIX/${f_n%%:*}" ;; esac
+  size=$(wc -c < "$fpath"); target=${f_n##*:}
+  { [ "$size" -le "$target" ] && [ "$size" -gt $((target - 300)) ] && [ "$(tail -c 1 "$fpath" | od -An -c | tr -d ' ')" = '\n' ]; } \
     || die "fixture ${f_n%%:*} is $size bytes: want whole lines at or just under $target"
 done
 
-# copy_plugin <dest> <endpoint-url>: temp plugin copy whose endpoint_url default is <endpoint-url>
+# copy_plugin <dest> <endpoint-url> [<allowed-dir>]: temp plugin copy whose endpoint_url default is <endpoint-url>
+# and, when given, whose allowed_dirs default is just <allowed-dir>
 copy_plugin() {
   mkdir -p "$1" || die "mkdir $1"
   cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" "$REPO/server" "$REPO/skills" "$REPO/hooks" "$1/" \
     || die "copying the plugin to $1"
-  jq --arg u "$2" '.userConfig.endpoint_url.default = $u' "$REPO/.claude-plugin/plugin.json" > "$1/.claude-plugin/plugin.json" \
+  jq --arg u "$2" --arg d "${3:-}" '.userConfig.endpoint_url.default = $u | if $d != "" then .userConfig.allowed_dirs.default = [$d] else . end' "$REPO/.claude-plugin/plugin.json" > "$1/.claude-plugin/plugin.json" \
     || die "rewriting plugin.json in $1"
   [ "$(jq -r '.userConfig.endpoint_url.default' "$1/.claude-plugin/plugin.json")" = "$2" ] || die "plugin copy $1 does not carry endpoint $2"
+  [ -z "${3:-}" ] || [ "$(jq -c '.userConfig.allowed_dirs.default' "$1/.claude-plugin/plugin.json")" = "[\"$3\"]" ] || die "plugin copy $1 does not carry allowed_dirs $3"
 }
 dead_url() {
   local port
@@ -440,11 +483,12 @@ run_claude() {
   [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
   [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
   args+=(--add-dir "$FIX")
-  (cd "$WORK" && "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
+  (cd "${RUN_CWD:-$WORK}" && "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
 }
 
 # --- plugins for each case ---------------------------------------------------------------------------
 copy_plugin "$PLUGINS/real" "$ENDPOINT"
+copy_plugin "$PLUGINS/project" "$ENDPOINT" "$PROJ"
 DEAD=$(dead_url) || die "no dead endpoint url"
 copy_plugin "$PLUGINS/down" "$DEAD"
 case " $CASES " in *" d "*)
@@ -455,12 +499,14 @@ case " $CASES " in *" d "*)
   copy_plugin "$PLUGINS/nomodel" "http://127.0.0.1:$(cat "$PLUGINS/port")" ;;
 esac
 
-plugin_for() { case "$1" in a|a2|b|g) echo real ;; c|e) echo down ;; d) echo nomodel ;; esac; }
-target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; *) echo "$FIX/app-20k.log" ;; esac; }
+plugin_for() { case "$1" in a|a2|b|g) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
+target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-20k.log" ;; esac; }
 prompt_for() {
   case "$1" in
     b) echo "Summarize $FIX/app-2k.log in five bullet points." ;;
     e) echo "Summarize $FIX/app-20k.log in three bullet points." ;;
+    h) echo "Summarize $DOC in 5 bullets." ;;
+    j) echo "Is the decision in $DOC the right call? Argue it." ;;
     a2) echo "Classify this document: $FIX/notes-0412.md" ;;
     g) echo "Use the local model to summarize $FIX/notes-0412.md" ;;
     *) echo "Summarize $FIX/app-20k.log in five bullet points." ;;
@@ -489,7 +535,7 @@ report_run() {
 }
 for c in $CASES; do
   if [ -z "$(plugin_for "$c")" ]; then echo "unknown case: $c"; overall=1; continue; fi
-  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
+  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ] || [ "$c" = h ] || [ "$c" = j ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
   passes=0
   for n in $(seq 1 "$RUNS"); do
     trace="$OUT/$c-$n.jsonl"
@@ -522,7 +568,8 @@ for c in $CASES; do
       report_run "$rc" "$trace" "$verdict"; report_run "$rc2" "$trace2" "$verdict"
       continue
     fi
-    run_claude "$PLUGINS/$(plugin_for "$c")" "$(prompt_for "$c")" "$trace"; rc=$?
+    case "$c" in h|j) RUN_CWD="$PROJ" ;; *) RUN_CWD="" ;; esac
+    RUN_CWD="$RUN_CWD" run_claude "$PLUGINS/$(plugin_for "$c")" "$(prompt_for "$c")" "$trace"; rc=$?
     s=$(summarize "$trace" "$(target_for "$c")")
     tally "$s"
     if ! jq -e '.ok' >/dev/null <<<"$s"; then verdict="FAIL (unknown: $(jq -r '.why // "unknown"' <<<"$s" 2>/dev/null))"
