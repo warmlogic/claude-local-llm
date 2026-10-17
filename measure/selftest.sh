@@ -150,7 +150,7 @@ mk "$H/github/x7/future.md" 31000 203001010000
 i=0
 for form in 'Authorization: Bearer abcdefgh12345678' 'authorization: Basic dXNlcjpwYXNz' '{"headers": {"Authorization": "Bearer abc.def.ghi"}}' \
             "curl -H 'Authorization: Bearer xyz12345678' https://example.test" 'Bearer abcdefgh12345678 was sent' '"token": "abc123def"' \
-            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2'; do
+            'Cookie: session=abc' 'client_secret=abc' 'PASSWORD = hunter2' 'password    = hunter2' '"api_key"   :   "abc"' '**Password:** hunter2'; do
   i=$((i+1)); mk "$H/github/auth$i/notes.md" 31000 202602010000; printf '\n%s\n' "$form" >> "$H/github/auth$i/notes.md"; touch -t 202602010000 "$H/github/auth$i/notes.md"
 done
 mk "$H/github/ent/notes.md" 31000 202602010000; printf '\nx Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MHF3ZXJ0eXVpb3BAc2Rm x\n' >> "$H/github/ent/notes.md"; touch -t 202602010000 "$H/github/ent/notes.md"
@@ -376,13 +376,18 @@ check "review: a duplicate line and a dropped stale verdict both warn" '1,1' \
   "$(grep -c 'a second line for f01-on' "$TMP/v/report.err"),$(grep -c 'stored verdict for f02-on graded an earlier answer' "$TMP/v/report.err")"
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
-MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; sha256_of "$MDIR/select-corpus.sh" > "$MH/corpus.rule"
+MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"
 runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS=off "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
 mkdir -p "$TMP/rh"; : > "$FAKE_LOG"
 MEASURE_ONLY="f01 f99" runsh; rc=$?
 check "run.sh: an unknown MEASURE_ONLY id is an error, before any session" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'MEASURE_ONLY names f99' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 MEASURE_ONLY=f01 runsh; rc=$?
 check "run.sh: a missing cutoff is an error, not a guess from the manifest's mtime" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'corpus.cutoff is missing' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+
+echo stale > "$MH/corpus.rule"; MEASURE_ONLY=f01 runsh; rc=$?
+check "run.sh: a manifest frozen under another corpus rule (selector or entropy guard) is refused" '1,1' \
+  "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'corpus rule .* changed since the manifest was frozen' "$TMP/run.out")"
+check "selector_rule covers the entropy guard" '1' "$(cp -R "$MDIR" "$TMP/mcopy" && echo '// x' >> "$TMP/mcopy/entropy.mjs" && [ "$(MDIR="$TMP/mcopy" selector_rule)" != "$(selector_rule)" ] && echo 1 || echo 0)"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]

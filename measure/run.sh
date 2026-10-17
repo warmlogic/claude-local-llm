@@ -65,7 +65,7 @@ esac
 
 # --- corpus: reuse the frozen manifest; pick a new one only on the first run or MEASURE_RESELECT=1 -------------
 MANIFEST="$MEASURE_HOME/corpus.tsv"
-RULE="$MEASURE_HOME/corpus.rule"   # sha256 of the selector that froze the manifest
+RULE="$MEASURE_HOME/corpus.rule"   # selector_rule (lib.sh) of the rule that froze the manifest
 if [ "$MODE" = new ]; then
   if [ ! -s "$MANIFEST" ] || [ "${MEASURE_RESELECT:-}" = 1 ]; then
     cutoff=$(date +%s)
@@ -73,10 +73,10 @@ if [ "$MODE" = new ]; then
     (umask 077 && bash "$MDIR/select-corpus.sh" "$cutoff" > "$MANIFEST.new") || die "corpus selection crashed (see its warnings above)"
     [ -s "$MANIFEST.new" ] || die "corpus selection found no files"
     mv "$MANIFEST.new" "$MANIFEST" && echo "$cutoff" > "$MEASURE_HOME/corpus.cutoff" \
-      && sha256_of "$MDIR/select-corpus.sh" > "$RULE" || die "writing the manifest"
+      && selector_rule > "$RULE" || die "writing the manifest"
   fi
-  [ "$(cat "$RULE" 2>/dev/null)" = "$(sha256_of "$MDIR/select-corpus.sh")" ] \
-    || die "measure/select-corpus.sh changed since the manifest was frozen; MEASURE_RESELECT=1 picks the corpus again"
+  [ "$(cat "$RULE" 2>/dev/null)" = "$(selector_rule)" ] \
+    || die "the corpus rule (measure/select-corpus.sh or measure/entropy.mjs) changed since the manifest was frozen; MEASURE_RESELECT=1 picks the corpus again"
   short=$(corpus_shortfall "$MANIFEST")
   if [ -n "$short" ]; then
     [ "${MEASURE_ALLOW_SHORT:-}" = 1 ] || die "the manifest is short: $short. MEASURE_RESELECT=1 picks again; MEASURE_ALLOW_SHORT=1 runs it anyway, with an incomplete private report"

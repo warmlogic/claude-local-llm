@@ -13,6 +13,9 @@ manifest_field() { awk -F'\t' -v id="$2" -v f="$3" '$1 == id {print $f}' "$1"; }
 sha256_of() { shasum -a 256 "$1" 2>/dev/null | cut -c1-64; }
 # answer_sha <facts-file>: the digest of a run's answer text; a verdict counts only for the answer it graded
 answer_sha() { jq -j '.answer // ""' "$1" 2>/dev/null | shasum -a 256 | cut -c1-64; }
+# selector_rule: the fingerprint of the corpus rule (the selector and its entropy guard); a manifest frozen under a
+# different fingerprint is refused
+selector_rule() { cat "$MDIR/select-corpus.sh" "$MDIR/entropy.mjs" | shasum -a 256 | cut -c1-64; }
 TIMEOUT=$(command -v timeout || command -v gtimeout) || TIMEOUT=""
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
 
