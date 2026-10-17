@@ -1,0 +1,47 @@
+{
+ "Summary of the first file: routine.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": false
+ },
+ "Summary of the second file: routine.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": false
+ },
+ "Summary of the second file: routine. I read it myself since I'm skipping the local model.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": true
+ },
+ "Summary of the second file: routine. The local model wasn't used.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": true
+ },
+ "Summary of the second file: the billing server is down at 10:03, with one timeout to node 12.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": false
+ },
+ "Summary: routine.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": false
+ },
+ "The local model is unavailable (fetch failed).": {
+  "gives_cause": true,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": true
+ },
+ "The local model was unavailable (fetch failed); check LM Studio is running with a model loaded. Summary of the first file: routine.": {
+  "gives_cause": true,
+  "gives_retry": true,
+  "mentions_local_model_unavailable": true
+ },
+ "The local model was unavailable. Summary of the first file: routine.": {
+  "gives_cause": false,
+  "gives_retry": false,
+  "mentions_local_model_unavailable": true
+ }
+}

@@ -1,0 +1,8 @@
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"assistant","message":{"id":"m26","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-2k.log"],"task":"summarize"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"- routine\n\n---\nModel: m | 5\u21929 tokens | 1s | text \u00b7 1 file(s) read"}]}}
+{"type":"assistant","message":{"id":"m27","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/work/app-2k.log"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"1\tK-001 INFO request handled zK-001\n2\tK-002 INFO request handled zK-002\n3\tK-003 INFO request handled zK-003\n4\tK-004 INFO request handled zK-004\n5\tK-005 INFO request handled zK-005\n6\tK-006 INFO request handled zK-006\n7\tK-007 INFO request handled zK-007\n8\tK-008 INFO request handled zK-008\n9\tK-009 INFO request handled zK-009\n10\tK-010 INFO request handled zK-010"}]}}
+{"type":"assistant","message":{"id":"m28","content":[{"type":"text","text":"Summary: routine."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Summary: routine.","permission_denials":[]}
