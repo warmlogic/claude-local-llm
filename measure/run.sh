@@ -122,8 +122,9 @@ run_one() {
   jq -r '"  \(.run): \(.status)  T=\(.T)  turns=\(.turns)  \((.duration_ms // 0) / 1000 | floor)s\(if .footer then "  local total \(.footer.total_s)s" else "" end)"' \
     "$RUN_DIR/facts/$1.json"
 }
-# job <id> <cfg> <rep>: one job run, unless the file changed since the manifest froze it. The first job of a file
-# keeps a hash-verified private copy in files/<id>, the text the quality pass grades against.
+# job <id> <cfg> <rep>: one job run, unless the file changed since the manifest froze it (checked before and after
+# the session). The first job of a file keeps a hash-verified private copy in files/<id>, the text the quality pass
+# grades against.
 job() {
   local path task want snap="$RUN_DIR/files/$1" plugin="$RUN_DIR/plugin"
   path=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 8); task=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 4)
@@ -137,6 +138,13 @@ job() {
     echo "  $1-$2-$3: FAILED: corpus-changed"; return
   fi
   run_one "$1-$2-$3" "$2" job "$1" "$3" "$path" "$(task_field "$task" prompt "$path")" "$plugin"
+  # The session read the live file: if it changed meanwhile, the answer is not about the graded copy. The run keeps
+  # its usage but fails corpus-changed. (A change undone before the session ends goes unseen; that is the limit.)
+  if [ "$(sha256_of "$path")" != "$want" ]; then
+    jq -c '.status = "corpus-changed"' "$RUN_DIR/facts/$1-$2-$3.json" > "$RUN_DIR/facts/$1-$2-$3.json.new" \
+      && mv "$RUN_DIR/facts/$1-$2-$3.json.new" "$RUN_DIR/facts/$1-$2-$3.json" || die "marking $1-$2-$3 corpus-changed"
+    echo "  $1-$2-$3: FAILED: corpus-changed (the file changed during the session)"
+  fi
 }
 
 CTL_PROMPT=$(jq -r .control_prompt "$MDIR/tasks.json")
