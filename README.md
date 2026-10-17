@@ -31,16 +31,16 @@ The model runs on LM Studio's Splash runtime. LM Studio's Settings > Runtime scr
 ~/.lmstudio/bin/lms runtime ls
 ```
 
-You want a `splash-...` row with a check mark under `SELECTED`. If there is none, find the engine and install it, then select it:
+You want a `splash-...` row with a check mark under `SELECTED`. If there is none, find the engine, install it, then select it:
 
 ```bash
 ~/.lmstudio/bin/lms runtime get splash --list   # shows the engine name and whether you have it; downloads nothing
-~/.lmstudio/bin/lms runtime get splash          # downloads it
-~/.lmstudio/bin/lms runtime select splash-mac-arm64-apple-metal-advsimd
+~/.lmstudio/bin/lms runtime get splash          # downloads it, and prints the exact select line to use
+~/.lmstudio/bin/lms runtime select splash-mac-arm64-apple-metal-advsimd --latest
 ~/.lmstudio/bin/lms runtime ls                  # confirm the check mark
 ```
 
-`runtime select` takes an engine alias and has a `--latest` flag (see `lms runtime select --help`).
+Copy the `splash-...` name from `runtime ls` or `get splash --list` rather than typing the one above, which is only the name at the time of writing. `--latest` selects the newest installed version; without it, `select` can fail with "Multiple runtime extensions found" once two versions are installed (see `lms runtime select --help`).
 
 Download the model (Splash supports only specific models, and this is the one the plugin is tested with):
 
@@ -66,7 +66,7 @@ The `CONTEXT` column should read `32768`.
 
 Why 32k: the model has to hold the whole file plus your instructions plus its answer. Source text runs about 2.7 characters per token, so a 32k context fits roughly 60k characters of input with room to spare. The skill's 60k ceiling comes from that. A model loaded with a smaller context fails on mid-sized files (see Troubleshooting).
 
-Optional hardening: turn off just-in-time model loading, so a request never silently loads a model with a default (smaller) context. The app's switch is labeled "Just-in-Time Model Loading" in the Developer tab's server options; the setting itself is `justInTimeModelLoading` in `~/.lmstudio/.internal/http-server-config.json`, and `lms` has no flag for it. With it off, a request while no model is loaded fails with `No models loaded`, which the plugin reports (see Troubleshooting).
+Optional hardening, only if you set the plugin's `model` option: just-in-time (JIT) model loading matters only when a request names a model, and the plugin's server (houtini) names one only when `model` is set. With JIT on, naming a model that is not loaded makes LM Studio load it with its default (smaller) context. With JIT off, that request fails with `Invalid model identifier ... just-in-time (JIT) model loading is disabled` instead. With `model` empty (the default) the server uses whichever model is loaded, JIT never applies, and nothing loaded gives `No models loaded` either way. To turn JIT off, use the app's "Just-in-Time Model Loading" switch in the Developer tab's server options, then restart the server. The setting is stored as `justInTimeModelLoading` in `~/.lmstudio/.internal/http-server-config.json`; `lms` has no flag for it.
 
 ## 3. Start the server on loopback
 
@@ -130,7 +130,7 @@ The plugin ships what it needs, so you do not add an allow rule.
 
 ## Smoke test
 
-Make a file of about 20k characters in a folder inside one of your `allowed_dirs` (`$HOME/github` by default), and start Claude Code from that folder:
+Make a file of about 20k characters in a folder inside one of your `allowed_dirs` (`$HOME/github` by default), and start Claude Code from that folder. If you removed `$HOME/github` from `allowed_dirs`, use one of your folders in these commands instead.
 
 ```bash
 mkdir -p "$HOME/github/local-llm-smoke"
@@ -189,9 +189,9 @@ The file is not under any folder in `allowed_dirs`. Add its folder in the plugin
 
 The file does not fit the model's context. Check `~/.lmstudio/bin/lms ps`: if `CONTEXT` is not `32768`, reload with the command in step 2 (`~/.lmstudio/bin/lms unload` first if needed). If it is `32768`, the input is over the roughly 60k-character limit; Claude should split it or read slices, not send it whole.
 
-### `Error: fetch failed`, or `No models loaded`
+### `Error: fetch failed`, `No models loaded`, or `Invalid model identifier`
 
-LM Studio is not serving, or no model is loaded. (If the `code_task_files` tool is missing from Claude's tool list instead, the plugin's server failed to start, which is not an LM Studio problem: see [the server does not connect](#the-server-does-not-connect-or-mcp-shows-it-failed) and its refusal table and log.) Run `~/.lmstudio/bin/lms server status` and `~/.lmstudio/bin/lms ps`, then start the server and load the model (steps 2 and 3). When this happens Claude does the job itself with its Read and Grep tools, and the final reply of that turn tells you the cause and how to retry. Later turns in the same session answer without mentioning it and do not call the local model again, so after you fix LM Studio, tell Claude to "try the local model again". Treat this as best-effort behavior from the skill's instructions, not a guarantee.
+LM Studio is not serving, or no model is loaded. `Invalid model identifier ... just-in-time (JIT) model loading is disabled` means the `model` option names a model that is not loaded while JIT is off: load that model (step 2) or clear the option. (If the `code_task_files` tool is missing from Claude's tool list instead, the plugin's server failed to start, which is not an LM Studio problem: see [the server does not connect](#the-server-does-not-connect-or-mcp-shows-it-failed) and its refusal table and log.) Run `~/.lmstudio/bin/lms server status` and `~/.lmstudio/bin/lms ps`, then start the server and load the model (steps 2 and 3). When this happens Claude does the job itself with its Read and Grep tools, and the final reply of that turn tells you the cause and how to retry. Later turns in the same session answer without mentioning it and do not call the local model again, so after you fix LM Studio, tell Claude to "try the local model again". Treat this as best-effort behavior from the skill's instructions, not a guarantee.
 
 ### Claude never delegates
 
