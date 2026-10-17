@@ -21,30 +21,39 @@ try {
 const prompt = typeof input.prompt === 'string' ? input.prompt : '';
 const cwd = typeof input.cwd === 'string' && isAbsolute(input.cwd) ? input.cwd : process.cwd();
 
-// A quoted span (so a path may contain spaces) or a whitespace-delimited token, trimmed of wrapping punctuation.
-const CANDIDATE = /"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|(\S+)/g;
+// A quoted span (so a path may contain spaces) or a whitespace-delimited token that holds no quote characters, so
+// ("/a dir/x.txt") yields the quoted span. The tokens inside a quoted span are candidates too, which keeps a stray
+// apostrophe in prose from hiding a path.
+const CANDIDATE = /"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s"'`]+)/g;
 const clean = (t) => t.replace(/^[\s"'`(<[{@]+/, '').replace(/[\s"'`)>\]},.;:!?]+$/, '');
 const isPathLike = (t) => t.includes('/') || t.startsWith('~') || /\.[A-Za-z0-9]{1,10}$/.test(t);
 
 const statted = new Set();
 const hinted = new Set();
 const lines = [];
-for (const m of prompt.matchAll(CANDIDATE)) {
-  if (lines.length >= MAX_FILES || statted.size >= MAX_STATS) break;
-  const t = clean(m[1] ?? m[2] ?? m[3] ?? m[4] ?? '');
-  if (!t || t.length > 4096 || !isPathLike(t)) continue;
+const done = () => lines.length >= MAX_FILES || statted.size >= MAX_STATS;
+function consider(token) {
+  const t = clean(token);
+  if (!t || t.length > 4096 || !isPathLike(t)) return;
   const expanded = t === '~' ? homedir() : t.startsWith('~/') ? resolve(homedir(), t.slice(2)) : t;
   const path = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
-  if (statted.has(path)) continue; // the same file named twice (quoted and bare) uses one slot
+  if (statted.has(path)) return; // the same file named twice (quoted and bare) uses one slot
   statted.add(path);
   try {
     const st = statSync(path);
-    if (!st.isFile() || st.size < MIN_BYTES || hinted.has(path)) continue;
+    if (!st.isFile() || st.size < MIN_BYTES || hinted.has(path)) return;
     hinted.add(path);
     lines.push(`local-llm: ${path} is about ${st.size.toLocaleString('en-US')} bytes; if the job is a bounded read-only text task (summarize, classify, extract), the delegate-local skill applies.`);
   } catch {
     // stat failed (missing path, no permission, name too long, ...): not a file to hint about
   }
+}
+for (const m of prompt.matchAll(CANDIDATE)) {
+  if (done()) break;
+  const span = m[1] ?? m[2] ?? m[3];
+  if (span === undefined) { consider(m[4]); continue; }
+  consider(span);
+  for (const inner of span.matchAll(/\S+/g)) { if (done()) break; consider(inner[0]); }
 }
 if (lines.length > 0) {
   process.stdout.write(JSON.stringify({

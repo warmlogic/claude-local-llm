@@ -324,7 +324,8 @@ SHD="$TMP/hint"; mkdir -p "$SHD/a dir"
 head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/big.txt"; head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/a dir/big file.txt"
 head -c 9999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/zero | tr '\0' 'a' > "$SHD/small.txt"
 for n in 1 2 3 4; do head -c 11000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
-hint_json() { jq -nc --arg p "$1" --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:$p}'; }
+# the prompt goes through stdin: a 260 KB value would exceed a single argument's limit on some systems
+hint_json() { printf '%s' "$1" | jq -Rsc --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:.}'; }
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
 if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 bytes; if the job is a bounded read-only text task (summarize, classify, extract), the delegate-local skill applies."))' >/dev/null <<<"$h"; then
   ok "size hint: emits for a big absolute path"
@@ -332,6 +333,12 @@ else bad "size hint: emits for a big absolute path ($h)"; fi
 h=$(hint_out "$(hint_json "Classify big.txt please.")")
 if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
 else bad "size hint: relative path ($h)"; fi
+h=$(hint_out "$(hint_json "Summarize (\"$SHD/a dir/big file.txt\")")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a parenthesized quoted path with spaces"
+else bad "size hint: parenthesized quoted path with spaces ($h)"; fi
+h=$(hint_out "$(hint_json "Don't summarize 'x' for me, just $SHD/big.txt")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an apostrophe in prose does not hide a path"
+else bad "size hint: apostrophe in prose ($h)"; fi
 h=$(hint_out "$(hint_json "Summarize \"$SHD/a dir/big file.txt\"")")
 if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a quoted path with spaces"
 else bad "size hint: quoted path with spaces ($h)"; fi
