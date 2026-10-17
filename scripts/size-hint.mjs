@@ -72,8 +72,9 @@ if (files.length > 0) {
     if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices, or use batch/run.mjs for many-window jobs.`;
     return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too.`;
   });
-  if (files.length > 1 && files.reduce((sum, f) => sum + f.size, 0) > capChars) {
-    lines.push('local-llm: The files together exceed the loaded context; delegate them one call per file.');
+  const fitting = files.filter((f) => f.size <= capChars);
+  if (fitting.length > 1 && fitting.reduce((sum, f) => sum + f.size, 0) > capChars) {
+    lines.push('local-llm: The files that fit exceed the loaded context together; if the job is delegated, make one call per file.');
   }
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: lines.join('\n') },

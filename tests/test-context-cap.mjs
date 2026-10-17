@@ -144,10 +144,11 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   }
   assert.match(lines[2], /too big for the loaded model's context.*32,768 tokens, about 45,875 chars.*Grep or Read the relevant slices, or use batch\/run.mjs for many-window jobs/);
   assert.doesNotMatch(lines[2], /invoke/);
-  assert.equal(lines[3], 'local-llm: The files together exceed the loaded context; delegate them one call per file.');
+  assert.equal(lines[3], 'local-llm: The files that fit exceed the loaded context together; if the job is delegated, make one call per file.');
   const requests = readFileSync(f.log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(requests.map((r) => r.url), ['/api/v0/models']);
-  assert.doesNotMatch(await hint(f.endpoint, [30000]), /files together/);
+  assert.doesNotMatch(await hint(f.endpoint, [30000]), /together/);
+  assert.doesNotMatch(await hint(f.endpoint, [50000, 50000]), /together/); // oversized files never get a delegate-per-file line
   const large = await fake(65536);
   assert.doesNotMatch(await hint(large.endpoint, [30000, 30000]), /files together/);
 });
