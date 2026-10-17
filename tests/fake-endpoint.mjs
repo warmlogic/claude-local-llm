@@ -6,6 +6,12 @@
 //   no-model  mirrors LM Studio with nothing loaded: /v1/models is an empty list, /api/v0/models shows one
 //             downloaded model with state "not-loaded", and chat completions fail with LM Studio's
 //             "No models loaded" error (HTTP 404).
+//   verify    stands in for the verify server's model: /api/v0/models shows one loaded model, and a chat
+//             completion answers {"label": ...} from a marker in the CLAIM line: "[yes]" -> SUPPORTED,
+//             "[split]" -> SUPPORTED on even seeds and CONTRADICTED on odd ones, else NOT_IN_SOURCE.
+//             Logs the parsed request body too.
+//   verify-stall-once  as verify, but the first request for each seed never answers.
+//   verify-stall       chat completions never answer.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
 
@@ -15,8 +21,33 @@ const json = (res, status, body) => {
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify(body));
 };
+const seen = new Set();
+const verifyLabel = (body) => {
+  const claim = (body.messages?.at(-1)?.content.match(/^CLAIM: (.*)$/m) || [])[1] ?? '';
+  if (claim.includes('[yes]')) return 'SUPPORTED';
+  if (claim.includes('[split]')) return body.seed % 2 === 0 ? 'SUPPORTED' : 'CONTRADICTED';
+  return 'NOT_IN_SOURCE';
+};
+const verify = (req, res) => {
+  if (req.url === '/api/v0/models') {
+    return json(res, 200, { object: 'list', data: [{ id: 'fake-verify-model', object: 'model', type: 'llm', state: 'loaded' }] });
+  }
+  if (req.url !== '/v1/chat/completions') return json(res, 404, { error: `Unexpected endpoint (${req.url})` });
+  let raw = '';
+  req.on('data', (d) => { raw += d; });
+  req.on('end', () => {
+    const body = JSON.parse(raw);
+    appendFileSync(logFile, JSON.stringify({ url: req.url, body }) + '\n');
+    if (mode === 'verify-stall' || (mode === 'verify-stall-once' && !seen.has(body.seed))) {
+      seen.add(body.seed);
+      return; // never answer
+    }
+    json(res, 200, { choices: [{ message: { role: 'assistant', content: JSON.stringify({ label: verifyLabel(body) }) } }] });
+  });
+};
 const server = createServer((req, res) => {
   appendFileSync(logFile, JSON.stringify({ url: req.url, headers: req.headers }) + '\n');
+  if (mode.startsWith('verify')) return verify(req, res);
   if (mode === 'error500') {
     const models = [{ id: 'broken-model', object: 'model', type: 'llm', state: 'loaded' }];
     if (req.url === '/v1/models' || req.url === '/api/v0/models') return json(res, 200, { object: 'list', data: models });

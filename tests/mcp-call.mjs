@@ -1,5 +1,5 @@
 // Drive a stdio MCP server over JSON-RPC: initialize, then optionally one tools/call.
-// Usage: node mcp-call.mjs <server-command> [tool] [json-args]
+// Usage: node mcp-call.mjs <server-command> [tool] [json-args]   (tool "--list" sends tools/list instead)
 // Prints one JSON line: {"init":bool,"serverName":str|null,"initError":str|null,"exit":int|null,"timedOut":bool,"stderr":str,"call":{"isError":bool,"text":str}|null}
 // Environment is inherited from the caller. Exits 0 whenever it could report.
 import { spawn } from 'node:child_process';
@@ -39,9 +39,11 @@ child.stdout.on('data', (d) => {
       send({ jsonrpc: '2.0', method: 'notifications/initialized' });
       if (!tool) return finish();
       arm(CALL_TIMEOUT_MS);
-      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool, arguments: JSON.parse(argJson || '{}') } });
+      if (tool === '--list') send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+      else send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool, arguments: JSON.parse(argJson || '{}') } });
     } else if (m.id === 2) {
-      const r = m.result ?? { isError: true, content: [{ text: JSON.stringify(m.error) }] };
+      const r = tool === '--list' && m.result ? { content: [{ text: JSON.stringify(m.result) }] }
+        : m.result ?? { isError: true, content: [{ text: JSON.stringify(m.error) }] };
       out.call = { isError: !!r.isError, text: (r.content || []).map((c) => c.text || '').join('\n') };
       finish();
     }

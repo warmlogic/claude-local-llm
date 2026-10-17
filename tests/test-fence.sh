@@ -414,6 +414,11 @@ else bad "skill allowed-tools entries missing from the names table:${missing:- (
 if [ "$(wc -l < "$skill")" -le 80 ]; then ok "skill stays within its 80-line budget"
 else bad "skill is over its 80-line budget ($(wc -l < "$skill") lines)"; fi
 
+# --- the local-verify server: its own offline suite (fake endpoint only) --------
+vt=$(bash "$SCRIPT_DIR/test-verify.sh" 2>&1); vt_rc=$?
+if [ "$vt_rc" -eq 0 ] && grep -q '^verify pass=[1-9][0-9]* fail=0$' <<<"$vt"; then ok "local-verify suite ($(tail -1 <<<"$vt"))"
+else bad "local-verify suite (rc=$vt_rc): $(grep -E 'FAIL|^verify pass' <<<"$vt" | head -5 | tr '\n' ';')"; fi
+
 # --- model-backed cases --------------------------------------------------------
 gen_text 20000 > "$TMP/root/twenty-k.txt"
 
