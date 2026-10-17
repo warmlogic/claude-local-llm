@@ -349,6 +349,13 @@ done
 # empty included, and never consults NO_PROXY (Node reads no_proxy ?? NO_PROXY, so an empty
 # lowercase value beats NO_PROXY='*').
 PROXY_NAMES=(HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NODE_USE_ENV_PROXY)
+# The launcher's scrub, the server's refusal and this test must name the same variables.
+from_scrub=$(sed -n 's/^unset //p' "$REPO/scripts/no-proxy.sh" | tr ' ' '\n' | sort | tr '\n' ' ')
+from_server=$(grep '^const PROXY_VARS = ' "$REPO/server/verify-server.mjs" | grep -oE "'[A-Za-z_]+'" | tr -d "'" | sort | tr '\n' ' ')
+from_test=$(printf '%s\n' "${PROXY_NAMES[@]}" | sort | tr '\n' ' ')
+if [ -n "$from_test" ] && [ "$(wc -w <<<"$from_test")" -eq 7 ] && [ "$from_scrub" = "$from_test" ] && [ "$from_server" = "$from_test" ]; then
+  ok "no-proxy.sh, the server's PROXY_VARS and this test name the same 7 variables"
+else bad "proxy lists differ: no-proxy.sh [$from_scrub] server [$from_server] test [$from_test]"; fi
 unset_all=(); for n in "${PROXY_NAMES[@]}" NO_PROXY no_proxy; do unset_all+=(-u "$n"); done
 direct() { # <env assignments...>: start the server directly and call it once
   env "${unset_all[@]}" "$@" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" \
