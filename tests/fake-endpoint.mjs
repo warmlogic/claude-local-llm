@@ -1,6 +1,8 @@
-// Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file> [mode] [redirect-url]
+// Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file> [mode] [redirect-url|context-tokens]
 // Writes its random port to <port-file> and appends one JSON line of request headers per request to <log-file>.
 // Modes:
+//   context   loaded chat plus embeddings/unloaded decoys; argv[5] is loaded_context_length.
+//             Chat completions behave like batch.
 //   models    (default) answers every request with an OpenAI-style list of two fake chat models.
 //   error500  lists one loaded model but fails every chat completion with HTTP 500 (an "Other failure" for the skill).
 //   no-model  mirrors LM Studio with nothing loaded: /v1/models is an empty list, /api/v0/models shows one
@@ -171,6 +173,14 @@ const proxy = (req, res) => {
 const server = createServer((req, res) => {
   appendFileSync(logFile, JSON.stringify({ url: req.url, headers: req.headers }) + '\n');
   if (mode === 'proxy') return proxy(req, res);
+  if (mode === 'context') {
+    if (req.url === '/api/v0/models') return json(res, 200, { data: [
+      { id: 'fake-embed', type: 'embeddings', state: 'loaded', loaded_context_length: 999999 },
+      { id: 'fake-idle', type: 'llm', state: 'not-loaded', loaded_context_length: 999999 },
+      { id: 'fake-context', type: 'llm', state: 'loaded', loaded_context_length: Number(redirectUrl) },
+    ] });
+    return batch(req, res);
+  }
   if (mode.startsWith('batch')) return batch(req, res);
   if (mode.startsWith('verify')) return verify(req, res);
   if (mode === 'error500') {

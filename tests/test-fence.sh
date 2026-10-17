@@ -22,8 +22,8 @@ done
 
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }                                 # roots and fixtures
 HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }  # under $HOME when the repo is
-FAKE_PID=""; NM_PID=""; E5_PID=""
-trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; [ -z "$E5_PID" ] || kill "$E5_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
+FAKE_PID=""; NM_PID=""; E5_PID=""; CONTEXT_PID=""
+trap '[ -z "$CONTEXT_PID" ] || kill "$CONTEXT_PID" 2>/dev/null; [ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; [ -z "$E5_PID" ] || kill "$E5_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
 
 # Ambient houtini variables must not leak into any case; the scrub test sets them explicitly.
 unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
@@ -286,7 +286,7 @@ fi
 
 # --- the bad-answer flags the skill lists still exist in the pinned houtini (string check; the harness reads them off the footer line) ---
 if [ -n "$dist" ]; then
-  flag_json=$(DELEG_PRINT_FLAGS=1 bash "$SCRIPT_DIR/test-delegation.sh" 2>/dev/null); flag_rc=$?
+  flag_json=$(DELEG_SELFTEST=1 DELEG_JUDGE=stub DELEG_PRINT_FLAGS=1 bash "$SCRIPT_DIR/test-delegation.sh" 2>/dev/null); flag_rc=$?
   flag_count=$(jq 'length' <<<"$flag_json" 2>/dev/null || echo 0)
   flag_missing=""
   while IFS= read -r flag; do [ -z "$flag" ] || grep -qF -- "$flag" "$dist/index.js" || flag_missing="$flag_missing [$flag]"; done < <(jq -r '.[]' <<<"$flag_json" 2>/dev/null)
@@ -296,7 +296,7 @@ if [ -n "$dist" ]; then
 else skp "houtini 3.3.4 dist not in the npx cache; bad-answer flag check"; fi
 # the harness refuses to start when the skill's flag rows cannot be read
 for f in skill-renamed-bad-row.md skill-renamed-other-row.md; do
-  out=$(DELEG_SKILL_MD="$SCRIPT_DIR/fixtures/deleg/$f" bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); rc=$?
+  out=$(DELEG_SELFTEST=1 DELEG_JUDGE=stub DELEG_SKILL_MD="$SCRIPT_DIR/fixtures/deleg/$f" bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); rc=$?
   if [ "$rc" -ne 0 ] && grep -q "skill_flags:" <<<"$out"; then ok "harness start fails on a skill table with a missing flag row ($f)"
   else bad "harness start should fail on $f (rc=$rc: ${out:0:150})"; fi
 done
@@ -354,32 +354,37 @@ else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------
 SH="$REPO/scripts/size-hint.mjs"
-hint_out() { printf '%s' "$1" | node "$SH"; }
+node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/context.port" "$TMP/context.log" context 32768 &
+CONTEXT_PID=$!
+for _ in $(seq 1 50); do [ -s "$TMP/context.port" ] && break; sleep 0.1; done
+[ -s "$TMP/context.port" ] || { echo "FAIL: context endpoint did not start"; exit 1; }
+HINT_ENDPOINT="http://127.0.0.1:$(cat "$TMP/context.port")"
+hint_out() { printf '%s' "$1" | LOCAL_LLM_ENDPOINT_URL="$HINT_ENDPOINT" LOCAL_LLM_MODEL= node "$SH"; }
 SHD="$TMP/hint"; mkdir -p "$SHD/a dir"
-head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/big.txt"; head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/a dir/big file.txt"
-head -c 9999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/zero | tr '\0' 'a' > "$SHD/small.txt"
-for n in 1 2 3 4; do head -c 11000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
+head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/big.txt"; head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/a dir/big file.txt"
+head -c 29999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/zero | tr '\0' 'a' > "$SHD/small.txt"
+for n in 1 2 3 4; do head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
 # the prompt goes through stdin: a 260 KB value would exceed a single argument's limit on some systems
 hint_json() { printf '%s' "$1" | jq -Rsc --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:.}'; }
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
-if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 bytes. If this turn\u0027s job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too."))' >/dev/null <<<"$h"; then
+if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 35,000 bytes (a char proxy). Context cap: 32,768 tokens, about 71,680 chars; loaded. If this turn\u0027s job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too."))' >/dev/null <<<"$h"; then
   ok "size hint: emits for a big absolute path"
 else bad "size hint: emits for a big absolute path ($h)"; fi
 h=$(hint_out "$(hint_json "Classify big.txt please.")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
 else bad "size hint: relative path ($h)"; fi
 h=$(hint_out "$(hint_json "Summarize (\"$SHD/a dir/big file.txt\")")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a parenthesized quoted path with spaces"
+if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a parenthesized quoted path with spaces"
 else bad "size hint: parenthesized quoted path with spaces ($h)"; fi
-head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/customer's-notes.md"
+head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/customer's-notes.md"
 h=$(hint_out "$(hint_json "Summarize $SHD/customer's-notes.md please")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("customer'"'"'s-notes.md is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an unquoted path with an apostrophe in its name"
+if jq -e '.hookSpecificOutput.additionalContext | contains("customer'"'"'s-notes.md is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an unquoted path with an apostrophe in its name"
 else bad "size hint: apostrophe in a file name ($h)"; fi
 h=$(hint_out "$(hint_json "Don't summarize 'x' for me, just $SHD/big.txt")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an apostrophe in prose does not hide a path"
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: an apostrophe in prose does not hide a path"
 else bad "size hint: apostrophe in prose ($h)"; fi
 h=$(hint_out "$(hint_json "Summarize \"$SHD/a dir/big file.txt\"")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a quoted path with spaces"
+if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a quoted path with spaces"
 else bad "size hint: quoted path with spaces ($h)"; fi
 for p in "Summarize $SHD/small.txt" "Summarize $SHD/just-under.txt" "Summarize $SHD/missing.txt" "Summarize $SHD" "Summarize $SHD/a dir" "Say hello" ""; do
   if [ -z "$(hint_out "$(hint_json "$p")")" ]; then ok "size hint: silent for: ${p:-<empty prompt>}"
@@ -394,14 +399,14 @@ if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' 
 else bad "size hint: caps the hint at 3 files ($h)"; fi
 many_words=$(awk 'BEGIN{for(i=0;i<130000;i++) printf "w "}')
 h=$(hint_out "$(hint_json "$many_words $SHD/big.txt")"); rc=$?
-if [ "$rc" -eq 0 ] && jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: 130k short words do not crash it, and the path after them still gets the hint"
+if [ "$rc" -eq 0 ] && jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: 130k short words do not crash it, and the path after them still gets the hint"
 else bad "size hint: 130k short words (rc=$rc, ${h:0:100})"; fi
 filler=$(awk 'BEGIN{for(i=0;i<400;i++) printf "word%d ", i}')
 h=$(hint_out "$(hint_json "$filler $SHD/big.txt")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: a path after 400 filler words gets the hint"
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: a path after 400 filler words gets the hint"
 else bad "size hint: path after 400 filler words (${h:0:100})"; fi
-h=$(printf '%s' "$(hint_json "Classify ~/big.txt")" | HOME="$SHD" node "$SH")
-if jq -e '.hookSpecificOutput.additionalContext | contains("/big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: expands ~/ against HOME"
+h=$(printf '%s' "$(hint_json "Classify ~/big.txt")" | HOME="$SHD" LOCAL_LLM_ENDPOINT_URL="$HINT_ENDPOINT" LOCAL_LLM_MODEL= node "$SH")
+if jq -e '.hookSpecificOutput.additionalContext | contains("/big.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: expands ~/ against HOME"
 else bad "size hint: ~/ path (${h:0:100})"; fi
 h=$(hint_out "$(hint_json "Compare \"$SHD/big.txt\" with $SHD/big.txt and big.txt")")
 if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' ')" = 1 ]; then ok "size hint: one file named quoted and bare gets one line"
@@ -437,6 +442,11 @@ if [ -n "$allowed" ] && [ -z "$missing" ]; then ok "every allowed-tools entry in
 else bad "skill allowed-tools entries missing from the names table:${missing:- (no allowed-tools line)}"; fi
 if [ "$(wc -l < "$skill")" -le 80 ]; then ok "skill stays within its 80-line budget"
 else bad "skill is over its 80-line budget ($(wc -l < "$skill") lines)"; fi
+
+# --- context bounds: helper, hook and default batch window (offline) ------------
+if node --test "$SCRIPT_DIR/test-context-cap.mjs" > "$TMP/context-tests.log" 2>&1; then
+  ok "context bounds suite (helper, hook and batch integration)"
+else bad "context bounds suite: $(tail -15 "$TMP/context-tests.log" | tr '\n' ';')"; fi
 
 # --- the local-verify server: its own offline suite (fake endpoint only) --------
 vt=$(bash "$SCRIPT_DIR/test-verify.sh" 2>&1); vt_rc=$?

@@ -1,6 +1,6 @@
 ---
 name: delegate-local
-description: Offload a bounded text job on a large file or log (about 10k to 60k characters) to the local model instead of reading it yourself. Use it unprompted when asked to summarize, classify, extract from, or draft from a big file, log, or document, including the user's own project files and docs. Not for small files, decisions, edits, or anything secret.
+description: Offload a bounded text job on a large file or log (about 30k characters up to the loaded context cap; about 70k without a size hint) to the local model instead of reading it yourself. Use it unprompted when asked to summarize, classify, extract from, or draft from a big file, log, or document, including the user's own project files and docs. Not for small files, decisions, edits, or anything secret.
 allowed-tools: mcp__plugin_local-llm_local-llm__code_task_files
 ---
 
@@ -26,11 +26,11 @@ Swapping the server edits this table and the `allowed-tools` line above, nothing
 
 ## When to delegate
 
-A bounded text job (summarize, classify, extract, draft) over one or a few files of about 10k+ characters and at most about 60k. Get the size without reading the file: `wc -c <file>` (sum for several). The 60k ceiling is a rule of thumb from the 32k context and about 2.7 chars per token; it holds until measured on real files. Skip the tool for anything smaller; reading it yourself is cheaper.
+A bounded text job (summarize, classify, extract, draft) over one or a few files totaling about 30k characters up to the cap stated by the size hint, which follows the loaded model's context. Without a hint, assume about 70k. Get the size without reading the file: `wc -c <file>` (sum for several; bytes are a char proxy). Below 30k, reading it yourself is cheaper: measured break-even is near 25k, with about 50% savings near 50k. The cap reserves prompt and answer room and remains a conservative estimate.
 
 ## When not to
 
-Small inputs. Decisions, judgment, security review, multi-file edits, or anything needing your tools. Secrets, credentials, or files outside the allowed folders. Jobs where a wrong answer is costly and you cannot spot-check it. Input over about 60k characters: do not send it whole; Grep or Read the relevant slices yourself, or split it into pieces under 60k and make one call each. Many files, or a mining job over a lot of text (transcripts, logs): run the plugin's `batch/run.mjs` in the background (AGENTS.md, "Batch runner") and read only its `index.md`.
+Small inputs. Decisions, judgment, security review, multi-file edits, or anything needing your tools. Secrets, credentials, or files outside the allowed folders. Jobs where a wrong answer is costly and you cannot spot-check it. Input over the size hint's cap (about 70k characters without a hint): do not send it whole; Grep or Read the relevant slices yourself, or split it into pieces under the cap and make one call each. Many files, or a mining job over a lot of text (transcripts, logs): run the plugin's `batch/run.mjs` in the background (AGENTS.md, "Batch runner") and read only its `index.md`.
 
 ## How to call
 

@@ -2,13 +2,14 @@
 // Usage: node run.mjs --job <job.json> --out <dir> <input files...>
 // Runs one extraction prompt over many text files on the local model (LM Studio, loopback only), window by
 // window, and writes rows.jsonl, dropped.jsonl, failures.jsonl and a short index.md. See AGENTS.md "Batch runner".
-// job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars",
+// job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars"?,
 // "reasoning_effort"?}. index.md is the one file Claude reads, so it never claims more than happened: a stub
 // says RUNNING until the final index replaces it, and its header says how many windows were answered.
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopback.mjs';
+import { getContextCap } from '../scripts/context-cap.mjs';
 import { upstreamCode } from '../server/endpoint.mjs';
 
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -114,17 +115,19 @@ const parseArgs = (args) => {
   return { opt, files };
 };
 
-const loadJob = (path) => {
+const loadJob = async (path, endpoint) => {
   let job;
   try { job = JSON.parse(readFileSync(path, 'utf8')); } catch (e) { usage(`cannot read job: ${e.message}`); }
-  const cap = job?.max_window_chars ?? 50000;
+  const defaults = job?.max_window_chars === undefined ? await getContextCap({ endpoint }) : null;
+  const cap = defaults ? defaults.capChars : job.max_window_chars;
+  const capSource = defaults ? defaults.source : 'job';
   if (typeof job?.prompt !== 'string' || !Number.isInteger(cap) || cap < 1) usage('job needs a prompt and a positive integer max_window_chars');
   if (!job.row_schema || typeof job.row_schema !== 'object' || Array.isArray(job.row_schema)) usage('job row_schema must be a JSON schema object');
   const reserved = RESERVED_ROW_KEYS.filter((k) => Object.hasOwn(job.row_schema.properties ?? {}, k));
   if (reserved.length) usage(`row_schema may not declare ${reserved.join(', ')}: the runner sets them`);
   const check = job.check ?? 'none';
   if (check !== 'none' && check !== 'quote-in-line') usage(`unknown check: ${check}`);
-  return { job, cap, check };
+  return { job, cap, check, capSource };
 };
 
 let indexPath = null;
@@ -136,7 +139,7 @@ const main = async () => {
   if (new Set(files.map((f) => basename(f))).size !== files.length) usage('input files must have distinct basenames (results are keyed by basename)');
   const endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234';
   if (!isLoopbackEndpoint(endpoint)) usage(loopbackError(endpoint));
-  const { job, cap, check } = loadJob(opt.job);
+  const { job, cap, check, capSource } = await loadJob(opt.job, endpoint);
 
   if (check === 'quote-in-line') { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
     for (const f of files) {
@@ -186,6 +189,7 @@ const main = async () => {
       if (check === 'quote-in-line' && lineMap.size < win.length) fail('duplicate_line_id', name, w, 'a line id repeats in this window');
       else {
         const body = {
+          ...(process.env.LOCAL_LLM_MODEL ? { model: process.env.LOCAL_LLM_MODEL } : {}),
           messages: [{ role: 'user', content: `${job.prompt}\n\n--- BEGIN TEXT ---\n${win.join('\n')}\n--- END TEXT ---` }],
           // reasoning off by default: a reasoning model otherwise spends the whole token budget thinking and returns no rows
           temperature: 0, max_tokens: MAX_TOKENS, reasoning_effort: job.reasoning_effort ?? 'none',
@@ -228,7 +232,7 @@ const main = async () => {
   const shown = stats.perFile.slice(0, MAX_FILES_LISTED);
   const summary = [
     header,
-    `Windows: ${stats.windows} across ${stats.reached} of ${files.length} files (max ${cap} chars each). Started ${started.toISOString()}, wall time ${Math.round((Date.now() - started) / 1000)} s.`,
+    `Windows: ${stats.windows} across ${stats.reached} of ${files.length} files (max ${cap} chars each; source: ${capSource}). Started ${started.toISOString()}, wall time ${Math.round((Date.now() - started) / 1000)} s.`,
     `Rows: ${stats.kept} kept, ${stats.dropped} dropped by check "${check}"${total ? ` (${Math.round((100 * stats.kept) / total)}% passing)` : ''}.`,
     `Kept per kind: ${list(stats.kinds)}.`,
     `Failures: ${list(stats.failures)}.`,
