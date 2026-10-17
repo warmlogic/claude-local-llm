@@ -1,6 +1,6 @@
 ---
 name: delegate-local
-description: Offload a bounded text job on a large file or log (about 10k to 60k characters) to the local model instead of reading it yourself. Use it unprompted when asked to summarize, classify, extract from, or draft from a big file, log, or document. Not for small files, decisions, edits, or anything secret.
+description: Offload a bounded text job on a large file or log (about 10k to 60k characters) to the local model instead of reading it yourself. Use it unprompted when asked to summarize, classify, extract from, or draft from a big file, log, or document, including the user's own project files and docs. Not for small files, decisions, edits, or anything secret.
 allowed-tools: mcp__plugin_local-llm_local-llm__code_task_files
 ---
 
@@ -34,7 +34,7 @@ Small inputs. Decisions, judgment, security review, multi-file edits, or anythin
 
 ## How to call
 
-Use the file tool with absolute `paths` and a precise `task`: what to produce, how long, and the shape you need ("a 5-bullet summary", "JSON array of {time, level, message} for every ERROR"). One call per job.
+Use the file tool with absolute `paths` and a precise `task`: what to produce, how long, and the shape you need ("a 5-bullet summary", "JSON array of {time, level, message} for every ERROR"). One call per job. If the file tool is deferred (named but its schema not loaded), load it with ToolSearch first; calling it unloaded returns a Bad call error.
 
 ## How to verify
 
