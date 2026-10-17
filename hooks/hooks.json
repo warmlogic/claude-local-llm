@@ -2,8 +2,13 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Skill",
-        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/approve-skill.mjs\"" }]
+        "matcher": "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/approve-own-tools.mjs\"" }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/size-hint.mjs\"", "timeout": 5 }]
       }
     ]
   }

@@ -281,24 +281,79 @@ else
 fi
 
 # --- delegate-local skill and its approval hook --------------------------------
-HOOK="$REPO/scripts/approve-skill.mjs"
+HOOK="$REPO/scripts/approve-own-tools.mjs"
 skill="$REPO/skills/delegate-local/SKILL.md"
 hook_out() { printf '%s' "$1" | node "$HOOK"; }
 if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local"}}' \
    | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
   ok "approval hook allows the plugin's own skill"
 else bad "approval hook allows the plugin's own skill"; fi
+for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_local-verify__verify_claims; do
+  if hook_out "{\"tool_name\":\"$t\",\"tool_input\":{}}" \
+     | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
+    ok "approval hook allows the plugin's read-only tool $t"
+  else bad "approval hook allows the plugin's read-only tool $t"; fi
+done
 for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local2"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"delegate-local"}}' \
              '{"tool_name":"Bash","tool_input":{"skill":"local-llm:delegate-local"}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__chat","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__custom_prompt","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__embed","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task_files2","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-verify__other","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_other_local-llm__code_task_files","tool_input":{}}' \
              '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
   if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
   else bad "approval hook stays silent for: ${input:-<empty>}"; fi
 done
-if jq -e '.hooks.PreToolUse | any(.matcher == "Skill" and any(.hooks[]; (.command | contains("scripts/approve-skill.mjs"))))' "$REPO/hooks/hooks.json" >/dev/null 2>&1 \
-   && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"
-else bad "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"; fi
+if jq -e '.hooks.PreToolUse | any((.matcher | split("|") | index("Skill") != null) and any(.hooks[]; (.command | contains("scripts/approve-own-tools.mjs"))))' "$REPO/hooks/hooks.json" >/dev/null 2>&1 \
+   && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"
+else bad "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"; fi
+matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$REPO/hooks/hooks.json" 2>/dev/null)
+if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
+  ok "PreToolUse matcher covers exactly the skill and the two read-only tools"
+else bad "PreToolUse matcher is: $matcher"; fi
+
+# --- size-hint hook (UserPromptSubmit) -------------------------------------------
+SH="$REPO/scripts/size-hint.mjs"
+hint_out() { printf '%s' "$1" | node "$SH"; }
+SHD="$TMP/hint"; mkdir -p "$SHD/a dir"
+head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/big.txt"; head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/a dir/big file.txt"
+head -c 9999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/zero | tr '\0' 'a' > "$SHD/small.txt"
+for n in 1 2 3 4; do head -c 11000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
+hint_json() { jq -nc --arg p "$1" --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:$p}'; }
+h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
+if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 characters; the delegate-local skill applies"))' >/dev/null <<<"$h"; then
+  ok "size hint: emits for a big absolute path"
+else bad "size hint: emits for a big absolute path ($h)"; fi
+h=$(hint_out "$(hint_json "Classify big.txt please.")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
+else bad "size hint: relative path ($h)"; fi
+h=$(hint_out "$(hint_json "Summarize \"$SHD/a dir/big file.txt\"")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000")' >/dev/null <<<"$h"; then ok "size hint: handles a quoted path with spaces"
+else bad "size hint: quoted path with spaces ($h)"; fi
+for p in "Summarize $SHD/small.txt" "Summarize $SHD/just-under.txt" "Summarize $SHD/missing.txt" "Summarize $SHD" "Summarize $SHD/a dir" "Say hello" ""; do
+  if [ -z "$(hint_out "$(hint_json "$p")")" ]; then ok "size hint: silent for: ${p:-<empty prompt>}"
+  else bad "size hint: silent for: ${p:-<empty prompt>}"; fi
+done
+for bad_in in 'not json' '' '{"prompt":42}' '{}'; do
+  if [ -z "$(hint_out "$bad_in")" ]; then ok "size hint: silent for input: ${bad_in:-<empty>}"
+  else bad "size hint: silent for input: ${bad_in:-<empty>}"; fi
+done
+h=$(hint_out "$(hint_json "Compare $SHD/many1.txt $SHD/many2.txt $SHD/many3.txt $SHD/many4.txt")")
+if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' ')" = 3 ]; then ok "size hint: caps the hint at 3 files"
+else bad "size hint: caps the hint at 3 files ($h)"; fi
+long_prompt="Summarize $SHD/big.txt $(head -c 200000 /dev/zero | tr '\0' 'x')"
+t0=$SECONDS
+for _ in 1 2 3 4 5; do hint_out "$(hint_json "$long_prompt")" >/dev/null; done
+if [ $((SECONDS - t0)) -le 5 ]; then ok "size hint: five runs on a 200 KB prompt finish within 5 s"
+else bad "size hint: five runs took $((SECONDS - t0)) s"; fi
+if jq -e '.hooks.UserPromptSubmit | any(.[]; any(.hooks[]; (.command | contains("scripts/size-hint.mjs"))))' "$REPO/hooks/hooks.json" >/dev/null 2>&1; then ok "hooks.json registers scripts/size-hint.mjs on UserPromptSubmit"
+else bad "hooks.json registers scripts/size-hint.mjs on UserPromptSubmit"; fi
+
 st=$(DELEG_SELFTEST=1 DELEG_JUDGE=stub bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); st_rc=$?
 st_calls=$(grep -cE '^  expect(_[a-z]+)? "' "$SCRIPT_DIR/test-delegation.sh")
 st_total=$(sed -n 's/^selftest total: \([0-9]*\), failed: 0$/\1/p' <<<"$st")
