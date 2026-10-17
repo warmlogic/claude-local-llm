@@ -30,7 +30,9 @@
 # of a fixture starts with a unique token; exposure is the fraction of the file's tokens found in the text of all
 # tool results, the local model's answers included (an answer that echoes the file is the file reaching Claude).
 # Reads by any tool or shell form count;
-# a narrow search for a pattern (a few lines) stays near 0. For c, d and e the read must come after the tool failed
+# a narrow search for a pattern (a few lines) stays near 0. Each line carries two markers, its first and its last
+# field, and counts as exposed when either appears: `cut -f2-` does not hide a line. The limit: a reader that removes
+# both markers evades the metric (the subject is not adversarial, and no real trace has done this). For c, d and e the read must come after the tool failed
 # (exposure_after), and the failure and the success must be on the target file itself.
 #
 # Case e quotes the criterion: "in a two-job session with the server down (two turns of one session), the final
@@ -67,15 +69,35 @@ JUDGE_PROMPT='You grade one message that an AI coding assistant wrote to a user.
 
 die() { echo "FAIL: $*" >&2; exit 1; }
 
+# skill_flags: the bad-answer flags the skill itself lists (single source): every backticked token of its
+# "Bad-answer flags" row except the `Quality:` label, plus the upper-case ones (UPSTREAM ERROR) of its "Other failure" row.
+SKILL_MD="$REPO/skills/delegate-local/SKILL.md"
+skill_flags() {
+  local rows
+  rows=$(grep -E '^\| (Bad-answer flags|Other failure) \|' "$SKILL_MD") && [ -n "$rows" ] || { echo "skill_flags: no flag rows in $SKILL_MD" >&2; return 1; }
+  { grep -E '^\| Bad-answer flags \|' <<<"$rows" | grep -o '`[^`]*`' | tr -d '`' | grep -v '^Quality'
+    grep -E '^\| Other failure \|' <<<"$rows" | grep -o '`[^`]*`' | tr -d '`' | grep -E '^[A-Z][A-Z ]+$'
+  } | jq -R . | jq -sc 'if length > 0 then . else error("no flags parsed") end'
+}
+
 # summarize <trace> <fixture-file>: one JSON object of facts about a trace. Tool uses are joined to their results by
 # tool_use_id; positions are event indexes. Parallel calls from one assistant message arrive as separate events
-# with results interleaved, so a "wave" is the message id.
+# with results interleaved, so a "wave" is the message id. Every fixture line has two markers (first and last field).
 summarize() {
-  local trace="$1" file="$2" tokens
+  local trace="$1" file="$2" lines flags
   [ -f "$file" ] || { echo "summarize: missing fixture file $file" >&2; return 1; }
-  tokens=$(awk 'NF{print $1}' "$file" | jq -R . | jq -sc .) && [ "$tokens" != "[]" ] || { echo "summarize: no tokens in $file" >&2; return 1; }
-  jq -s --arg ft "$FILE_TOOL" --arg base "$(basename "$file")" --argjson tokens "$tokens" '
+  lines=$(awk 'NF{printf "%s\t%s\n", $1, $NF}' "$file" | jq -R 'split("\t") | unique' | jq -sc .) && [ "$lines" != "[]" ] || { echo "summarize: no tokens in $file" >&2; return 1; }
+  flags=$(skill_flags) || return 1
+  jq -s --arg ft "$FILE_TOOL" --arg base "$(basename "$file")" --argjson lines "$lines" --argjson flags "$flags" '
     def txt: if type == "array" then map(.text // "") | join(" ") else (. // "" | tostring) end;
+    def frac($blob): (([$lines[] | select(any(.[]; . as $t | $blob | contains($t)))] | length) / ($lines | length)) * 100 | round / 100;
+    def plen: .input.paths | if type == "array" then length else 0 end;
+    def names_target: .input.paths | if type == "array" then any(.[]; type == "string" and (split("/") | last == $base)) else false end;
+    # the footer houtini writes is the last "Model:" line of the result; the body cannot forge it
+    def footer_ok: (.res.text | split("\n") | map(select(startswith("Model:"))) | last // "") as $f
+      | ([$f | capture("· (?<r>[0-9]+)(/(?<t>[0-9]+))? file\\(s\\) read")] | .[0]) as $c
+      | $c != null and ($c.t == null or $c.r == $c.t) and (($c.r | tonumber) == plen)
+        and ([$flags[] | select(. as $x | $f | contains($x))] | length == 0);
     . as $all
     | [$all | to_entries[] | select(.value.type == "assistant") | .key as $k
         | .value.message.content[]? | select(.type == "tool_use") | {id, name, input, pos: $k, mid: $all[$k].message.id}] as $uses
@@ -84,7 +106,7 @@ summarize() {
         | {id: .tool_use_id, is_error: (.is_error // false), text: (.content | txt), pos: $k}] as $res
     | [$uses[] | . as $u | . + {res: (first($res[] | select(.id == $u.id)) // null)}] as $J
     | [$J[] | select(.name == $ft)] as $D
-    | [$D[] | select((.input.paths // []) | any(split("/") | last == $base))] as $Dt
+    | [$D[] | select(names_target)] as $Dt
     | ([$Dt[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))))] | min_by(.res.pos)) as $first
     | ($first.res.pos // -1) as $ff
     | ([$J[] | (.res.text // "")] | join("\n")) as $seen
@@ -93,6 +115,7 @@ summarize() {
     | ([.[] | select(.type == "result")] | last // {}) as $r
     | {
         ok: ($r | has("result")),
+        why: (if ($r | has("result")) then null else "no result event" end),
         answer_chars: (($r.result // "") | length),
         is_error: (if ($r | has("is_error")) then $r.is_error else true end),
         denied: [($r.permission_denials // [])[] | .tool_name],
@@ -102,16 +125,15 @@ summarize() {
         delegate_calls: ($D | length),
         late_delegate_calls: (if $ff < 0 then 0 else [$D[] | select(.pos > $ff and .mid != $first.mid)] | length end),
         delegated: ($Dt | length > 0),
-        delegate_ok: ([$Dt[] | select(.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not)
-          and (.res.text | test("(^|[^0-9/])[0-9]+ file\\(s\\) read")) and (.res.text | test("Quality: |UPSTREAM ERROR|⚠ TRUNCATED") | not))] | length > 0),
+        delegate_ok: ([$Dt[] | select(.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not) and footer_ok)] | length > 0),
         saw_fetch_failed: ([$Dt[] | select(.res != null and (.res.text | contains("fetch failed")))] | length > 0),
         saw_no_model: ([$Dt[] | select(.res != null and (.res.text | contains("No models loaded")))] | length > 0),
-        exposure: ((([$tokens[] | select(. as $t | $seen | contains($t))] | length) / ($tokens | length)) * 100 | round / 100),
-        answer_exposure: ((([$tokens[] | select(. as $t | $answers | contains($t))] | length) / ($tokens | length)) * 100 | round / 100),
-        exposure_after: ((([$tokens[] | select(. as $t | $seen_after | contains($t))] | length) / ($tokens | length)) * 100 | round / 100),
+        exposure: frac($seen),
+        answer_exposure: frac($answers),
+        exposure_after: frac($seen_after),
         result: ($r.result // ""),
         texts: [$all[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text]
-      }' "$trace" || echo '{"ok":false,"unknown":true}'
+      }' "$trace" || echo '{"ok":false,"unknown":true,"why":"scorer error (jq failed; see stderr)"}'
 }
 
 # judge <text>: {mentions_local_model_unavailable, gives_cause, gives_retry}. Real mode is one `claude -p --model
@@ -162,13 +184,15 @@ check_e() {
   done < <(jq -c '.texts[]' <<<"$2")
   return 0
 }
-# turn_mentions <summary>: judged outage mentions over a turn's assistant text blocks (n/total), for information
+# turn_mentions <summary>: judged outage mentions over a turn's assistant text blocks, "n/total (k judge errors)", for information
 turn_mentions() {
-  local n=0 total=0 v line
+  local n=0 total=0 errs=0 v line
   while IFS= read -r line; do
-    total=$((total+1)); v=$(judge "$(jq -r . <<<"$line")") && jq -e '.mentions_local_model_unavailable == true' >/dev/null <<<"$v" && n=$((n+1))
+    total=$((total+1))
+    if v=$(judge "$(jq -r . <<<"$line")" 2>/dev/null); then jq -e '.mentions_local_model_unavailable == true' >/dev/null <<<"$v" && n=$((n+1))
+    else errs=$((errs+1)); fi
   done < <(jq -c '.texts[]' <<<"$1")
-  echo "$n/$total"
+  if [ "$errs" -gt 0 ]; then echo "$n/$total ($errs judge errors)"; else echo "$n/$total"; fi
 }
 
 # --- offline scorer self-test ------------------------------------------------------------------------
@@ -205,6 +229,13 @@ selftest() {
   expect "a: delegated, one-line Grep spot-check" pass a a-ok app-20k.log
   expect "a: the local model's answer quotes the whole file" fail a a-echo app-20k.log
   expect "a: only a helper file was read (1/2 file(s) read)" fail a a-partial-footer app-20k.log
+  expect "a: the answer body claims a full read, the footer says 1/2" fail a a-forged-footer app-20k.log
+  expect "a: the footer's read count differs from the number of paths" fail a a-count-mismatch app-20k.log
+  expect "a: a harmless Quality flag (think-blocks-stripped) does not fail it" pass a a-harmless-flag app-20k.log
+  expect "a: paths given as a string is no target and no crash" fail a a-paths-string app-20k.log
+  expect "a: mixed-type paths entries do not crash the scorer (3 paths, 1 read: fails)" fail a a-paths-mixed app-20k.log
+  expect "a: cut -f2- of the whole file still exposes the end markers" fail a a-stripped-read app-20k.log
+  expect "a: the answer echoes the payload with the first markers stripped" fail a a-echo-stripped app-20k.log
   expect "a: the answer carries a quality flag" fail a a-quality-flag app-20k.log
   expect "a: Read of the delegated file" fail a a-read app-20k.log
   expect "a: Bash cat of the delegated file" fail a a-cat app-20k.log
@@ -224,6 +255,7 @@ selftest() {
   expect "b: one Grep line is not a read" fail b b-grep-only app-2k.log
   expect "c: fetch failed, then a Read" pass c c-ok app-20k.log
   expect "c: fetch failed, then a Bash cat" pass c c-bash-cat app-20k.log
+  expect "c: fetch failed, then a read with the first markers stripped" pass c c-stripped-read app-20k.log
   expect "c: tool results given as content arrays" pass c c-array app-20k.log
   expect "c: parallel first wave of two calls is allowed" pass c c-parallel app-20k.log
   expect "c: one Grep line is not a read" fail c c-grep-content app-20k.log
@@ -253,6 +285,16 @@ selftest() {
   expect_error "an unparseable trace is an error" garbage
   expect_f "f: a plugin-tool denial is flagged" fail f-plugin-denied
   expect_f "f: a non-plugin denial does not gate" pass c-denied-read
+  # expect_flags: the skill's table is the only source of bad-answer flags
+  expect_flags() {
+    local fl got=fail; fl=$(skill_flags 2>/dev/null)
+    jq -e 'index("TRUNCATED") != null and index("hit-max-tokens") != null and index("UPSTREAM ERROR") != null and index("think-blocks-stripped") == null and index("tokens-estimated") == null' >/dev/null <<<"$fl" && got=pass
+    verdict "$1" "$2" "$got"
+  }
+  expect_flags "flags come from the skill's table: harmful ones only, UPSTREAM ERROR included" pass
+  # expect_why <label> <fixture> <text>: an unusable trace names why
+  expect_why() { local got=fail w; w=$(summarize "$fx/$2.jsonl" "$fx/files/app-20k.log" 2>/dev/null | jq -r '.why'); case "$w" in *"$3"*) got=pass ;; esac; verdict "$1" pass "$got"; }
+  expect_why "an unparseable trace is named a scorer error" garbage "scorer error"
   echo "selftest total: $total, failed: $fails"
   [ "$fails" -eq 0 ]
 }
@@ -264,7 +306,8 @@ judge_check() {
   local n total=0 right=0 i item v ok
   [ "${DELEG_JUDGE:-}" != stub ] || die "DELEG_JUDGE_CHECK needs the real judge"
   WORK=$(mktemp -d) || die "mktemp"; JUDGE_CACHE=$(mktemp -d) || die "mktemp"
-  n=$(jq length "$FX/judge-labels.json")
+  [ -f "$FX/judge-labels.json" ] || die "judge labels file is missing: $FX/judge-labels.json"
+  n=$(jq 'if type == "array" then length else error("not an array") end' "$FX/judge-labels.json") || die "judge labels file $FX/judge-labels.json is not a JSON array"
   for i in $(seq 0 $((n-1))); do
     item=$(jq -c ".[$i]" "$FX/judge-labels.json"); total=$((total+1))
     if v=$(judge "$(jq -r .text <<<"$item")"); then
@@ -312,7 +355,7 @@ gen_log() { # gen_log <chars> [<date>T<hour>]: the second argument gives a file 
     split("auth billing search sync mailer", svc, " ")
     while (length(s) < n) {
       i++; lvl = (i % 41 == 0) ? "ERROR" : ((i % 7 == 0) ? "WARN " : "INFO ")
-      s = s sprintf("%s:%02d:%02dZ %s service=%s req=%05x msg=\"%s\" latency_ms=%d\n", pre, (i/60)%60, i%60, lvl, svc[i%5+1], (i*2654435761)%1048576, (lvl=="ERROR") ? "upstream timeout talking to node " i%13 : "request handled", (i*37)%900)
+      s = s sprintf("%s:%02d:%02dZ %s service=%s req=%05x msg=\"%s\" latency_ms=%d eol=%s-%04d\n", pre, (i/60)%60, i%60, lvl, svc[i%5+1], (i*2654435761)%1048576, (lvl=="ERROR") ? "upstream timeout talking to node " i%13 : "request handled", (i*37)%900, pre, i)
     }
     printf "%s", substr(s, 1, n)}'
 }
@@ -324,7 +367,7 @@ gen_prose() {
     split("before Thursday|by the end of the sprint|ahead of the quarterly review|once the budget is approved|after the next release|within two weeks", when, "|")
     while (length(s) < n) {
       i++
-      s = s sprintf("N0412-%04d Action item: the %s team will %s %s, and report back at the next sync (item %d).\n", i, team[i%8+1], act[(i*3)%8+1], when[(i*5)%6+1], (i*7919)%1000)
+      s = s sprintf("N0412-%04d Action item: the %s team will %s %s, and report back at the next sync (item %d). E0412-%04d\n", i, team[i%8+1], act[(i*3)%8+1], when[(i*5)%6+1], (i*7919)%1000, i)
     }
     printf "%s", substr(s, 1, n)}'
 }
@@ -423,31 +466,36 @@ for c in $CASES; do
     if [ "$c" = e ]; then
       KEEP_SESSION=1 run_claude "$PLUGINS/$(plugin_for e)" "$(prompt_for e)" "$trace"; rc=$?
       s=$(summarize "$trace" "$FIX/app-20k.log")
-      sid=$(jq -rs '[.[] | .session_id? // empty] | first // empty' "$trace" 2>/dev/null)
-      trace2="$OUT/e-$n-turn2.jsonl"; rc2=0; no_sid=0
-      if [ -n "$sid" ]; then
-        run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-20k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
-        s2=$(summarize "$trace2" "$FIX/app-20k-b.log")
+      trace2="$OUT/e-$n-turn2.jsonl"; rc2=0; stop=""
+      s2='{"ok":false,"unknown":true,"why":"turn 2 not run"}'
+      if ! jq -e '.ok' >/dev/null <<<"$s"; then
+        stop="FAIL (unknown: turn 1 has no usable result: $(jq -r '.why // "unknown"' <<<"$s" 2>/dev/null); turn 2 not run)"
+        : > "$trace2"; echo "turn 1 not ok; turn 2 not run" > "$trace2.err"
       else
-        no_sid=1; s2='{"ok":false,"unknown":true}'
-        : > "$trace2"; echo "no session id in $(basename "$trace"); turn 2 not run" > "$trace2.err"
+        sid=$(jq -rs '[.[] | .session_id? // empty] | first // empty' "$trace" 2>/dev/null)
+        if [ -z "$sid" ]; then
+          stop="FAIL (no session id in turn 1; turn 2 not run)"
+          : > "$trace2"; echo "no session id in $(basename "$trace"); turn 2 not run" > "$trace2.err"
+        else
+          run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-20k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
+          s2=$(summarize "$trace2" "$FIX/app-20k-b.log")
+        fi
       fi
       tally "$s"; tally "$s2"
-      if [ "$no_sid" = 1 ]; then verdict="FAIL (no session id in turn 1; turn 2 not run)"
-      elif ! jq -e '.ok' >/dev/null <<<"$s" || ! jq -e '.ok' >/dev/null <<<"$s2"; then verdict="FAIL (unknown: no parsable result event)"
+      if [ -n "$stop" ]; then verdict="$stop"
+      elif ! jq -e '.ok' >/dev/null <<<"$s2"; then verdict="FAIL (unknown: turn 2 has no usable result: $(jq -r '.why // "unknown"' <<<"$s2" 2>/dev/null))"
       elif [ "$rc" -ne 0 ] || [ "$rc2" -ne 0 ]; then verdict="FAIL (claude exited $rc/$rc2)"
       elif check_e "$s" "$s2"; then passes=$((passes+1)); verdict=pass
       else crc=$?; if [ "$crc" -eq 2 ]; then verdict="FAIL (judge error)"; else verdict=FAIL; fi; fi
       j1=$(judge "$(jq -r .result <<<"$s")" 2>/dev/null | jq -c '[.mentions_local_model_unavailable, .gives_cause, .gives_retry]' 2>/dev/null)
-      echo "  e-$n $verdict turn1_judge=${j1:-none} turn1_mentions=$(turn_mentions "$s" 2>/dev/null) turn2_mentions=$(turn_mentions "$s2" 2>/dev/null) turn1 $(jq -c '{delegate_calls, late_delegate_calls, exposure}' <<<"$s" 2>/dev/null) turn2 $(jq -c '{delegate_calls, exposure, denied}' <<<"$s2" 2>/dev/null)"
-      report_run "$rc" "$trace" "$verdict"; [ "$no_sid" = 1 ] || report_run "$rc2" "$trace2" "$verdict"
-      [ "$no_sid" = 0 ] || report_run 0 "$trace2" "$verdict"
+      echo "  e-$n $verdict turn1_judge=${j1:-judge-error} turn1_mentions=$(turn_mentions "$s" 2>/dev/null) turn2_mentions=$(turn_mentions "$s2" 2>/dev/null) turn1 $(jq -c '{delegate_calls, late_delegate_calls, exposure}' <<<"$s" 2>/dev/null) turn2 $(jq -c '{delegate_calls, exposure, denied}' <<<"$s2" 2>/dev/null)"
+      report_run "$rc" "$trace" "$verdict"; report_run "$rc2" "$trace2" "$verdict"
       continue
     fi
     run_claude "$PLUGINS/$(plugin_for "$c")" "$(prompt_for "$c")" "$trace"; rc=$?
     s=$(summarize "$trace" "$(target_for "$c")")
     tally "$s"
-    if ! jq -e '.ok' >/dev/null <<<"$s"; then verdict="FAIL (unknown: no parsable result event)"
+    if ! jq -e '.ok' >/dev/null <<<"$s"; then verdict="FAIL (unknown: $(jq -r '.why // "unknown"' <<<"$s" 2>/dev/null))"
     elif [ "$rc" -ne 0 ]; then verdict="FAIL (claude exited $rc)"
     elif "check_$c" "$s"; then passes=$((passes+1)); verdict=pass
     else verdict=FAIL; fi

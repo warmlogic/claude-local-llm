@@ -1,6 +1,6 @@
 {"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
 {"type":"assistant","message":{"id":"m31","content":[{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"K-003","path":"/work/app-2k.log","output_mode":"content"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"K-003 INFO request handled"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"K-003 INFO request handled zK-003"}]}}
 {"type":"assistant","message":{"id":"m32","content":[{"type":"text","text":"Summary: routine."}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"Summary: routine.","permission_denials":[]}

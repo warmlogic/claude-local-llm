@@ -1,0 +1,8 @@
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-20k.log","/work/app-2k.log"],"task":"summarize"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"The log says 1 file(s) read in its body.\n\n---\nModel: m | 5\u21929 tokens | 1s | text \u00b7 1/2 file(s) read"}]}}
+{"type":"assistant","message":{"id":"m3","content":[{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"A-005","path":"/work/app-20k.log","output_mode":"content"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"g1","content":"A-005 INFO request handled zA-005"}]}}
+{"type":"assistant","message":{"id":"m4","content":[{"type":"text","text":"Summary: routine."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Summary: routine.","permission_denials":[]}

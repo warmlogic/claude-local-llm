@@ -424,6 +424,14 @@ if [ -s "$TMP/e5-port" ]; then
   kill "$E5_PID" 2>/dev/null
 else bad "error500 fake endpoint did not start"; fi
 
+# malformed calls get houtini's own argument errors (the skill's "Bad call" row)
+out=$(run_launcher "$TMP/root" code_task_files '{"paths":["relative/file.txt"],"task":"x"}')
+if jq -e '.call.isError and (.call.text | contains("Error: all paths must be absolute"))' >/dev/null <<<"$out"; then ok "relative paths: the tool error says 'all paths must be absolute'"
+else bad "relative paths: expected 'all paths must be absolute' ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+out=$(run_launcher "$TMP/root" code_task_files '{"paths":[],"task":"x"}')
+if jq -e '.call.isError and (.call.text | contains("Error: paths must be a non-empty array"))' >/dev/null <<<"$out"; then ok "empty paths: the tool error says 'paths must be a non-empty array'"
+else bad "empty paths: expected 'paths must be a non-empty array' ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+
 if [ "$lm_up" = 1 ]; then
   out=$(read_files "$TMP/root" "$TMP/root/twenty-k.txt")
   if jq -e '(.call != null and .call.isError == false) and (.call.text | test("1 file\\(s\\) read")) and (.call.text | test("Model:"))' >/dev/null <<<"$out"; then
