@@ -2,241 +2,289 @@
  {
   "file": "easy/log.txt",
   "claim": "The API started with 8 workers.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/log.txt",
   "claim": "There were exactly three ERROR lines.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/log.txt",
   "claim": "The database query timeout was 30 seconds.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/log.txt",
   "claim": "The DB pool had a maximum of 25 connections.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/log.txt",
   "claim": "The checkout failures returned HTTP 502.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/log.txt",
   "claim": "The outage was caused by a bad deploy.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/log.txt",
   "claim": "The pool recovered within ten minutes of being exhausted.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/log.txt",
   "claim": "The service was shut down via SIGKILL.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/readme.txt",
   "claim": "The default cache TTL is five minutes.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/readme.txt",
   "claim": "Setting CACHE_TTL to 0 makes cache entries never expire.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/readme.txt",
   "claim": "Uploads can be configured up to 250 MB.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/readme.txt",
   "claim": "Retries stop after at most five attempts.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/readme.txt",
   "claim": "Retries use a fixed 200 ms delay between attempts.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/readme.txt",
   "claim": "CONFIG_PATH overrides where the config file is read from.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/readme.txt",
   "claim": "The service also supports TOML configuration files.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/readme.txt",
   "claim": "The cache is stored in Redis.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/readme.txt",
   "claim": "The default upload limit is 25 MB.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/notes.txt",
   "claim": "Dana attended the meeting.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/notes.txt",
   "claim": "The v2.3 release date moved one week later.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/notes.txt",
   "claim": "The release was delayed because of a security audit.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/notes.txt",
   "claim": "Alex writes the migration runbook.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/notes.txt",
   "claim": "The team decided to relax the EU latency budget.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/notes.txt",
   "claim": "Priya is the engineering manager.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/notes.txt",
   "claim": "The next sync is on Thursday.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/notes.txt",
   "claim": "Tom will review the runbook.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The diff increases replicas from 3 to 5.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The diff changes the image tag to 1.8.2.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The memory limit is doubled.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The diff adds a liveness probe.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The change was approved by the SRE team.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The deployment runs in the us-east-1 region.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/diff.txt",
   "claim": "The diff removes the readiness probe.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/tests.txt",
   "claim": "All tests passed.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/tests.txt",
   "claim": "Exactly one test failed.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/tests.txt",
   "claim": "The failing test is about discounts at checkout.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/tests.txt",
   "claim": "The suite took under a minute.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/tests.txt",
   "claim": "Three tests were skipped.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/tests.txt",
   "claim": "The failure is caused by a rounding bug.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/tests.txt",
   "claim": "The suite ran on Python 3.12.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/tests.txt",
   "claim": "142 tests were collected.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/incident.txt",
   "claim": "The incident was sev1.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/incident.txt",
   "claim": "Mitigation took under an hour.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "computed"
  },
  {
   "file": "easy/incident.txt",
   "claim": "Some orders were lost.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "computed"
  },
  {
   "file": "easy/incident.txt",
   "claim": "A null field crashed the pricing worker.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/incident.txt",
   "claim": "Mei owns the schema validation follow-up.",
-  "gold": "SUPPORTED"
+  "gold": "SUPPORTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/incident.txt",
   "claim": "Acme Pay has caused similar incidents before.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  },
  {
   "file": "easy/incident.txt",
   "claim": "The fix was a code hotfix deployed to production.",
-  "gold": "CONTRADICTED"
+  "gold": "CONTRADICTED",
+  "kind": "lookup"
  },
  {
   "file": "easy/incident.txt",
   "claim": "Customers were notified by email.",
-  "gold": "NOT_IN_SOURCE"
+  "gold": "NOT_IN_SOURCE",
+  "kind": "lookup"
  }
 ]

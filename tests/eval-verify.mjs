@@ -2,7 +2,9 @@
 // through the real launcher and MCP tool against the model LM Studio has loaded. The fixtures are
 // the spike's items exactly: easy = six hand-written excerpts with hand labels (SUPPORTED,
 // CONTRADICTED, NOT_IN_SOURCE); hard = eight generated 40-line logs (seed 7) whose claims test
-// counts, comparisons and time spans, with gold computed in code. Not per-commit:
+// counts, comparisons and time spans, with gold computed in code. Each item declares its kind the way
+// the tool description tells Claude to: "lookup" only for a plain fact checkable by finding one
+// passage (24 of the easy items, hand-tagged), else "computed" (every hard item). Not per-commit:
 // it needs LM Studio at LOCAL_LLM_ENDPOINT_URL (default http://127.0.0.1:1234) and takes minutes.
 // Usage: node tests/eval-verify.mjs [k]   (EVAL_OUT=<file> also writes one JSON line per item)
 // The binary question: gold SUPPORTED vs anything else. A false accept is a SUPPORTED label on a
@@ -27,9 +29,14 @@ function callTool(paths, claims) {
   const args = JSON.stringify({ paths, claims, k });
   const env = { ...process.env, LOCAL_LLM_ALLOWED_DIRS: FIX };
   const run = spawnSync('node', [join(HERE, 'mcp-call.mjs'), LAUNCHER, 'verify_claims', args], { env, encoding: 'utf8' });
+  if (run.error || run.status !== 0) {
+    throw new Error(`mcp-call.mjs failed (${run.error?.message ?? `exit ${run.status}`}): ${run.stderr}`);
+  }
   const out = JSON.parse(run.stdout);
-  if (!out.call || out.call.isError) throw new Error(`verify_claims failed: ${out.call?.text ?? out.stderr}`);
-  return JSON.parse(out.call.text);
+  if (!out.call || out.call.isError) throw new Error(`verify_claims failed: ${out.call?.text ?? 'no result'}; server stderr: ${out.stderr}`);
+  const res = JSON.parse(out.call.text);
+  if (res.partial) throw new Error(`verify_claims returned partial results: ${res.error}`);
+  return res;
 }
 
 function runSet(name) {
@@ -38,7 +45,7 @@ function runSet(name) {
   for (const file of [...new Set(items.map((it) => it.file))]) {
     const mine = items.filter((it) => it.file === file);
     const t0 = Date.now();
-    const res = callTool([join(FIX, file)], mine.map((it) => it.claim));
+    const res = callTool([join(FIX, file)], mine.map((it) => ({ text: it.claim, kind: it.kind })));
     const ms = Date.now() - t0;
     res.results.forEach((r, i) => rows.push({ set: name, file, gold: mine[i].gold, ...r, call_ms: ms, model: res.model }));
     process.stderr.write(`${name} ${file}: ${mine.length} claims in ${ms} ms\n`);
