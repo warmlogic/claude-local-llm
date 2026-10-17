@@ -1,0 +1,6 @@
+{"type":"assistant","message":{"id":"g1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"assistant","message":{"id":"g2","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/notes-0412.md"],"task":"classify"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"Meeting notes.\n---\nModel: m | 5\u21929 tokens | 1s | text \u00b7 1 file(s) read"}]}}
+{"type":"assistant","message":{"id":"g3","content":[{"type":"text","text":"Meeting notes."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Meeting notes.","permission_denials":[]}

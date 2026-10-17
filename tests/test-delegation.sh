@@ -12,6 +12,10 @@
 # dead port or a fake endpoint and never touch LM Studio.
 #   a  20k-char file, "summarize <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
+#   a2 a 25k-char prose document with a neutral name (notes-0412.md) and "Classify this document: <path>": as a, with
+#      no size, tool or log hint in the file name or prompt (real files are not named app-20k.log)
+#   g  "Use the local model to summarize <path>" on the same document: as a, and no plugin permission denial (asking
+#      plainly must not hit a prompt for the plugin's own tool)
 #   b  2k-char file: no code_task_files call, and Claude reads the file (exposure >= 0.5)
 #   c  endpoint down: the tool fails with "fetch failed", is not called again, and Claude reads the file itself
 #   d  endpoint up but no model loaded (tests/fake-endpoint.mjs no-model): the same, with "No models loaded"
@@ -34,7 +38,7 @@
 # headless or subagent user. Whether a text mentions the outage is judged by one cheap model call (haiku, no tools),
 # not by patterns over English; DELEG_JUDGE_CHECK=1 scores the judge against labeled messages.
 #
-# Environment: DELEG_RUNS (5)  DELEG_CASES ("a b c d e")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
+# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
 # default a new mktemp dir that is kept)  DELEG_ALLOWED_TOOLS (passed to --allowedTools; setting it voids the
 # no-prompt result, since it grants the permissions under test)  DELEG_JUDGE (stub = canned verdicts from
 # tests/fixtures/deleg/judge.json)  DELEG_SETTING_SOURCES (default "project": the user's settings, allow rules,
@@ -46,7 +50,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 FX="$SCRIPT_DIR/fixtures/deleg"
 RUNS="${DELEG_RUNS:-5}"
-CASES="${DELEG_CASES:-a b c d e}"
+CASES="${DELEG_CASES:-a a2 b c d e g}"
 SOURCES="${DELEG_SETTING_SOURCES-project}"
 RUN_TIMEOUT_SEC=300
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
@@ -130,6 +134,9 @@ $text
 # check_<case> <summary-json> -> exit 0 when the run passes
 check_a() { jq -e --argjson max "$EXPOSURE_MAX" '.ok and (.is_error | not) and .answer_chars > 0 and .delegated and .delegate_ok
   and (.denied | index("'"$FILE_TOOL"'") == null) and .exposure <= $max' >/dev/null <<<"$1"; }
+check_a2() { check_a "$1"; }
+# g: as a, and the plugin never prompted (no plugin-tool or skill denial)
+check_g() { check_a "$1" && jq -e '.plugin_denied | length == 0' >/dev/null <<<"$1"; }
 check_b() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
 # c and d: the tool was tried, failed the expected way, was not called again, and Claude then read the file itself
 check_c() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls >= 1 and .saw_fetch_failed
@@ -198,6 +205,10 @@ selftest() {
   expect "a: the delegation itself failed" fail a a-failed-delegate app-20k.log
   expect "a: the target call failed and a call on another file succeeded" fail a a-other-file-ok app-20k.log
   expect "a: only the task text names the target, the path is another file" fail a a-task-only app-20k.log
+  expect "a2: a classification job is delegated" pass a2 a2-ok notes-0412.md
+  expect "a2: Claude partially Reads the document instead (exposure 0.4)" fail a2 a2-partial-read notes-0412.md
+  expect "g: asked plainly, delegated, no plugin denial" pass g g-ok notes-0412.md
+  expect "g: delegated but the tool call was denied" fail g g-denied notes-0412.md
   expect "b: Read of the small file, no delegation" pass b b-ok app-2k.log
   expect "b: Bash cat of the small file" pass b b-bash-cat app-2k.log
   expect "b: the 2k file was delegated" fail b b-delegates app-2k.log
@@ -294,10 +305,23 @@ gen_log() {
     }
     printf "%s", substr(s, 1, n)}'
 }
+# gen_prose <chars>: deterministic meeting-notes prose; every line starts with a unique token
+gen_prose() {
+  awk -v n="$1" 'BEGIN{
+    split("platform billing search onboarding support security data mobile", team, " ")
+    split("review the rollout plan|draft the migration checklist|confirm the vendor contract terms|schedule the capacity test|document the escalation path|update the runbook for on-call|summarize customer feedback from the pilot|agree an owner for the open risks", act, "|")
+    split("before Thursday|by the end of the sprint|ahead of the quarterly review|once the budget is approved|after the next release|within two weeks", when, "|")
+    while (length(s) < n) {
+      i++
+      s = s sprintf("N0412-%04d Action item: the %s team will %s %s, and report back at the next sync (item %d).\n", i, team[i%8+1], act[(i*3)%8+1], when[(i*5)%6+1], (i*7919)%1000)
+    }
+    printf "%s", substr(s, 1, n)}'
+}
 gen_log 20000 > "$FIX/app-20k.log"
 gen_log 2000 > "$FIX/app-2k.log"
 gen_log 22000 | tail -c 20000 > "$FIX/app-20k-b.log"
-for f_n in app-20k.log:20000 app-2k.log:2000 app-20k-b.log:20000; do
+gen_prose 25000 > "$FIX/notes-0412.md"
+for f_n in app-20k.log:20000 app-2k.log:2000 app-20k-b.log:20000 notes-0412.md:25000; do
   [ "$(wc -c < "$FIX/${f_n%%:*}")" -eq "${f_n##*:}" ] || die "fixture ${f_n%%:*} is not ${f_n##*:} bytes"
 done
 
@@ -347,12 +371,14 @@ case " $CASES " in *" d "*)
   copy_plugin "$PLUGINS/nomodel" "http://127.0.0.1:$(cat "$PLUGINS/port")" ;;
 esac
 
-plugin_for() { case "$1" in a|b) echo real ;; c|e) echo down ;; d) echo nomodel ;; esac; }
-target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; *) echo "$FIX/app-20k.log" ;; esac; }
+plugin_for() { case "$1" in a|a2|b|g) echo real ;; c|e) echo down ;; d) echo nomodel ;; esac; }
+target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; *) echo "$FIX/app-20k.log" ;; esac; }
 prompt_for() {
   case "$1" in
     b) echo "Summarize $FIX/app-2k.log in five bullet points." ;;
     e) echo "Summarize $FIX/app-20k.log in three bullet points." ;;
+    a2) echo "Classify this document: $FIX/notes-0412.md" ;;
+    g) echo "Use the local model to summarize $FIX/notes-0412.md" ;;
     *) echo "Summarize $FIX/app-20k.log in five bullet points." ;;
   esac
 }
@@ -379,7 +405,7 @@ report_run() {
 }
 for c in $CASES; do
   if [ -z "$(plugin_for "$c")" ]; then echo "unknown case: $c"; overall=1; continue; fi
-  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = b ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
+  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
   passes=0
   for n in $(seq 1 "$RUNS"); do
     trace="$OUT/$c-$n.jsonl"
