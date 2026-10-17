@@ -50,8 +50,9 @@ export const checkQuote = (row, lineMap) => {
   const line = lineMap.get(row.line);
   if (line === undefined) return 'line_not_in_window';
   const text = textField(line);
-  if (row.quote.length < MIN_QUOTE_CHARS && squash(row.quote) !== squash(text)) return 'quote_too_short';
-  return text.includes(row.quote) || squash(text).includes(squash(row.quote)) ? null : 'quote_not_in_line';
+  const [q, t] = [squash(row.quote), squash(text)];
+  if (q.length < MIN_QUOTE_CHARS && q !== t) return 'quote_too_short'; // lengths count after whitespace is normalized
+  return text.includes(row.quote) || t.includes(q) ? null : 'quote_not_in_line';
 };
 
 // A light check of the reply against the row schema: required keys, string and enum properties.
@@ -136,11 +137,11 @@ const main = async () => {
   if (!isLoopbackEndpoint(endpoint)) usage(loopbackError(endpoint));
   const { job, cap, check } = loadJob(opt.job);
 
-  const texts = files.map((f) => { try { return readFileSync(f, 'utf8'); } catch (e) { return { error: e.code ?? e.name }; } });
-  if (check === 'quote-in-line') {
-    for (const [i, t] of texts.entries()) {
-      const first = typeof t === 'string' ? t.split('\n').find((l) => l.length) : undefined;
-      if (first !== undefined && !/^L\d+\t/.test(first)) usage(`${files[i]}: not numbered input; run batch/flatten-transcripts.mjs (or number lines L<n><TAB>) first`);
+  if (check === 'quote-in-line') { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
+    for (const f of files) {
+      let t;
+      try { t = readFileSync(f, 'utf8'); } catch { continue; } // reported as unreadable_input when its turn comes
+      if (t.split('\n').some((l) => l.length && !/^L\d+\t/.test(l))) usage(`${f}: not numbered input; run batch/flatten-transcripts.mjs (or number lines L<n><TAB>) first`);
     }
   }
 
@@ -164,12 +165,12 @@ const main = async () => {
   let failedRequests = 0; // consecutive; only an answered window resets it
   let aborted = false;
 
-  outer: for (const [fi, file] of files.entries()) {
+  outer: for (const file of files) {
     const name = basename(file);
     const fs = { name, windows: 0, kept: 0, dropped: 0 };
     stats.perFile.push(fs); stats.reached++;
-    const text = texts[fi];
-    if (typeof text !== 'string') { fail('unreadable_input', name, 0, text.error); continue; }
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch (e) { fail('unreadable_input', name, 0, e.code ?? e.name); continue; }
     const { windows, overCap } = makeWindows(text.split('\n').filter((l) => l.length), cap);
     for (const l of overCap) fail('line_over_cap', name, 0, `${l.split('\t')[0].slice(0, 20)} (${l.length} chars)`);
     if (!windows.length && !overCap.length) fail('empty_input', name, 0, 'no lines');

@@ -80,8 +80,8 @@ console.log(JSON.stringify([
   q("L1", "use the other ⏎ file"), q("L1", "use the files here"), q("L9", "use the other ⏎ file"),
   q("L1", "user"), q("L1", "L1"), q("L1", "text no, use"), q("L1", "user\ttext\tno, use  the"),
   q("L2", "text hello"), q("L1", "x"), q("L2", "hello"), q("L3", "plain numbered"), q("L3", "L3"),
-  q("L1", ""), checkQuote({ quote: "other" }, m)]));')
-if [ "$cq" = '[null,"quote_not_in_line","line_not_in_window","quote_too_short","quote_too_short","quote_not_in_line","quote_not_in_line","quote_too_short","quote_too_short",null,null,"quote_too_short","missing_line_or_quote","missing_line_or_quote"]' ]; then ok "checkQuote: matches the text field only (not role, kind or id), needs 12 chars unless it is the whole text"
+  q("L1", ""), checkQuote({ quote: "other" }, m), q("L1", "           x"), q("L1", "no,    use")]));')
+if [ "$cq" = '[null,"quote_not_in_line","line_not_in_window","quote_too_short","quote_too_short","quote_not_in_line","quote_not_in_line","quote_too_short","quote_too_short",null,null,"quote_too_short","missing_line_or_quote","missing_line_or_quote","quote_too_short","quote_too_short"]' ]; then ok "checkQuote: matches the text field only (not role, kind or id), needs 12 chars unless it is the whole text"
 else bad "checkQuote: $cq"; fi
 
 # --- a line over the cap -------------------------------------------------------
@@ -222,6 +222,10 @@ printf 'just a plain line\nanother plain line\n' > "$TMP/plain.txt"
 run_batch "$EP" "$TMP/out-plain" "$TMP/plain.txt"
 if [ "$RC" -eq 2 ] && grep -q 'not numbered input; run batch/flatten-transcripts.mjs' "$TMP/run.out" && [ ! -e "$TMP/out-plain" ]; then ok "quote-in-line on unnumbered input exits 2 and says to flatten first"
 else bad "unnumbered input: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
+{ head -2 "$TMP/m.txt"; echo 'an unnumbered line after numbered ones'; } > "$TMP/mixed.txt"
+run_batch "$EP" "$TMP/out-mixed" "$TMP/mixed.txt"
+if [ "$RC" -eq 2 ] && grep -q 'not numbered input' "$TMP/run.out" && [ ! -e "$TMP/out-mixed" ]; then ok "one unnumbered line after numbered ones is refused too"
+else bad "mixed numbering: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
 
 # --- a killed run leaves a stub that says RUNNING ----------------------------------------------
 start_fake st batch-stall
