@@ -55,4 +55,4 @@ Sort the failure by the table's rows.
 - **Input-specific** (too big, path not allowed, a quality flag, a partial `x/y file(s) read`): do that one job yourself and keep delegating other jobs. Name the real cause ("too large for the local model's context"; for a rejected path, "check the `allowed_dirs` plugin option"). Do not send the user to LM Studio for these.
 - **Transient** (timeout): retry once, then treat it as an outage.
 
-After the turn that told the user, answer later jobs with just the results; the answer is the whole reply, with no clause about the local model or about how you read the file.
+After the turn that told the user about an outage, answer later jobs you did yourself with just the results; the answer is the whole reply, with no clause about the local model or about how you read the file. A later answer the local model did produce still gets step 5's attribution.
