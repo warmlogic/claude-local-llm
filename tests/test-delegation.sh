@@ -71,23 +71,30 @@ die() { echo "FAIL: $*" >&2; exit 1; }
 
 # skill_flags: the bad-answer flags the skill itself lists (single source): every backticked token of its
 # "Bad-answer flags" row except the `Quality:` label, plus the upper-case ones (UPSTREAM ERROR) of its "Other failure" row.
-SKILL_MD="$REPO/skills/delegate-local/SKILL.md"
+# Each row must yield at least one token, so a renamed row cannot silently empty the list.
+SKILL_MD="${DELEG_SKILL_MD:-$REPO/skills/delegate-local/SKILL.md}"
 skill_flags() {
-  local rows
-  rows=$(grep -E '^\| (Bad-answer flags|Other failure) \|' "$SKILL_MD") && [ -n "$rows" ] || { echo "skill_flags: no flag rows in $SKILL_MD" >&2; return 1; }
-  { grep -E '^\| Bad-answer flags \|' <<<"$rows" | grep -o '`[^`]*`' | tr -d '`' | grep -v '^Quality'
-    grep -E '^\| Other failure \|' <<<"$rows" | grep -o '`[^`]*`' | tr -d '`' | grep -E '^[A-Z][A-Z ]+$'
-  } | jq -R . | jq -sc 'if length > 0 then . else error("no flags parsed") end'
+  local bad other
+  [ -f "$SKILL_MD" ] || { echo "skill_flags: $SKILL_MD does not exist" >&2; return 1; }
+  bad=$(grep -E '^\| Bad-answer flags \|' "$SKILL_MD" | grep -o '`[^`]*`' | tr -d '`' | grep -v '^Quality')
+  [ -n "$bad" ] || { echo "skill_flags: the 'Bad-answer flags' row of $SKILL_MD is missing or lists no flags" >&2; return 1; }
+  other=$(grep -E '^\| Other failure \|' "$SKILL_MD" | grep -o '`[^`]*`' | tr -d '`' | grep -E '^[A-Z][A-Z ]+$')
+  [ -n "$other" ] || { echo "skill_flags: the 'Other failure' row of $SKILL_MD is missing or lists no upper-case flag (UPSTREAM ERROR)" >&2; return 1; }
+  printf '%s\n%s\n' "$bad" "$other" | jq -R . | jq -sc .
 }
+# unknown_summary <why>: what summarize prints when it cannot even start, so the verdict names the reason
+unknown_summary() { echo "summarize: $1" >&2; jq -nc --arg w "$1" '{ok:false,unknown:true,why:$w}'; }
 
 # summarize <trace> <fixture-file>: one JSON object of facts about a trace. Tool uses are joined to their results by
 # tool_use_id; positions are event indexes. Parallel calls from one assistant message arrive as separate events
 # with results interleaved, so a "wave" is the message id. Every fixture line has two markers (first and last field).
+# A Bad call (houtini's argument errors) followed by a corrected call is the skill's sanctioned retry, so it never counts
+# as the first failure and the corrected call is not a late one.
 summarize() {
-  local trace="$1" file="$2" lines flags
-  [ -f "$file" ] || { echo "summarize: missing fixture file $file" >&2; return 1; }
-  lines=$(awk 'NF{printf "%s\t%s\n", $1, $NF}' "$file" | jq -R 'split("\t") | unique' | jq -sc .) && [ "$lines" != "[]" ] || { echo "summarize: no tokens in $file" >&2; return 1; }
-  flags=$(skill_flags) || return 1
+  local trace="$1" file="$2" lines flags why
+  [ -f "$file" ] || { unknown_summary "missing fixture file $file"; return 0; }
+  lines=$(awk 'NF{printf "%s\t%s\n", $1, $NF}' "$file" | jq -R 'split("\t") | unique' | jq -sc .) && [ "$lines" != "[]" ] || { unknown_summary "no markers in $file"; return 0; }
+  flags=$(skill_flags 2>/dev/null) || { why=$(skill_flags 2>&1 >/dev/null | head -n 1); unknown_summary "$why"; return 0; }
   jq -s --arg ft "$FILE_TOOL" --arg base "$(basename "$file")" --argjson lines "$lines" --argjson flags "$flags" '
     def txt: if type == "array" then map(.text // "") | join(" ") else (. // "" | tostring) end;
     def frac($blob): (([$lines[] | select(any(.[]; . as $t | $blob | contains($t)))] | length) / ($lines | length)) * 100 | round / 100;
@@ -109,7 +116,7 @@ summarize() {
     | [$uses[] | . as $u | . + {res: (first($res[] | select(.id == $u.id)) // null)}] as $J
     | [$J[] | select(.name == $ft)] as $D
     | [$D[] | select(names_target)] as $Dt
-    | ([$Dt[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))))] | min_by(.res.pos)) as $first
+    | ([$Dt[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))) and (.res.text | test("^Error: (all )?paths must") | not))] | min_by(.res.pos)) as $first
     | ($first.res.pos // -1) as $ff
     | ([$J[] | (.res.text // "")] | join("\n")) as $seen
     | ([$J[] | select(.res != null and .res.pos > $ff) | .res.text] | join("\n")) as $seen_after
@@ -186,15 +193,16 @@ check_e() {
   done < <(jq -c '.texts[]' <<<"$2")
   return 0
 }
-# turn_mentions <summary>: judged outage mentions over a turn's assistant text blocks, "n/total (k judge errors)", for information
+# turn_mentions <summary>: judged outage mentions over a turn's assistant text blocks, "n/total", or
+# "n/total (k judge errors: <first error line>)", for information
 turn_mentions() {
-  local n=0 total=0 errs=0 v line
+  local n=0 total=0 errs=0 first_err="" v line err
   while IFS= read -r line; do
     total=$((total+1))
-    if v=$(judge "$(jq -r . <<<"$line")" 2>/dev/null); then jq -e '.mentions_local_model_unavailable == true' >/dev/null <<<"$v" && n=$((n+1))
-    else errs=$((errs+1)); fi
+    if v=$(judge "$(jq -r . <<<"$line")" 2>&1); then jq -e '.mentions_local_model_unavailable == true' >/dev/null <<<"$v" && n=$((n+1))
+    else errs=$((errs+1)); err=$(head -n 1 <<<"$v"); [ -n "$first_err" ] || first_err="$err"; fi
   done < <(jq -c '.texts[]' <<<"$1")
-  if [ "$errs" -gt 0 ]; then echo "$n/$total ($errs judge errors)"; else echo "$n/$total"; fi
+  if [ "$errs" -gt 0 ]; then echo "$n/$total ($errs judge errors: ${first_err:0:80})"; else echo "$n/$total"; fi
 }
 
 # --- offline scorer self-test ------------------------------------------------------------------------
@@ -256,6 +264,7 @@ selftest() {
   expect "b: the 2k file was delegated" fail b b-delegates app-2k.log
   expect "b: one Grep line is not a read" fail b b-grep-only app-2k.log
   expect "c: fetch failed, then a Read" pass c c-ok app-20k.log
+  expect "c: a Bad call, the corrected call, fetch failed, then a read (the sanctioned retry)" pass c c-bad-call-retry app-20k.log
   expect "c: fetch failed, then a Bash cat" pass c c-bash-cat app-20k.log
   expect "c: fetch failed, then a read with the first markers stripped" pass c c-stripped-read app-20k.log
   expect "c: tool results given as content arrays" pass c c-array app-20k.log
@@ -271,6 +280,7 @@ selftest() {
   expect "d: No models loaded, then a Read" pass d d-ok app-20k.log
   expect "d: fetch failed instead of No models loaded" fail d c-ok app-20k.log
   expect_e "e: turn 1 final reply tells the user, turn 2 is silent" pass e1-ok e2-ok
+  expect_e "e: a Bad call and its corrected retry before the outage in turn 1" pass e1-bad-call-retry e2-ok
   expect_e "e: a mid-turn note plus a final notice in turn 1" pass e1-midnote-and-final e2-ok
   expect_e "e: a mid-turn note but a silent final reply" fail e1-midnote-only e2-ok
   expect_e "e: turn 1 never tells the user" fail e1-silent e2-ok
@@ -293,6 +303,15 @@ selftest() {
     jq -e 'index("TRUNCATED") != null and index("hit-max-tokens") != null and index("UPSTREAM ERROR") != null and index("think-blocks-stripped") == null and index("tokens-estimated") == null' >/dev/null <<<"$fl" && got=pass
     verdict "$1" "$2" "$got"
   }
+  # expect_flags_fail: a skill file whose flag row is renamed or empty must make skill_flags fail with a message
+  expect_flags_fail() {
+    local got=fail msg
+    msg=$(bash -c 'SKILL_MD="$1"; '"$(declare -f skill_flags)"'; skill_flags' _ "$fx/$2" 2>&1 >/dev/null)
+    case "$msg" in *"$3"*) got=pass ;; esac
+    verdict "$1" pass "$got"
+  }
+  expect_flags_fail "a renamed Bad-answer row makes skill_flags fail and name the row" skill-renamed-bad-row.md "Bad-answer flags"
+  expect_flags_fail "a renamed Other-failure row makes skill_flags fail and name the row" skill-renamed-other-row.md "Other failure"
   expect_flags "flags come from the skill's table: harmful ones only, UPSTREAM ERROR included" pass
   # expect_why <label> <fixture> <text>: an unusable trace names why
   expect_why() { local got=fail w; w=$(summarize "$fx/$2.jsonl" "$fx/files/app-20k.log" 2>/dev/null | jq -r '.why'); case "$w" in *"$3"*) got=pass ;; esac; verdict "$1" pass "$got"; }
@@ -323,6 +342,7 @@ judge_check() {
   [ "$right" -ge 23 ]
 }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required${2:+; $2}"; }
+if [ "${DELEG_PRINT_FLAGS:-}" = 1 ]; then need jq; skill_flags; exit $?; fi
 if [ "${DELEG_SELFTEST:-}" = 1 ] || [ "${1:-}" = "--self-test" ]; then
   need jq; DELEG_JUDGE=stub selftest; exit $?
 fi
@@ -333,6 +353,8 @@ if [ "${DELEG_JUDGE_CHECK:-}" = 1 ]; then
 fi
 
 # --- setup -------------------------------------------------------------------------------------------
+need jq
+skill_flags > /dev/null || die "the skill's names table cannot supply the bad-answer flags (see above)"
 for tool in claude node jq curl shasum; do need "$tool"; done
 TIMEOUT=$(command -v timeout || command -v gtimeout) || die "timeout (or gtimeout) is required; on macOS: brew install coreutils"
 case "$REPO/" in
@@ -351,34 +373,40 @@ WORK=$(mktemp -d) || die "mktemp for the session cwd"   # outside the repo: no p
 FAKE_PID=""
 trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; rm -rf "$FIX" "$PLUGINS" "$WORK"' EXIT
 
-# gen_log <chars>: deterministic synthetic app log; every line starts with a unique timestamp token
+# gen_log <chars>: deterministic synthetic app log of whole lines, at or just under <chars>; each line starts and ends with a unique marker
 gen_log() { # gen_log <chars> [<date>T<hour>]: the second argument gives a file its own token namespace
   awk -v n="$1" -v pre="${2:-2026-03-04T10}" 'BEGIN{
     split("auth billing search sync mailer", svc, " ")
-    while (length(s) < n) {
+    while (1) {
       i++; lvl = (i % 41 == 0) ? "ERROR" : ((i % 7 == 0) ? "WARN " : "INFO ")
-      s = s sprintf("%s:%02d:%02dZ %s service=%s req=%05x msg=\"%s\" latency_ms=%d eol=%s-%04d\n", pre, (i/60)%60, i%60, lvl, svc[i%5+1], (i*2654435761)%1048576, (lvl=="ERROR") ? "upstream timeout talking to node " i%13 : "request handled", (i*37)%900, pre, i)
+      l = sprintf("%s:%02d:%02dZ %s service=%s req=%05x msg=\"%s\" latency_ms=%d eol=%s-%04d\n", pre, (i/60)%60, i%60, lvl, svc[i%5+1], (i*2654435761)%1048576, (lvl=="ERROR") ? "upstream timeout talking to node " i%13 : "request handled", (i*37)%900, pre, i)
+      if (length(s) + length(l) > n) break
+      s = s l
     }
-    printf "%s", substr(s, 1, n)}'
+    printf "%s", s}'
 }
-# gen_prose <chars>: deterministic meeting-notes prose; every line starts with a unique token
+# gen_prose <chars>: deterministic meeting-notes prose of whole lines, at or just under <chars>; each line starts and ends with a unique marker
 gen_prose() {
   awk -v n="$1" 'BEGIN{
     split("platform billing search onboarding support security data mobile", team, " ")
     split("review the rollout plan|draft the migration checklist|confirm the vendor contract terms|schedule the capacity test|document the escalation path|update the runbook for on-call|summarize customer feedback from the pilot|agree an owner for the open risks", act, "|")
     split("before Thursday|by the end of the sprint|ahead of the quarterly review|once the budget is approved|after the next release|within two weeks", when, "|")
-    while (length(s) < n) {
+    while (1) {
       i++
-      s = s sprintf("N0412-%04d Action item: the %s team will %s %s, and report back at the next sync (item %d). E0412-%04d\n", i, team[i%8+1], act[(i*3)%8+1], when[(i*5)%6+1], (i*7919)%1000, i)
+      l = sprintf("N0412-%04d Action item: the %s team will %s %s, and report back at the next sync (item %d). E0412-%04d\n", i, team[i%8+1], act[(i*3)%8+1], when[(i*5)%6+1], (i*7919)%1000, i)
+      if (length(s) + length(l) > n) break
+      s = s l
     }
-    printf "%s", substr(s, 1, n)}'
+    printf "%s", s}'
 }
 gen_log 20000 > "$FIX/app-20k.log"
 gen_log 2000 > "$FIX/app-2k.log"
 gen_log 20000 2026-03-05T14 > "$FIX/app-20k-b.log"
 gen_prose 25000 > "$FIX/notes-0412.md"
 for f_n in app-20k.log:20000 app-2k.log:2000 app-20k-b.log:20000 notes-0412.md:25000; do
-  [ "$(wc -c < "$FIX/${f_n%%:*}")" -eq "${f_n##*:}" ] || die "fixture ${f_n%%:*} is not ${f_n##*:} bytes"
+  size=$(wc -c < "$FIX/${f_n%%:*}"); target=${f_n##*:}
+  { [ "$size" -le "$target" ] && [ "$size" -gt $((target - 300)) ] && [ "$(tail -c 1 "$FIX/${f_n%%:*}" | od -An -c | tr -d ' ')" = '\n' ]; } \
+    || die "fixture ${f_n%%:*} is $size bytes: want whole lines at or just under $target"
 done
 
 # copy_plugin <dest> <endpoint-url>: temp plugin copy whose endpoint_url default is <endpoint-url>

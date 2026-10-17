@@ -273,15 +273,20 @@ fi
 
 # --- the bad-answer flags the skill lists still exist in the pinned houtini (string check; the harness reads them off the footer line) ---
 if [ -n "$dist" ]; then
-  skill_md="$REPO/skills/delegate-local/SKILL.md"
-  flag_list=$(grep -E '^\| (Bad-answer flags|Other failure) \|' "$skill_md" | grep -o '`[^`]*`' | tr -d '`' | grep -E '^(TRUNCATED|hit-max-tokens|PREFILL-STALL|reasoning-only|think-strip-empty|CONTENT-FILTERED|UPSTREAM ERROR)$')
-  flag_count=$(grep -c . <<<"$flag_list")
+  flag_json=$(DELEG_PRINT_FLAGS=1 bash "$SCRIPT_DIR/test-delegation.sh" 2>/dev/null); flag_rc=$?
+  flag_count=$(jq 'length' <<<"$flag_json" 2>/dev/null || echo 0)
   flag_missing=""
-  while IFS= read -r flag; do grep -qF -- "$flag" "$dist/index.js" || flag_missing="$flag_missing [$flag]"; done <<<"$flag_list"
-  if [ "$flag_count" -ge 7 ] && [ -z "$flag_missing" ] && grep -q "parts.join(' | ')" "$dist/index.js"; then
-    ok "all $flag_count bad-answer flags in the skill table appear in houtini's dist, and the dist joins footer parts with ' | ' (a string check, not a footer render)"
-  else bad "skill flags ($flag_count parsed) missing from houtini's dist:${flag_missing:- none} (or the footer is no longer one joined line)"; fi
+  while IFS= read -r flag; do [ -z "$flag" ] || grep -qF -- "$flag" "$dist/index.js" || flag_missing="$flag_missing [$flag]"; done < <(jq -r '.[]' <<<"$flag_json" 2>/dev/null)
+  if [ "$flag_rc" -eq 0 ] && [ "$flag_count" -gt 0 ] && [ -z "$flag_missing" ] && grep -q "parts.join(' | ')" "$dist/index.js"; then
+    ok "all $flag_count bad-answer flags the harness takes from the skill table appear in houtini's dist, and the dist joins footer parts with ' | ' (a string check, not a footer render)"
+  else bad "skill flags (rc=$flag_rc, $flag_count parsed) missing from houtini's dist:${flag_missing:- none} (or the footer is no longer one joined line)"; fi
 else skp "houtini 3.3.4 dist not in the npx cache; bad-answer flag check"; fi
+# the harness refuses to start when the skill's flag rows cannot be read
+for f in skill-renamed-bad-row.md skill-renamed-other-row.md; do
+  out=$(DELEG_SKILL_MD="$SCRIPT_DIR/fixtures/deleg/$f" bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && grep -q "skill_flags:" <<<"$out"; then ok "harness start fails on a skill table with a missing flag row ($f)"
+  else bad "harness start should fail on $f (rc=$rc: ${out:0:150})"; fi
+done
 
 # --- case-insensitive filesystems: root typed in another case than on disk -----
 swapped=$(basename "$HOME_TMP" | tr 'a-zA-Z' 'A-Za-z')
@@ -392,13 +397,13 @@ if jq -e '.hooks.UserPromptSubmit | any(.[]; any(.hooks[]; (.command | contains(
 else bad "hooks.json registers scripts/size-hint.mjs on UserPromptSubmit"; fi
 
 st=$(DELEG_SELFTEST=1 DELEG_JUDGE=stub bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); st_rc=$?
-st_calls=$(grep -cE '^  expect(_[a-z]+)? "' "$SCRIPT_DIR/test-delegation.sh")
+st_calls=$(grep -cE '^  expect(_[a-z_]+)? "' "$SCRIPT_DIR/test-delegation.sh")
 st_total=$(sed -n 's/^selftest total: \([0-9]*\), failed: 0$/\1/p' <<<"$st")
 if [ "$st_rc" -eq 0 ] && [ -n "$st_total" ] && [ "$st_total" -eq "$st_calls" ] && ! grep -q 'selftest FAIL' <<<"$st"; then
   ok "delegation scorers pass their offline self-test ($st_total of $st_calls assertions)"
 else bad "delegation scorer self-test (rc=$st_rc, total=${st_total:-none}, expect calls=$st_calls): $(grep 'selftest FAIL' <<<"$st" | head -3 | tr '\n' ';')"; fi
-if ! grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" >/dev/null; then ok "no commented-out scorer assertions"
-else bad "commented-out scorer assertion: $(grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" | head -2)"; fi
+if ! grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z_]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" >/dev/null; then ok "no commented-out scorer assertions"
+else bad "commented-out scorer assertion: $(grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z_]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" | head -2)"; fi
 if [ "$(jq 'length' "$SCRIPT_DIR/fixtures/deleg/judge-labels.json" 2>/dev/null)" = 24 ]; then ok "judge self-check has its 24 labeled messages"
 else bad "judge-labels.json does not hold 24 items"; fi
 allowed=$(sed -n 's/^allowed-tools: //p' "$skill")
