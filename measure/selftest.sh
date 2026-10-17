@@ -238,9 +238,10 @@ check "judge: valid output followed by a nonzero exit is rejected, not stored" '
 MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_JUDGE_JOBS=2 bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: one call per ok answer that passed the mechanical checks (FAILED f02-on and both mechanical failures of f03 skipped)" \
   'f01-off f01-on f02-off' "$(cd "$R/judge" && ls ./*.verdict.json | sed 's|^\./||; s|\.verdict\.json$||' | tr '\n' ' ' | sed 's/ $//')"
-rm -f "$R"/judge/*.verdict.json
+cp "$FAKE_LOG" "$TMP/calls.keep"; rm -f "$R"/judge/*.verdict.json
 (cd "$(dirname "$R")" && MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$(basename "$R")" >/dev/null 2>&1)
 check "judge: a relative run dir works (the judge runs from a temp cwd)" '3' "$(ls "$R"/judge/*.verdict.json 2>/dev/null | wc -l | tr -d ' ')"
+cp "$TMP/calls.keep" "$FAKE_LOG"  # later checks count the calls of the run above, not this one
 check "judge: the mechanical failure is recorded" '"evidence not verbatim"' "$(jq -c .reason "$R/judge/f03-off.mech.json")"
 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: stored verdicts are not re-judged" '3' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
