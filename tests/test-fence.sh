@@ -430,8 +430,8 @@ HOMEX="$TMP/hint-home"; mkdir -p "$HOMEX/github"; head -c 12000 /dev/zero | tr '
 h=$(printf '%s' "$(hint_json "Classify $HOMEX/github/proj.txt")" | env -u CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS HOME="$HOMEX" node "$SH")
 if jq -e '.hookSpecificOutput.additionalContext | contains("proj.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: with the option unset, the manifest default (\$HOME/github) allows a file in it"
 else bad "size hint: manifest default allows ($h)"; fi
-h=$(printf '%s' "$(hint_json "Classify $SHD/big.txt")" | env -u CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS HOME="$HOMEX" node "$SH")
-if [ -z "$h" ]; then ok "size hint: with the option unset, a file outside the manifest default is silent"
+h=$(printf '%s' "$(hint_json "Classify $SHD/big.txt")" | env -u CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS HOME="$HOMEX" node "$SH" 2>>"$TMP/hint.err"); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$h" ]; then ok "size hint: with the option unset, a file outside the manifest default is silent"
 else bad "size hint: outside manifest default ($h)"; fi
 for n in .env .env.local .netrc .npmrc server.pem server.pem.bak tls.KEY tls.key.old cert.p12 vault.kdbx terraform.tfstate id_rsa id_ed25519.txt AWS-Credentials.json my-Secrets.txt client_secret.json api-token.txt passwords.csv; do
   head -c 12000 /dev/zero | tr '\0' 'a' > "$SHD/$n"
