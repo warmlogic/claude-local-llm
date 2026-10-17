@@ -8,6 +8,8 @@ task_field() {
 }
 # manifest_field <manifest> <id> <field-number>: id slot type task bytes mtime sha256 path = fields 1..8
 manifest_field() { awk -F'\t' -v id="$2" -v f="$3" '$1 == id {print $f}' "$1"; }
+# sha256_of <file>: its hex digest, or nothing when unreadable
+sha256_of() { shasum -a 256 "$1" 2>/dev/null | cut -c1-64; }
 TIMEOUT=$(command -v timeout || command -v gtimeout) || TIMEOUT=""
 # work_dir: a new empty dir outside $HOME for a session's cwd (Claude Code would load $HOME/.claude/CLAUDE.md as
 # an ancestor's project memory from any cwd under $HOME); prints its resolved path, fails when TMPDIR is under $HOME

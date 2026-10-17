@@ -6,7 +6,8 @@
 #   no new sessions.
 #
 # Private state lives under MEASURE_HOME (default $HOME/.cache/local-llm-measure), outside every allowed folder:
-# corpus.tsv (the frozen manifest, with paths), runs/<stamp>/ (traces, answers, judge prompts, review.md).
+# corpus.tsv (the frozen manifest, with paths), runs/<stamp>/ (traces, answers, the graded file copies, judge prompts,
+# review.md).
 # Sessions run in an empty temp dir outside $HOME (see work_dir in lib.sh).
 # Env: MEASURE_HOME; MEASURE_MODEL (empty = Claude Code's default model, unpinned); MEASURE_LOCAL_MODEL
 # (qwen3.6-35b-a3b-splash, must be listed by LM Studio); MEASURE_RESELECT=1 (pick the corpus again);
@@ -63,7 +64,7 @@ rows=$(wc -l < "$MANIFEST" | tr -d ' ')
 [ "$rows" -eq 13 ] || echo "warning: the manifest has $rows files, not 13 (10 main + 3 small)" >&2
 
 RUN_DIR="$MEASURE_HOME/runs/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$RUN_DIR/traces" "$RUN_DIR/facts" "$RUN_DIR/judge" || die "mkdir $RUN_DIR"
+mkdir -p "$RUN_DIR/traces" "$RUN_DIR/facts" "$RUN_DIR/judge" "$RUN_DIR/files" || die "mkdir $RUN_DIR"
 # The sessions' cwd: empty, constant for the run, and outside $HOME. Under $HOME, Claude Code finds
 # $HOME/.claude/CLAUDE.md while walking the cwd's ancestors and loads the user's own instructions as project memory.
 WORK=$(work_dir) || die "the session cwd must sit outside \$HOME; set TMPDIR to a folder outside it"
@@ -121,13 +122,16 @@ run_one() {
   jq -r '"  \(.run): \(.status)  T=\(.T)  turns=\(.turns)  \((.duration_ms // 0) / 1000 | floor)s\(if .footer then "  local total \(.footer.total_s)s" else "" end)"' \
     "$RUN_DIR/facts/$1.json"
 }
-# job <id> <cfg> <rep>: one job run, unless the file changed since the manifest froze it
+# job <id> <cfg> <rep>: one job run, unless the file changed since the manifest froze it. The first job of a file
+# keeps a hash-verified private copy in files/<id>, the text the quality pass grades against.
 job() {
-  local path task sha plugin="$RUN_DIR/plugin"
+  local path task want snap="$RUN_DIR/files/$1" plugin="$RUN_DIR/plugin"
   path=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 8); task=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 4)
+  want=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 7)
   [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 2)" = main ] || plugin="$RUN_DIR/plugin-lowfloor"
-  sha=$(shasum -a 256 "$path" 2>/dev/null | cut -c1-64)
-  if [ "$sha" != "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 7)" ]; then
+  [ -f "$snap" ] || { cp "$path" "$snap.new" 2>/dev/null && [ "$(sha256_of "$snap.new")" = "$want" ] && mv "$snap.new" "$snap"; }
+  rm -f "$snap.new"
+  if [ ! -f "$snap" ] || [ "$(sha256_of "$path")" != "$want" ]; then
     jq -nc --arg run "$1-$2-$3" --arg cfg "$2" --arg id "$1" --argjson rep "$3" \
       '{run: $run, cfg: $cfg, kind: "job", id: $id, rep: $rep, status: "corpus-changed", T: null}' > "$RUN_DIR/facts/$1-$2-$3.json"
     echo "  $1-$2-$3: FAILED: corpus-changed"; return

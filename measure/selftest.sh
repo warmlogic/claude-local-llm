@@ -68,7 +68,8 @@ check "mech: extra field" '[false,"fields are not exactly subject, first_date, l
 check "mech: not JSON" '[false,"not a JSON object"]' "$(mech extraction 'here is the summary')"
 
 # --- judge.sh with a fake judge, then report.sh -------------------------------------------------------------
-R="$TMP/run"; mkdir -p "$R/facts" "$R/judge"
+R="$TMP/run"; mkdir -p "$R/facts" "$R/judge" "$R/files"
+for id in f01 f02 f11; do cp "$DOC" "$R/files/$id"; done
 sha=$(shasum -a 256 "$DOC" | cut -c1-64)
 printf 'f01\tmain\tdoc\tsummary\t24000\t2026-01-05T00:00:00\t%s\t%s\nf02\tmain\tlog\tclassification\t41000\t2026-01-04T00:00:00\t%s\t%s\nf11\ts2k\tdoc\tsummary\t2000\t2026-01-03T00:00:00\t%s\t%s\n' \
   "$sha" "$DOC" "$sha" "$DOC" "$sha" "$DOC" > "$R/corpus.tsv"
@@ -130,9 +131,10 @@ bash "$MDIR/report.sh" "$R" "$TMP/results.md" >/dev/null 2>&1
 check "report: an operator disagreement flips usable and is counted" '2' \
   "$(grep -cE '^\| f01 \| .* \| yes \| no \(op\) \|  \|$|^- Operator review: agreed on 1 of 2\.$' "$RES")"
 
-echo "an edit after the freeze" >> "$DOC"
+echo "an edit after the freeze" >> "$DOC"; mv "$R/files/f02" "$TMP/f02.away"
 bash "$MDIR/judge.sh" "$R" --mech-only >/dev/null 2>&1
-check "judge: a file changed since the freeze is marked, never graded against new text" '"corpus-changed"' "$(jq -c .reason "$R/judge/f01-off.mech.json")"
+check "judge: grading reads the run's copy, not the live file, and a job without one is never graded" '[true,"corpus-changed"]' \
+  "$(jq -sc '[.[0].ok, .[1].reason]' "$R/judge/f01-off.mech.json" "$R/judge/f02-off.mech.json")"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]

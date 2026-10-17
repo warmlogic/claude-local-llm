@@ -4,7 +4,7 @@
 #                                   ran ok, passed them, and has no stored verdict yet
 #   judge.sh <run-dir> --mech-only  mechanical checks only; never starts a session
 # Writes <run-dir>/judge/<id>-<cfg>.mech.json and, per judged answer, .prompt, .out.json and .verdict.json.
-# The judge sees the full file, the task, the usable definition and the answer, never the configuration: short
+# The judge sees the full file (the run's hash-verified copy in files/<id>), the task, the usable definition and the answer, never the configuration: short
 # the skill's attribution note (a line like "_Summarized by the local model._") is dropped before it reads the answer.
 # Env: MEASURE_JUDGE_MODEL (opus), MEASURE_JUDGE_JOBS (4 in parallel), MEASURE_CLAUDE (claude; tests use a fake).
 set -uo pipefail
@@ -31,7 +31,7 @@ manifest() { manifest_field "$RUN_DIR/corpus.tsv" "$1" "$2"; }
 judge_one() {
   local aid="$1" id="${1%-*}" path task out work
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
-  jq -rn --rawfile file "$path" --arg prompt "$(task_field "$task" prompt "$path")" \
+  jq -rn --rawfile file "$RUN_DIR/files/$id" --arg prompt "$(task_field "$task" prompt "$path")" \
     --arg usable "$(task_field "$task" usable)" --arg ref "$(task_field "$task" reference)" \
     --slurpfile f "$RUN_DIR/facts/$aid-1.json" --arg note "$ATTRIBUTION_NOTE" '
     ($f[0].answer // "" | split("\n") | map(select(test($note; "i") | not)) | join("\n")) as $answer
@@ -66,14 +66,13 @@ for f in "$RUN_DIR"/facts/f*-1.json; do
   aid=$(basename "$f" .json); aid="${aid%-1}"; id="${aid%-*}"
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
   [ -n "$path" ] || die "$id is not in the run's manifest"
-  # Grade only against the text that was measured: a file that changed or vanished since the manifest froze it
-  # is marked, never graded against different text.
-  if [ "$(shasum -a 256 "$path" 2>/dev/null | cut -c1-64)" != "$(manifest "$id" 7)" ]; then
+  # Grade only the measured text: run.sh's hash-verified copy in files/<id>, never the live file, which may have
+  # changed or vanished since. A job that has no copy (it failed corpus-changed) is marked and never graded.
+  if [ "$(sha256_of "$RUN_DIR/files/$id")" != "$(manifest "$id" 7)" ]; then
     echo '{"ok":false,"reason":"corpus-changed","extra_text":false}' > "$RUN_DIR/judge/$aid.mech.json"
-    echo "  judge $aid: the file changed since the manifest froze it; not graded" >&2
     continue
   fi
-  jq '.answer // ""' "$f" | jq -c -L "$MDIR" --arg task "$task" --rawfile file "$path" --argjson labels "$labels" \
+  jq '.answer // ""' "$f" | jq -c -L "$MDIR" --arg task "$task" --rawfile file "$RUN_DIR/files/$id" --argjson labels "$labels" \
     -f "$MDIR/mechanical.jq" > "$RUN_DIR/judge/$aid.mech.json" || die "mechanical check failed to run for $aid"
   [ "${2:-}" = --mech-only ] && continue
   [ "$(jq -r .status "$f")" = ok ] || continue
