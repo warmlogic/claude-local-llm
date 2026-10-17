@@ -84,16 +84,19 @@ snapshot_ok() {
 # the session ended goes unseen; that is the limit)
 live_unchanged() { [ "$(sha256_of "$(manifest_field "$1/corpus.tsv" "$2" 8)")" = "$(manifest_field "$1/corpus.tsv" "$2" 7)" ]; }
 
-# lower_floor <SKILL.md>: rewrite the skill's 10k delegation floor to 1k for the small-file runs. Only the sentences
-# that state the size range (they name both the 10k floor and the 60k ceiling) change; the edit fails, leaving the
-# file untouched, unless the frontmatter description changed, a body sentence changed, and no 10k is left anywhere.
+# lower_floor <plugin-dir>: lower the delegation floor from 30k to 1k in a plugin copy, for the small-file runs: the
+# skill's size-range sentences (they name the 30k floor and the cap) and the size hint's MIN_DELEGATE_CHARS. Fails,
+# leaving both files untouched, unless the description and a body sentence changed, no 30k is left in the skill, and
+# the constant changed.
 lower_floor() {
-  local f="$1"
-  sed -E '/10k/{/60k/s/(^|[^0-9])10k/\11k/g;}' "$f" > "$f.new" || { rm -f "$f.new"; return 1; }
-  if grep -qE '^description:.*(^|[^0-9])1k.*60k' "$f.new" \
-     && [ "$(grep -vE '^description:' "$f.new" | grep -cE '(^|[^0-9])1k.*60k')" -ge 1 ] && ! grep -q '10k' "$f.new"; then
-    mv "$f.new" "$f"
-  else rm -f "$f.new"; return 1; fi
+  local skill="$1/skills/delegate-local/SKILL.md" cap="$1/scripts/context-cap.mjs"
+  sed -E '/30k/{/cap/s/(^|[^0-9])30k/\11k/g;}' "$skill" > "$skill.new" \
+    && sed -E 's/^(export const MIN_DELEGATE_CHARS = )30_000;/\11_000;/' "$cap" > "$cap.new" || { rm -f "$skill.new" "$cap.new"; return 1; }
+  if grep -qE '^description:.*(^|[^0-9])1k.*cap' "$skill.new" \
+     && [ "$(grep -vE '^description:' "$skill.new" | grep -cE '(^|[^0-9])1k.*cap')" -ge 1 ] && ! grep -q '30k' "$skill.new" \
+     && grep -q '^export const MIN_DELEGATE_CHARS = 1_000;' "$cap.new"; then
+    mv "$skill.new" "$skill"; mv "$cap.new" "$cap"
+  else rm -f "$skill.new" "$cap.new"; return 1; fi
 }
 
 # corpus_shortfall <manifest>: what a full measurement lacks (fewer than 10 main files, a missing small slot), as

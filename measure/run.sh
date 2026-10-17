@@ -51,6 +51,8 @@ fi
 # --- preflight: nothing is spent unless every check passes ---------------------------------------------------
 for tool in "$CLAUDE" jq node curl shasum git; do command -v "$tool" >/dev/null 2>&1 || die "$tool is required"; done
 [ -n "$TIMEOUT" ] || die "timeout (or gtimeout) is required; on macOS: brew install coreutils"
+MIN_DELEGATE_CHARS=$(node --input-type=module -e 'const { MIN_DELEGATE_CHARS } = await import(process.argv[2]); console.log(MIN_DELEGATE_CHARS)' read-floor "$REPO/scripts/context-cap.mjs") \
+  || die "could not read MIN_DELEGATE_CHARS"
 mkdir -p "$MEASURE_HOME" && chmod 700 "$MEASURE_HOME" || die "cannot create $MEASURE_HOME"
 MEASURE_HOME="$(cd "$MEASURE_HOME" && pwd -P)"
 case "$MEASURE_HOME/" in
@@ -98,8 +100,8 @@ if [ "$MODE" = new ]; then
     jq --arg m "$LOCAL_MODEL" '.userConfig.model.default = $m' "$REPO/.claude-plugin/plugin.json" > "$RUN_DIR/$d/.claude-plugin/plugin.json" \
       || die "pinning the model in $RUN_DIR/$d"
   done
-  lower_floor "$RUN_DIR/plugin-lowfloor/skills/delegate-local/SKILL.md" \
-    || die "could not lower the skill's 10k floor: the size-range sentences (10k with 60k) changed; update lower_floor in measure/lib.sh"
+  lower_floor "$RUN_DIR/plugin-lowfloor" \
+    || die "could not lower the 30k delegation floor: the skill's size-range sentences (30k with the cap) or MIN_DELEGATE_CHARS changed; update lower_floor in measure/lib.sh"
 
   WORK=$(work_dir) || die "the session cwd must sit outside \$HOME; set TMPDIR to a folder outside it"
   cutoff_epoch=$(cat "$MEASURE_HOME/corpus.cutoff" 2>/dev/null) && [[ "$cutoff_epoch" =~ ^[0-9]+$ ]] \
@@ -149,7 +151,10 @@ job() {
   local name="$1-$2-$3" path task prompt rc st plugin="$RUN_DIR/plugin"
   if [ -s "$RUN_DIR/facts/$name.json" ]; then echo "  $name: kept ($(jq -r .status "$RUN_DIR/facts/$name.json"))"; return; fi
   path=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 8); task=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 4)
-  [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 2)" = main ] || plugin="$RUN_DIR/plugin-lowfloor"
+  if [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 2)" != main ] \
+      || [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 5)" -lt "$MIN_DELEGATE_CHARS" ]; then
+    plugin="$RUN_DIR/plugin-lowfloor"
+  fi
   snapshot_ok "$RUN_DIR" "$1"; rc=$?
   if [ "$rc" -ne 0 ]; then
     st=$([ "$rc" -eq 1 ] && echo corpus-changed || echo snapshot-failed)

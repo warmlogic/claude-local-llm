@@ -10,9 +10,9 @@
 # and no --allowedTools, then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
 # DELEG_RUNS). Cases a, a2, b, g, h and j need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
-#   a  20k-char file, "summarize <path>": code_task_files succeeds on it, unprompted, and little of the file
+#   a  35k-char file, "summarize <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
-#   a2 a 25k-char prose document with a neutral name (notes-0412.md) and "Classify this document: <path>": as a, with
+#   a2 a 35k-char prose document with a neutral name (notes-0412.md) and "Classify this document: <path>": as a, with
 #      no size, tool or log hint in the file name or prompt (real files are not named app-20k.log)
 #   g  "Use the local model to summarize <path>" on the same document: as a, and no plugin permission denial (asking
 #      plainly must not hit a prompt for the plugin's own tool)
@@ -22,7 +22,7 @@
 #   e  one session, two turns, endpoint down. Turn 1 (file A): as c, and the final reply tells the user (the
 #      judge says: mentions the outage, gives a cause, gives a way to retry). Turn 2 (claude -p --resume, file B):
 #      Claude reads B, makes no code_task_files call, and no assistant text block mentions the outage.
-#   h  a real-looking project: a git-initialized acme-billing/ with README.md, src/ and a 25k-char
+#   h  a real-looking project: a git-initialized acme-billing/ with README.md, src/ and a 35k-char
 #      docs/architecture-decisions.md under the temp root (no tests/, .tmp or plugin name in the path), the session cwd
 #      in it, allowed_dirs pointed at it, and "Summarize <path> in 5 bullets.": as a. Real files carry real names and
 #      sit in projects; the prompt that works at a neutral path must also work here
@@ -430,20 +430,20 @@ gen_adr() {
     }
     printf "%s", s}'
 }
-gen_log 20000 > "$FIX/app-20k.log"
+gen_log 35000 > "$FIX/app-35k.log"
 gen_log 2000 > "$FIX/app-2k.log"
-gen_log 20000 2026-03-05T14 > "$FIX/app-20k-b.log"
-gen_prose 25000 > "$FIX/notes-0412.md"
+gen_log 35000 2026-03-05T14 > "$FIX/app-35k-b.log"
+gen_prose 35000 > "$FIX/notes-0412.md"
 # the project case: a real-looking git-initialized project with a meaningfully named doc, under the temp root
 PROJ="$PROJROOT/acme-billing"
 mkdir -p "$PROJ/docs" "$PROJ/src" || die "mkdir $PROJ"
 printf '# acme-billing\n\nInvoicing and payments for Acme.\n' > "$PROJ/README.md"
 printf 'def main():\n    pass\n' > "$PROJ/src/main.py"
 DOC="$PROJ/docs/architecture-decisions.md"
-gen_adr 25000 > "$DOC"
+gen_adr 35000 > "$DOC"
 git -C "$PROJ" init -q && git -C "$PROJ" add -A \
   && git -C "$PROJ" -c user.name=dev -c user.email=dev@example.com -c core.hooksPath=/dev/null commit -q -m "Initial commit" || die "git init in $PROJ"
-for f_n in app-20k.log:20000 app-2k.log:2000 app-20k-b.log:20000 notes-0412.md:25000 "$DOC":25000; do
+for f_n in app-35k.log:35000 app-2k.log:2000 app-35k-b.log:35000 notes-0412.md:35000 "$DOC":35000; do
   case "${f_n%%:*}" in /*) fpath=${f_n%%:*} ;; *) fpath="$FIX/${f_n%%:*}" ;; esac
   size=$(wc -c < "$fpath"); target=${f_n##*:}
   { [ "$size" -le "$target" ] && [ "$size" -gt $((target - 300)) ] && [ "$(tail -c 1 "$fpath" | od -An -c | tr -d ' ')" = '\n' ]; } \
@@ -500,16 +500,16 @@ case " $CASES " in *" d "*)
 esac
 
 plugin_for() { case "$1" in a|a2|b|g) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
-target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-20k.log" ;; esac; }
+target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
 prompt_for() {
   case "$1" in
     b) echo "Summarize $FIX/app-2k.log in five bullet points." ;;
-    e) echo "Summarize $FIX/app-20k.log in three bullet points." ;;
+    e) echo "Summarize $FIX/app-35k.log in three bullet points." ;;
     h) echo "Summarize $DOC in 5 bullets." ;;
     j) echo "Is the decision in $DOC the right call? Argue it." ;;
     a2) echo "Classify this document: $FIX/notes-0412.md" ;;
     g) echo "Use the local model to summarize $FIX/notes-0412.md" ;;
-    *) echo "Summarize $FIX/app-20k.log in five bullet points." ;;
+    *) echo "Summarize $FIX/app-35k.log in five bullet points." ;;
   esac
 }
 THRESHOLD=$(( (RUNS * 4 + 4) / 5 ))
@@ -541,7 +541,7 @@ for c in $CASES; do
     trace="$OUT/$c-$n.jsonl"
     if [ "$c" = e ]; then
       KEEP_SESSION=1 run_claude "$PLUGINS/$(plugin_for e)" "$(prompt_for e)" "$trace"; rc=$?
-      s=$(summarize "$trace" "$FIX/app-20k.log")
+      s=$(summarize "$trace" "$FIX/app-35k.log")
       trace2="$OUT/e-$n-turn2.jsonl"; rc2=0; stop=""
       s2='{"ok":false,"unknown":true,"why":"turn 2 not run"}'
       if ! jq -e '.ok' >/dev/null <<<"$s"; then
@@ -553,8 +553,8 @@ for c in $CASES; do
           stop="FAIL (no session id in turn 1; turn 2 not run)"
           : > "$trace2"; echo "no session id in $(basename "$trace"); turn 2 not run" > "$trace2.err"
         else
-          run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-20k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
-          s2=$(summarize "$trace2" "$FIX/app-20k-b.log")
+          run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-35k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
+          s2=$(summarize "$trace2" "$FIX/app-35k-b.log")
         fi
       fi
       tally "$s"; tally "$s2"

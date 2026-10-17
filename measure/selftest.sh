@@ -101,12 +101,16 @@ snapshot_ok "$L" f01; rc=$?
 live_unchanged "$L" f01; rc2=$?
 check "snapshot_ok and live_unchanged: a changed live file fails the job (job() writes corpus-changed)" '1,1,0' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$([ $rc2 -ne 0 ] && echo 1 || echo 0),$(grep -c edited "$L/files/f01")"
-cp "$MDIR/../skills/delegate-local/SKILL.md" "$TMP/SKILL.md"; lower_floor "$TMP/SKILL.md"; rc=$?
-check "lower_floor: the current skill gets a 1k floor in its description and body, no 10k left" '0,1,1,0' \
-  "$rc,$(grep -cE '^description:.*about 1k to 60k' "$TMP/SKILL.md"),$(grep -vE '^description:' "$TMP/SKILL.md" | grep -cE '(^|[^0-9])1k.*60k'),$(grep -c '10k' "$TMP/SKILL.md")"
-printf -- '---\ndescription: big files (over 10k characters)\n---\nDelegate anything over 10k.\n' > "$TMP/SKILL2.md"; cp "$TMP/SKILL2.md" "$TMP/SKILL2.orig"
-lower_floor "$TMP/SKILL2.md"; rc=$?
-check "lower_floor: a reworded skill fails loudly and stays untouched" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(cmp -s "$TMP/SKILL2.md" "$TMP/SKILL2.orig" && echo 1 || echo 0)"
+LF="$TMP/lf"; mkdir -p "$LF/skills/delegate-local" "$LF/scripts"
+cp "$MDIR/../skills/delegate-local/SKILL.md" "$LF/skills/delegate-local/"; cp "$MDIR/../scripts/context-cap.mjs" "$LF/scripts/"
+lower_floor "$LF"; rc=$?
+check "lower_floor: the current skill and size hint get a 1k floor, no 30k left in the skill" '0,1,1,0,1' \
+  "$rc,$(grep -cE '^description:.*about 1k characters up to' "$LF/skills/delegate-local/SKILL.md"),$(grep -vE '^description:' "$LF/skills/delegate-local/SKILL.md" | grep -cE '(^|[^0-9])1k.*cap'),$(grep -c '30k' "$LF/skills/delegate-local/SKILL.md"),$(grep -c '^export const MIN_DELEGATE_CHARS = 1_000;' "$LF/scripts/context-cap.mjs")"
+LF2="$TMP/lf2"; mkdir -p "$LF2/skills/delegate-local" "$LF2/scripts"
+printf -- '---\ndescription: big files (over 30k characters)\n---\nDelegate anything over 30k.\n' > "$LF2/skills/delegate-local/SKILL.md"
+cp "$MDIR/../scripts/context-cap.mjs" "$LF2/scripts/"; cp -R "$LF2" "$TMP/lf2.orig"
+lower_floor "$LF2"; rc=$?
+check "lower_floor: a reworded skill fails loudly and both files stay untouched" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(diff -r "$LF2" "$TMP/lf2.orig" >/dev/null && echo 1 || echo 0)"
 copy_plugin "$MDIR/.." "$TMP/snap1"; rc=$?
 mkdir -p "$TMP/repo2" && cp -R "$MDIR/../.claude-plugin" "$MDIR/../.mcp.json" "$MDIR/../package.json" "$MDIR/../scripts" "$MDIR/../skills" "$MDIR/../hooks" "$TMP/repo2/" \
   && mkdir -p "$TMP/repo2/server" && echo x > "$TMP/repo2/server/index.mjs"   # a checkout that ships a server
@@ -234,6 +238,10 @@ check "judge: valid output followed by a nonzero exit is rejected, not stored" '
 MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_JUDGE_JOBS=2 bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: one call per ok answer that passed the mechanical checks (FAILED f02-on and both mechanical failures of f03 skipped)" \
   'f01-off f01-on f02-off' "$(cd "$R/judge" && ls ./*.verdict.json | sed 's|^\./||; s|\.verdict\.json$||' | tr '\n' ' ' | sed 's/ $//')"
+cp "$FAKE_LOG" "$TMP/calls.keep"; rm -f "$R"/judge/*.verdict.json
+(cd "$(dirname "$R")" && MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$(basename "$R")" >/dev/null 2>&1)
+check "judge: a relative run dir works (the judge runs from a temp cwd)" '3' "$(ls "$R"/judge/*.verdict.json 2>/dev/null | wc -l | tr -d ' ')"
+cp "$TMP/calls.keep" "$FAKE_LOG"  # later checks count the calls of the run above, not this one
 check "judge: the mechanical failure is recorded" '"evidence not verbatim"' "$(jq -c .reason "$R/judge/f03-off.mech.json")"
 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: stored verdicts are not re-judged" '3' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
@@ -412,6 +420,24 @@ variant; jq 'del(.local_model)' "$B/meta.json" > "$TMP/v/meta.json"; render; rc=
 check "report: a run without a recorded local_model fails" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'records no local_model' "$TMP/v/report.err")"
 check "trace_facts: a non-numeric rep fails instead of dropping it" '1' \
   "$(sed "s|@PATH@|$DOC|g" "$FX/ctl-off.jsonl" > "$TMP/t2.jsonl"; trace_facts "$TMP/tf2" "$TMP/t2.jsonl" n off ctl "" x "" 0 1 >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# Exercise run.sh's actual job routing with session and file-integrity work stubbed.
+# The standard floor comes from the same helper as run.sh; no paid session can run.
+routes=$(
+  RUN_DIR="$TMP/routing"; mkdir -p "$RUN_DIR/facts"
+  MIN_DELEGATE_CHARS=$(node --input-type=module -e 'const { MIN_DELEGATE_CHARS } = await import(process.argv[2]); console.log(MIN_DELEGATE_CHARS)' read-floor "$MDIR/../scripts/context-cap.mjs")
+  snapshot_ok() { return 0; }; live_unchanged() { return 0; }
+  task_field() { echo 'Summarize fixture'; }
+  run_one() { basename "$8"; }
+  . <(sed -n '/^job() {/,/^}/p' "$MDIR/run.sh")
+  for spec in 'main 20000' 'main 29999' 'main 30000' 'main 50000' 's2k 2000'; do
+    set -- $spec
+    printf 'f01\t%s\tdoc\tsummary\t%s\tT\thash\t/fixture\n' "$1" "$2" > "$RUN_DIR/corpus.tsv"
+    job f01 on 1
+  done
+)
+check "run.sh: main slots below the delegation floor use the low-floor copy, boundary and larger slots use the normal copy" \
+  'plugin-lowfloor plugin-lowfloor plugin plugin plugin-lowfloor' "$(echo "$routes" | tr '\n' ' ' | sed 's/ $//')"
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"

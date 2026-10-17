@@ -155,7 +155,7 @@ node "$FLAT" "$TMP/flat-dup" "$TMP/d1/x/s.jsonl" "$TMP/d2/x/s.jsonl" > "$TMP/fla
 if [ "$rc" -eq 2 ] && [ ! -e "$TMP/flat-dup/s.txt" ]; then ok "flatten refuses two inputs that map to one output file"
 else bad "flatten duplicates: rc=$rc"; fi
 mkdir -p "$TMP/sp ace #1/scripts" "$TMP/sp ace #1/server"; cp -R "$REPO/batch" "$TMP/sp ace #1/batch"
-cp "$REPO/scripts/loopback.mjs" "$TMP/sp ace #1/scripts/"; cp "$REPO/server/endpoint.mjs" "$REPO/server/errors.mjs" "$TMP/sp ace #1/server/"
+cp "$REPO/scripts/loopback.mjs" "$REPO/scripts/context-cap.mjs" "$TMP/sp ace #1/scripts/"; cp "$REPO/server/endpoint.mjs" "$REPO/server/errors.mjs" "$TMP/sp ace #1/server/"
 LOCAL_LLM_ENDPOINT_URL="$EP" node "$TMP/sp ace #1/batch/run.mjs" --job "$TMP/job.json" --out "$TMP/out-sp" "$TMP/m.txt" > "$TMP/run.out" 2>&1
 node "$TMP/sp ace #1/batch/flatten-transcripts.mjs" "$TMP/flat-sp" "$TMP/s.jsonl" > /dev/null 2>&1
 if [ -s "$TMP/out-sp/index.md" ] && [ -s "$TMP/flat-sp/s.txt" ]; then ok "both scripts run from a directory with spaces and a # in its path"

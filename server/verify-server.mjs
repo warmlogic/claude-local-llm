@@ -79,8 +79,8 @@ const TOOL = {
         minItems: 1,
         maxItems: MAX_PATHS,
         description:
-          'Absolute paths of the source files, inside the allowed folders. Keep their total under about 60k ' +
-          'characters (check with wc -c): the model\'s context is the practical limit. 1 MB is the hard cap.',
+          'Absolute paths of the source files, inside the allowed folders. Use the size hint\'s cap ' +
+          '(about 45k chars at a 32k context), with less room for claims and samples (check with wc -c). 1 MB is the hard cap.',
       },
       claims: {
         type: 'array',
