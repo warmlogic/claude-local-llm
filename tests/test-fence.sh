@@ -271,7 +271,7 @@ else
   skp "houtini 3.3.4 dist not in the npx cache; env-name coverage check"
 fi
 
-# --- the bad-answer flags the skill lists are emitted by the pinned houtini, on the footer line ---
+# --- the bad-answer flags the skill lists still exist in the pinned houtini (string check; the harness reads them off the footer line) ---
 if [ -n "$dist" ]; then
   skill_md="$REPO/skills/delegate-local/SKILL.md"
   flag_list=$(grep -E '^\| (Bad-answer flags|Other failure) \|' "$skill_md" | grep -o '`[^`]*`' | tr -d '`' | grep -E '^(TRUNCATED|hit-max-tokens|PREFILL-STALL|reasoning-only|think-strip-empty|CONTENT-FILTERED|UPSTREAM ERROR)$')
@@ -279,7 +279,7 @@ if [ -n "$dist" ]; then
   flag_missing=""
   while IFS= read -r flag; do grep -qF -- "$flag" "$dist/index.js" || flag_missing="$flag_missing [$flag]"; done <<<"$flag_list"
   if [ "$flag_count" -ge 7 ] && [ -z "$flag_missing" ] && grep -q "parts.join(' | ')" "$dist/index.js"; then
-    ok "all $flag_count bad-answer flags in the skill table exist in houtini's dist, which joins the footer parts on one line"
+    ok "all $flag_count bad-answer flags in the skill table appear in houtini's dist, and the dist joins footer parts with ' | ' (a string check, not a footer render)"
   else bad "skill flags ($flag_count parsed) missing from houtini's dist:${flag_missing:- none} (or the footer is no longer one joined line)"; fi
 else skp "houtini 3.3.4 dist not in the npx cache; bad-answer flag check"; fi
 
