@@ -10,7 +10,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, isAbsolute, sep } from 'node:path';
 import { isLoopbackEndpoint, loopbackError } from '../scripts/loopback.mjs';
 
-export const MAX_FILE_BYTES = 1024 * 1024; // the same 1 MB cap houtini runs with
+const MAX_FILE_BYTES = 1024 * 1024; // the same 1 MB cap houtini runs with
 export const DEFAULT_K = 10;
 export const MAX_K = 20;
 export const MAX_CLAIMS = 20;
@@ -52,7 +52,7 @@ const COMPUTED_WORDS = [
 ].join('|');
 const COMPUTED = new RegExp(`[0-9%<>=≤≥]|\\b(?:${COMPUTED_WORDS})\\b`, 'i');
 
-export const claimKind = (claim) => (COMPUTED.test(claim) ? 'computed' : 'lookup');
+const claimKind = (claim) => (COMPUTED.test(claim) ? 'computed' : 'lookup');
 
 // --- the fence: houtini's semantics (realpath the file, then root === real or a prefix + sep) ---
 export function parseRoots(raw) {
@@ -85,7 +85,7 @@ async function readFenced(path, roots) {
 }
 
 // --- arguments -----------------------------------------------------------------------------------
-export function validateArgs(args) {
+function validateArgs(args) {
   const { paths, claims, k = DEFAULT_K } = args ?? {};
   if (!Array.isArray(paths) || !paths.length || paths.length > MAX_PATHS) {
     throw new Error(`paths must be an array of 1 to ${MAX_PATHS} absolute file paths`);
