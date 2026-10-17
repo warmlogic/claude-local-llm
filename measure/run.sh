@@ -86,8 +86,8 @@ if [ "$MODE" = new ]; then
   RUN_DIR="$MEASURE_HOME/runs/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$RUN_DIR/traces" "$RUN_DIR/facts" "$RUN_DIR/judge" "$RUN_DIR/files" || die "mkdir $RUN_DIR"
   if [ -n "$ONLY" ]; then
+    for id in $ONLY; do [ -n "$(manifest_field "$MANIFEST" "$id" 1)" ] || die "MEASURE_ONLY names $id, which is not in the manifest"; done
     awk -F'\t' -v only=" $ONLY " 'index(only, " " $1 " ") > 0' "$MANIFEST" > "$RUN_DIR/corpus.tsv"
-    [ -s "$RUN_DIR/corpus.tsv" ] || die "MEASURE_ONLY=\"$ONLY\" names no manifest id"
   else
     cp "$MANIFEST" "$RUN_DIR/corpus.tsv" || die "copying the manifest"
   fi
@@ -103,7 +103,8 @@ if [ "$MODE" = new ]; then
     || die "could not lower the skill's 10k floor: the size-range sentences (10k with 60k) changed; update lower_floor in measure/lib.sh"
 
   WORK=$(work_dir) || die "the session cwd must sit outside \$HOME; set TMPDIR to a folder outside it"
-  cutoff_epoch=$(cat "$MEASURE_HOME/corpus.cutoff" 2>/dev/null || stat -f %m "$MANIFEST")
+  cutoff_epoch=$(cat "$MEASURE_HOME/corpus.cutoff" 2>/dev/null) && [[ "$cutoff_epoch" =~ ^[0-9]+$ ]] \
+    || die "$MEASURE_HOME/corpus.cutoff is missing or not an epoch; MEASURE_RESELECT=1 picks the corpus again"
   jq -n --arg date_start "$(date +%Y-%m-%dT%H:%M:%S%z)" --arg cutoff "$(date -r "$cutoff_epoch" +%Y-%m-%d)" \
     --arg repo_sha "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
     --argjson repo_dirty "$([ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ] && echo true || echo false)" \
@@ -146,16 +147,19 @@ run_one() {
 }
 # job <id> <cfg> <rep>: one job run, unless the file changed since the manifest froze it (checked before and after)
 job() {
-  local name="$1-$2-$3" path task plugin="$RUN_DIR/plugin"
+  local name="$1-$2-$3" path task prompt rc st plugin="$RUN_DIR/plugin"
   if [ -s "$RUN_DIR/facts/$name.json" ]; then echo "  $name: kept ($(jq -r .status "$RUN_DIR/facts/$name.json"))"; return; fi
   path=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 8); task=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 4)
   [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 2)" = main ] || plugin="$RUN_DIR/plugin-lowfloor"
-  if ! snapshot_ok "$RUN_DIR" "$1"; then
-    jq -nc --arg run "$name" --arg cfg "$2" --arg id "$1" --argjson rep "$3" \
-      '{run: $run, cfg: $cfg, kind: "job", id: $id, rep: $rep, status: "corpus-changed", T: null}' > "$RUN_DIR/facts/$name.json"
-    echo "  $name: FAILED: corpus-changed"; return
+  snapshot_ok "$RUN_DIR" "$1"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    st=$([ "$rc" -eq 1 ] && echo corpus-changed || echo snapshot-failed)
+    jq -nc --arg run "$name" --arg cfg "$2" --arg id "$1" --argjson rep "$3" --arg st "$st" \
+      '{run: $run, cfg: $cfg, kind: "job", id: $id, rep: $rep, status: $st, T: null}' > "$RUN_DIR/facts/$name.json"
+    echo "  $name: FAILED: $st"; return
   fi
-  run_one "$name" "$2" job "$1" "$3" "$path" "$(task_field "$task" prompt "$path")" "$plugin"
+  prompt=$(task_field "$task" prompt "$path") || die "tasks.json has no prompt for task '$task' ($1)"
+  run_one "$name" "$2" job "$1" "$3" "$path" "$prompt" "$plugin"
   if ! live_unchanged "$RUN_DIR" "$1"; then   # the session read a file that changed meanwhile: usage kept, job failed
     jq -c '.status = "corpus-changed"' "$RUN_DIR/facts/$name.json" > "$RUN_DIR/facts/$name.json.new" \
       && mv "$RUN_DIR/facts/$name.json.new" "$RUN_DIR/facts/$name.json" || die "marking $name corpus-changed"
@@ -163,7 +167,7 @@ job() {
   fi
 }
 
-CTL_PROMPT=$(jq -r .control_prompt "$MDIR/tasks.json")
+CTL_PROMPT=$(jq -er '.control_prompt | strings' "$MDIR/tasks.json") || die "tasks.json has no control_prompt"
 echo "run dir: $RUN_DIR"
 echo "warm-ups and controls"
 for c in $CONFIGS; do run_one "warm-$c" "$c" warm "" 0 "" "$CTL_PROMPT" "$RUN_DIR/plugin"; done

@@ -50,6 +50,7 @@ for f in "$RUN_DIR"/judge/*.verdict.json; do
   [ -s "$f" ] || continue
   a=$(basename "$f" .verdict.json)
   if [ "$(jq -r '.answer_sha // empty' "$f")" != "$(answer_sha "$RUN_DIR/facts/$a-1.json")" ]; then
+    echo "report: warning: the stored verdict for $a graded an earlier answer (the run was redone); dropped, so $a reads incomplete until judged again" >&2
     jq --arg a "$a" 'del(.[$a])' "$tmp/verdicts.json" > "$tmp/v.new" && mv "$tmp/v.new" "$tmp/verdicts.json" || die "dropping the stale verdict for $a"
   fi
 done
@@ -70,6 +71,10 @@ if [ -f "$RUN_DIR/review-verdicts.tsv" ]; then
       echo "report: warning: review-verdicts.tsv line $n: $aid was redone since that review (its answer changed); line ignored" >&2
       continue
     fi
+    if grep -qxF -- "$aid" "$tmp/ops.seen" 2>/dev/null; then
+      echo "report: warning: review-verdicts.tsv line $n: a second line for $aid; the later line wins" >&2
+    fi
+    echo "$aid" >> "$tmp/ops.seen"
     jq -nc --arg a "$aid" --arg v "$verdict" --arg note "${note:-}" '{($a): {agree: ($v == "agree"), note: $note}}' >> "$tmp/ops.jsonl" \
       || die "review-verdicts.tsv line $n"
   done < "$RUN_DIR/review-verdicts.tsv"
