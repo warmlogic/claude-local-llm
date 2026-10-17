@@ -9,7 +9,7 @@
 # to DELEG_RUNS). Cases a and b need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the
 # plugin at a dead port or a fake endpoint and never touch LM Studio.
 #   a  20k-char file, "summarize <path>": code_task_files is called on it, unprompted, and Claude does not read it
-#      itself (a Read, or a Bash cat/head/tail/sed/awk naming it; Grep spot-checks are fine)
+#      itself (a Read, or a Bash cat/head/tail/sed/awk, bare or by absolute path, naming it; Grep spot-checks are fine)
 #   b  2k-char file: no code_task_files call, Claude reads the file
 #   c  endpoint down: the tool fails with "fetch failed", is not called again, and Claude reads the file itself
 #   d  endpoint up but no model loaded (fake endpoint, tests/fake-endpoint.mjs no-model): same as c
@@ -90,7 +90,7 @@ summarize() {
         read_by_claude: [$bases[] | . as $b | select([$RD[] | select((.input | tostring) | contains($b))] | length > 0)],
         content_read_attempt: [$bases[] | . as $b | select([$J[] | select((.name == "Read" and ((.input | tostring) | contains($b)))
           or (.name == "Bash" and ((.input.command // "") | contains($b))
-            and ([(.input.command // "") | splits("[;&|]+") | select(test("^\\s*(cat|head|tail|sed|awk)\\s") and (contains($b) or contains("$")))] | length > 0)))] | length > 0)],
+            and ([(.input.command // "") | splits("[;&|\n]+") | select(test("^\\s*([^\\s]*/)?(cat|head|tail|sed|awk)\\s") and (contains($b) or contains("$")))] | length > 0)))] | length > 0)],
         notices_all: ([$all[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text
           | split("\n")[] | splits("(?<=[.!?]) +") | select(test($subj; "i") and test($outage; "i"))] | length),
         result_notices: ([($r.result // "") | split("\n")[] | splits("(?<=[.!?]) +") | select(test($subj; "i") and test($outage; "i"))] | length)
@@ -148,6 +148,8 @@ selftest() {
   expect "a: delegated, Grep spot-check" pass a a-ok app-20k.log
   expect "a: Claude also Read the delegated file" fail a a-read app-20k.log
   expect "a: Claude also cat the delegated file" fail a a-cat app-20k.log
+  expect "a: head on a second line of a multiline command" fail a a-multiline app-20k.log
+  expect "a: /usr/bin/head by absolute path" fail a a-abs-path app-20k.log
   expect "b: read directly, no delegation" pass b b-ok app-2k.log
   expect "b: the 2k file was delegated" fail b b-delegates app-2k.log
   expect "c: fetch failed, then a successful Read" pass c c-ok app-20k.log
