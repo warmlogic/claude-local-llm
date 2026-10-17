@@ -1,8 +1,0 @@
-{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
-{"type":"assistant","message":{"id":"m21","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-2k.log"],"task":"summarize"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"- routine\n---\nModel: m | 5\u21929 tokens | 1 file(s) read"}]}}
-{"type":"assistant","message":{"id":"m22","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/work/app-2k.log"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"1\tINFO a"}]}}
-{"type":"assistant","message":{"id":"m23","content":[{"type":"text","text":"Summary."}]}}
-{"type":"result","subtype":"success","is_error":false,"result":"Summary.","permission_denials":[]}

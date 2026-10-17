@@ -1,8 +1,0 @@
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}],"id":"m0"}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-20k.log"],"task":"summarize"}}],"id":"m2"}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"Error: fetch failed","is_error":true}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/work/app-20k.log"}}],"id":"m4"}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"Permission denied","is_error":true}]}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"I could not read the file."}],"id":"m6"}}
-{"type":"result","subtype":"success","is_error":false,"result":"I could not read the file.","permission_denials":[{"tool_name":"Read","tool_input":{}}]}

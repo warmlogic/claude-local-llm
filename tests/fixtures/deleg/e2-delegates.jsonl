@@ -1,6 +1,0 @@
-{"type":"assistant","message":{"id":"m9","content":[{"type":"tool_use","id":"d2","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-20k-b.log"],"task":"summarize"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d2","content":"Error: fetch failed","is_error":true}]}}
-{"type":"assistant","message":{"id":"m6","content":[{"type":"tool_use","id":"r2","name":"Read","input":{"file_path":"/work/app-20k-b.log"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r2","content":"1\tINFO b"}]}}
-{"type":"assistant","message":{"id":"m10","content":[{"type":"text","text":"Summary of the second file: routine."}]}}
-{"type":"result","subtype":"success","is_error":false,"result":"Summary of the second file: routine.","permission_denials":[]}

@@ -1,6 +1,0 @@
-{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
-{"type":"assistant","message":{"id":"m19","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/work/app-2k.log"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"1\tINFO a"}]}}
-{"type":"assistant","message":{"id":"m20","content":[{"type":"text","text":"Summary of the small file."}]}}
-{"type":"result","subtype":"success","is_error":false,"result":"Summary of the small file.","permission_denials":[]}
