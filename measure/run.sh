@@ -30,12 +30,12 @@ die() { echo "measure: $*" >&2; exit 1; }
 MODE=new
 case "${1:-}" in
   --report)
-    RUN_DIR="${2:?usage: run.sh --report <run-dir>}"
+    RUN_DIR=$(cd "${2:?usage: run.sh --report <run-dir>}" && pwd -P) || die "no such run dir: $2"
     bash "$MDIR/judge.sh" "$RUN_DIR" --mech-only || die "mechanical checks failed"
     bash "$MDIR/report.sh" "$RUN_DIR" "$(results_path "$RUN_DIR" "$REPO")" || die "report failed"
     exit 0 ;;
   --resume)
-    RUN_DIR="${2:?usage: run.sh --resume <run-dir>}"; MODE=resume
+    RUN_DIR=$(cd "${2:?usage: run.sh --resume <run-dir>}" && pwd -P) || die "no such run dir: $2"; MODE=resume   # sessions cd away
     [ -s "$RUN_DIR/meta.json" ] && [ -s "$RUN_DIR/corpus.tsv" ] || die "$RUN_DIR is not a run dir" ;;
   "") ;;
   *) die "unknown argument: $1 (use --resume <run-dir> or --report <run-dir>)" ;;

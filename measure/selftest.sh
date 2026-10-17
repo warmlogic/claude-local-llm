@@ -186,6 +186,9 @@ check "judge: one call per ok answer that passed the mechanical checks (FAILED f
 check "judge: the mechanical failure is recorded" '"evidence not verbatim"' "$(jq -c .reason "$R/judge/f03-off.mech.json")"
 MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
 check "judge: stored verdicts are not re-judged" '3' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+jq -c '.answer = "- a redone answer"' "$R/facts/f01-on-1.json" > "$R/x" && mv "$R/x" "$R/facts/f01-on-1.json"
+MEASURE_CLAUDE="$TMP/fake-claude" bash "$MDIR/judge.sh" "$R" >/dev/null 2>&1
+check "judge: a redone answer is judged again, not given the old verdict" '4' "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 note=$(sed -n "s/^ATTRIBUTION_NOTE='\(.*\)'$/\1/p" "$MDIR/judge.sh")
 check "judge: blinding drops the attribution note and keeps claims about the local model" 'drop,keep,0' \
   "$(printf '%s\n' '_Summarized by the local model._' 'The local model requires 128 GB RAM.' | jq -R --arg n "$note" 'if test($n; "i") then "drop" else "keep" end' | jq -rs 'join(",")'),$(grep -c 'by the local model' "$R/judge/f01-on.prompt")"
@@ -214,7 +217,8 @@ for i in 01 02 03 04 05 06 07 08 09 10; do mkf "$B" "f$i-off-1" off job "f$i" 1 
 for id in f11 f12 f13; do for r in 1 2 3; do mkf "$B" "$id-off-$r" off job "$id" "$r" 27000; mkf "$B" "$id-on-$r" on job "$id" "$r" 19700 ok "$ONF"; done; done
 for f in "$B"/facts/f*-1.json; do a=$(basename "$f" -1.json)
   echo '{"ok":true,"reason":null,"extra_text":false}' > "$B/judge/$a.mech.json"
-  echo '{"reference":["x"],"invented":[],"missed":[],"usable":true,"reason":"r","judge_models":["fake-judge"]}' > "$B/judge/$a.verdict.json"
+  jq -nc --arg sha "$(answer_sha "$f")" '{reference: ["x"], invented: [], missed: [], usable: true, reason: "r", judge_models: ["fake-judge"], answer_sha: $sha}' \
+    > "$B/judge/$a.verdict.json"
 done
 jq -n '{date_start: "2026-01-06T00:00:00", date_end: "2026-01-06T01:00:00", cutoff: "2026-01-05", repo_sha: "abc1234", repo_dirty: false,
   claude_version: "0.0.0 (fake)", server_pin: "@houtini/lm@3.3.4", lms_version: "unknown", model: "", local_model: "local-fixture",
@@ -236,6 +240,14 @@ check "report FAIL-incomplete: a missing main run makes both gates incomplete" '
   "$(grep -cE '^\| (Claude tokens|Usable answers) .*\| FAIL \(incomplete: .*f03 on' "$TMP/v/results.md")"
 check "report FAIL-incomplete: totals and break-even say incomplete, not a number" '| Claude tokens per job (Σ T over 10 main files) | incomplete | incomplete |,- Break-even: incomplete.' \
   "$(cell '^\| Claude tokens' | cut -d'|' -f1-4)|,$(cell '^- Break-even')"
+
+variant; rm "$TMP/v/facts/ctl-on-3.json"; render
+check "report: a missing control leaves every plugin-on job cost incomplete (10 main rows, 13 threshold rows)" '23,1' \
+  "$(grep -cE '^\| f[01][0-9] \| [^|]+ \| ([^|]+ \| [^|]+ \| )?[0-9]+ \| incomplete \(controls\) \|' "$TMP/v/results.md"),$(grep -cE '^\| Claude tokens .*FAIL \(incomplete: controls on: 2/3 counted\)' "$TMP/v/results.md")"
+
+variant; jq -c '.answer = "- a redone answer"' "$B/facts/f02-on-1.json" > "$TMP/v/facts/f02-on-1.json"; render
+check "report: a verdict for an earlier answer (the run was redone) counts as no verdict" 'incomplete,1' \
+  "$(cell '^\| f02 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $22); print $22}'),$(grep -c 'f02 on: no usable verdict' "$TMP/v/results.md")"
 
 variant; rm "$TMP/v/facts/f11-on-2.json"; mkf "$TMP/v" f12-on-2 on job f12 2 null timeout; mkf "$TMP/v" f12-on-3 on job f12 3 null timeout; render
 check "report: a missing small rep and two timeouts leave those rows incomplete, never a median of what is left" '2' \

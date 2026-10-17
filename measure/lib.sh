@@ -11,6 +11,8 @@ task_field() {
 manifest_field() { awk -F'\t' -v id="$2" -v f="$3" '$1 == id {print $f}' "$1"; }
 # sha256_of <file>: its hex digest, or nothing when unreadable
 sha256_of() { shasum -a 256 "$1" 2>/dev/null | cut -c1-64; }
+# answer_sha <facts-file>: the digest of a run's answer text; a verdict counts only for the answer it graded
+answer_sha() { jq -j '.answer // ""' "$1" 2>/dev/null | shasum -a 256 | cut -c1-64; }
 TIMEOUT=$(command -v timeout || command -v gtimeout) || TIMEOUT=""
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
 

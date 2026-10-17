@@ -3,7 +3,8 @@
 #   judge.sh <run-dir>              mechanical checks for every answer, then a judge call for each answer that
 #                                   ran ok, passed them, and has no stored verdict yet
 #   judge.sh <run-dir> --mech-only  mechanical checks only; never starts a session
-# Writes <run-dir>/judge/<id>-<cfg>.mech.json and, per judged answer, .prompt, .out.json and .verdict.json.
+# Writes <run-dir>/judge/<id>-<cfg>.mech.json and, per judged answer, .prompt, .out.json and .verdict.json; a verdict
+# records the hash of the answer it graded and is reused only while that answer stands.
 # The judge sees the full file (the run's hash-verified copy in files/<id>), the task, the usable definition and the
 # answer, but never the configuration: the skill's attribution note (a line like "_Summarized by the local model._")
 # is dropped from the answer first. A verdict needs array reference, invented and missed, and a boolean usable.
@@ -53,7 +54,8 @@ judge_one() {
   rmdir "$work" 2>/dev/null
   if jq -e '.structured_output | type == "object" and (.reference | type) == "array" and (.invented | type) == "array"
             and (.missed | type) == "array" and (.usable | type) == "boolean"' "$out" >/dev/null 2>&1; then
-    jq '.structured_output + {judge_models: (.modelUsage // {} | keys)}' "$out" > "$RUN_DIR/judge/$aid.verdict.json"
+    jq --arg sha "$(answer_sha "$RUN_DIR/facts/$aid-1.json")" '.structured_output + {judge_models: (.modelUsage // {} | keys), answer_sha: $sha}' \
+      "$out" > "$RUN_DIR/judge/$aid.verdict.json"
     echo "  judge $aid: usable=$(jq -r .usable "$RUN_DIR/judge/$aid.verdict.json")"
   else
     echo "  judge $aid: no valid verdict (claude rc=$rc$([ "$rc" -eq 124 ] && echo ", timed out"); see $out.err): $(head -n 1 "$out.err" 2>/dev/null | cut -c1-200)" >&2
@@ -81,7 +83,8 @@ for f in "$RUN_DIR"/facts/f*-1.json; do
   [ "${2:-}" = --mech-only ] && continue
   [ "$(jq -r .status "$f")" = ok ] || continue
   jq -e .ok "$RUN_DIR/judge/$aid.mech.json" >/dev/null || continue
-  [ -s "$RUN_DIR/judge/$aid.verdict.json" ] || todo+=("$aid")
+  # a stored verdict is reused only for the answer it graded (a redone run has a new answer)
+  [ "$(jq -r '.answer_sha // empty' "$RUN_DIR/judge/$aid.verdict.json" 2>/dev/null)" = "$(answer_sha "$f")" ] || todo+=("$aid")
 done
 [ "${2:-}" = --mech-only ] && exit 0
 [ "${#todo[@]}" -gt 0 ] || { echo "  judge: nothing to judge"; exit 0; }

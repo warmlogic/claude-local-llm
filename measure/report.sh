@@ -10,6 +10,8 @@ MDIR="$(cd "$(dirname "$0")" && pwd -P)"
 RUN_DIR="${1:?usage: report.sh <run-dir> <results-md>}"
 OUT="${2:?usage: report.sh <run-dir> <results-md>}"
 die() { echo "report: $*" >&2; exit 1; }
+# shellcheck source=lib.sh
+. "$MDIR/lib.sh"
 [ -f "$RUN_DIR/meta.json" ] && [ -f "$RUN_DIR/corpus.tsv" ] && [ -d "$RUN_DIR/facts" ] || die "$RUN_DIR is not a run dir"
 
 tmp=$(mktemp -d) || die "mktemp"; trap 'rm -rf "$tmp"' EXIT
@@ -38,6 +40,14 @@ collect() {
 }
 collect .mech.json > "$tmp/mech.json" || exit 1
 collect .verdict.json > "$tmp/verdicts.json" || exit 1
+# a verdict graded some other answer (its run was redone) counts as no verdict
+for f in "$RUN_DIR"/judge/*.verdict.json; do
+  [ -s "$f" ] || continue
+  a=$(basename "$f" .verdict.json)
+  if [ "$(jq -r '.answer_sha // empty' "$f")" != "$(answer_sha "$RUN_DIR/facts/$a-1.json")" ]; then
+    jq --arg a "$a" 'del(.[$a])' "$tmp/verdicts.json" > "$tmp/v.new" && mv "$tmp/v.new" "$tmp/verdicts.json" || die "dropping the stale verdict for $a"
+  fi
+done
 
 # Operator verdicts: \r stripped, blank lines skipped, anything else must be "<known id>-<cfg> TAB agree|disagree".
 : > "$tmp/ops.jsonl"

@@ -7,7 +7,8 @@
 # Completeness, the one rule: a run COUNTS when it has usage and its status is ok or a delegation failure (no-call,
 # call-error, no-server: real plugin behavior, kept at its actual tokens). Every other run (missing, timeout,
 # unknown, is-error, exit-N, facts-error, corpus-changed, base-no-read, plugin-leak) does not measure what it should.
-# A metric is complete only when every run it expects counts and the corpus is full (10 main files, each small slot,
+# A metric is complete only when every run it expects counts (a job's cost also expects its configuration's
+# controls) and the corpus is full (10 main files, each small slot,
 # both configurations, not a partial run). An incomplete metric shows "incomplete" and can never PASS.
 
 def median_by(f): map(select(f != null)) | sort_by(f) | if length == 0 then null else .[(length - 1) / 2 | floor] end;
@@ -67,7 +68,7 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
        ([$runs[] | select(.kind == "job" and .id == $f.id and .cfg == $c) | . + {job: job, jobusd: jobusd, growth: growth}]) as $reps
        | ([$reps[] | select(counts)]) as $ok
        | ($reps | map(select(.rep == 1)) | first) as $r1
-       | (($ok | length) == $want and ($reps | length) == $want) as $complete
+       | (($ok | length) == $want and ($reps | length) == $want and $C[$c].complete) as $complete
        | .[$c] = (if $complete then ($ok | median_by(.job)) else {} end)
            + {complete: $complete, counted: ($ok | length), want: $want, ran: ($reps | length),
               ok_reps: ([$reps[] | select(.status == "ok")] | length),
@@ -80,7 +81,7 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
    | . + {savings: (if .off.complete and .on.complete then ratio(.on.job; .off.job) else null end),
           savings_usd: (if .off.complete and .on.complete then ratio(.on.jobusd; .off.jobusd) else null end)}] as $F
 | ($F | map(select(.slot == "main"))) as $M
-| ([$M[] | . as $f | ("off", "on") as $c | select(($f[$c].complete) | not) | "\($f.id) \($c): \($f[$c].counted)/\($f[$c].want) runs counted"]
+| ([$M[] | . as $f | ("off", "on") as $c | select(($f[$c].complete | not) and $C[$c].complete) | "\($f.id) \($c): \($f[$c].counted)/\($f[$c].want) runs counted"]
    + [("off", "on") as $c | select($C[$c].complete | not) | "controls \($c): \($C[$c].counted)/\($ctl_reps) counted"]) as $run_why
 | ($corpus_why + $run_why) as $t_why
 | ($t_why | length == 0) as $t_complete
@@ -97,7 +98,8 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
 | 8 as $u_target
 | ([$ops | to_entries[] | select(.value.agree)] | length) as $op_agree
 | ($ops | length) as $op_n
-| def jcell($c): if .[$c].complete then .[$c].job else "incomplete (\(.[$c].counted)/\(.[$c].want))" end;
+| def jcell($c): if .[$c].complete then .[$c].job elif ($C[$c].complete | not) then "incomplete (controls)"
+    else "incomplete (\(.[$c].counted)/\(.[$c].want))" end;
 if $mode == "review" then
   "# Operator review sheet (private; never commit)", "",
   "Write `review-verdicts.tsv` beside this file, one line per entry: `<id>-<cfg><TAB>agree|disagree<TAB>note`.",
