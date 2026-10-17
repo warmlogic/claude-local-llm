@@ -48,7 +48,7 @@ function allowedRoots() {
 }
 let roots; // resolved on the first big file, so a prompt that names none spawns nothing
 const isAllowed = (file) => {
-  roots ??= allowedRoots();
+  if (roots === undefined) roots = allowedRoots(); // null (unresolvable) is kept, so a failure is not retried per file
   return roots !== null && roots.some((r) => file === r || file.startsWith(r + sep));
 };
 
