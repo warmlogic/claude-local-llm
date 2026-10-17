@@ -35,10 +35,12 @@
 //   verify-slowlist      as verify, but /api/v0/models never answers.
 //   batch     stands in for the model behind batch/run.mjs: a chat completion answers two rows for the first
 //             "L<n>\t..." line of the request text, one quoting that line truly and one with a fabricated
-//             quote, and logs the parsed request body (body). usage reports 10 prompt and 5 completion tokens.
+//             quote (each also carries a bogus file/window/reason the runner must override), and logs the parsed request body (body). usage reports 10 prompt and 5 completion tokens.
 //   batch-bad          as batch, but every reply's content is not JSON.
 //   batch-bad-once     as batch, but the first reply to each distinct request is not JSON.
 //   batch-length       as batch, but every reply is cut off (finish_reason "length").
+//   batch-flaky        as batch, but every other request (the 1st, 3rd, ...) fails with HTTP 500.
+//   batch-stall        logs the request and never answers.
 //   proxy     an HTTP proxy that must never be used: logs each request (absolute URL) and answers 502.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -131,6 +133,7 @@ const verify = (req, res) => {
     }, DELAY_MS);
   });
 };
+let requests = 0;
 const batch = (req, res) => {
   let raw = '';
   req.on('data', (d) => { raw += d; });
@@ -147,11 +150,14 @@ const batch = (req, res) => {
       choices: [{ message: { role: 'assistant', content }, finish_reason: finish }],
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     });
+    if (mode === 'batch-stall') return; // never answer
+    if (mode === 'batch-flaky' && ++requests % 2 === 1) return json(res, 500, { error: { code: 'server_error' } });
     if (mode === 'batch-bad' || (mode === 'batch-bad-once' && first)) return reply('not json');
     if (mode === 'batch-length') return reply('{"rows":[', 'length');
     const rows = line ? [
-      { line: line[1], kind: 'correction', quote: line[2].slice(0, 12), note: 'true quote' },
-      { line: line[1], kind: 'stuck', quote: 'FABRICATED-QUOTE-NOT-IN-LINE', note: 'fabricated' },
+      // file and window are provenance the runner sets; a model-supplied value must never win
+      { line: line[1], kind: 'correction', quote: line[2].slice(0, 12), note: 'true quote', file: 'model-says-so', window: 99 },
+      { line: line[1], kind: 'stuck', quote: 'FABRICATED-QUOTE-NOT-IN-LINE', note: 'fabricated', reason: 'model-says-so' },
     ] : [];
     reply(JSON.stringify({ rows }));
   });

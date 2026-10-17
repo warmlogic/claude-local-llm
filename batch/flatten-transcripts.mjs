@@ -25,23 +25,32 @@ const blockOf = (b) => {
   return null; // thinking and anything else
 };
 
+// A message typed while Claude was working arrives as an attachment, not a user entry; it is the most direct
+// correction signal, so it becomes a user text line.
+const blocksOf = (e) => {
+  if (e.type === 'attachment' && e.attachment?.type === 'queued_command') return [textOf(e.attachment.prompt)];
+  const content = e.message?.content;
+  return typeof content === 'string' ? [content] : Array.isArray(content) ? content : [];
+};
+
+// Returns {lines, unparseable}: unparseable counts input lines that are not JSON objects (bad JSON or null).
 export const flatten = (jsonl) => {
-  const out = [];
-  let n = 0;
+  const lines = [];
+  let unparseable = 0;
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue;
     let e;
-    try { e = JSON.parse(line); } catch { continue; }
-    if (e.type !== 'user' && e.type !== 'assistant') continue;
-    const content = e.message?.content;
-    const blocks = typeof content === 'string' ? [content] : Array.isArray(content) ? content : [];
-    for (const b of blocks) {
+    try { e = JSON.parse(line); } catch { /* counted below */ }
+    if (!e || typeof e !== 'object') { unparseable++; continue; }
+    const role = e.type === 'attachment' ? 'user' : e.type;
+    if (role !== 'user' && role !== 'assistant') continue;
+    for (const b of blocksOf(e)) {
       const r = blockOf(b);
       if (!r || !r[1].trim()) continue;
-      out.push(`L${++n}\t${e.type}\t${r[0]}\t${oneLine(r[1])}`);
+      lines.push(`L${lines.length + 1}\t${role}\t${r[0]}\t${oneLine(r[1])}`);
     }
   }
-  return out;
+  return { lines, unparseable };
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
@@ -57,9 +66,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
   }
   mkdirSync(outDir, { recursive: true });
   for (const f of files) {
-    const lines = flatten(readFileSync(f, 'utf8'));
+    const { lines, unparseable } = flatten(readFileSync(f, 'utf8'));
     const dest = destOf(f);
     writeFileSync(dest, lines.join('\n') + '\n');
-    console.log(`${dest}: ${lines.length} lines`);
+    console.error(`${dest}: ${lines.length} lines${unparseable ? `, ${unparseable} unparseable skipped` : ''}`);
   }
 }
