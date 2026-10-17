@@ -19,15 +19,28 @@ Status:
 
 ## 1. Set up LM Studio
 
-Install LM Studio, open it once, and run its bundled CLI to confirm it works. The CLI lives at `~/.lmstudio/bin/lms` and may not be on your `PATH`; the commands below call it by that path.
+Install LM Studio (the steps below were tested with LM Studio 0.4.26), open it once, and run its bundled CLI to confirm it works. The CLI lives at `~/.lmstudio/bin/lms` and may not be on your `PATH`; every command here calls it by that path.
 
-Enable the Splash runtime in the app: Settings > Runtime > Experimental backends, then turn on Splash. Check that it is installed and selected:
+```bash
+~/.lmstudio/bin/lms version
+```
+
+The model runs on LM Studio's Splash runtime. LM Studio's Settings > Runtime screen has no toggle for it here (it lists "Runtime Selections", an updates channel and extensions), so use the CLI. Check whether Splash is already installed and selected:
 
 ```bash
 ~/.lmstudio/bin/lms runtime ls
 ```
 
-You want a `splash-...` row with a check mark under `SELECTED`.
+You want a `splash-...` row with a check mark under `SELECTED`. If there is none, find the engine and install it, then select it:
+
+```bash
+~/.lmstudio/bin/lms runtime get splash --list   # shows the engine name and whether you have it; downloads nothing
+~/.lmstudio/bin/lms runtime get splash          # downloads it
+~/.lmstudio/bin/lms runtime select splash-mac-arm64-apple-metal-advsimd
+~/.lmstudio/bin/lms runtime ls                  # confirm the check mark
+```
+
+`runtime select` takes an engine alias and has a `--latest` flag (see `lms runtime select --help`).
 
 Download the model (Splash supports only specific models, and this is the one the plugin is tested with):
 
@@ -53,7 +66,7 @@ The `CONTEXT` column should read `32768`.
 
 Why 32k: the model has to hold the whole file plus your instructions plus its answer. Source text runs about 2.7 characters per token, so a 32k context fits roughly 60k characters of input with room to spare. The skill's 60k ceiling comes from that. A model loaded with a smaller context fails on mid-sized files (see Troubleshooting).
 
-Also turn off just-in-time model loading in LM Studio (the Developer tab's server settings, "Just-in-Time Model Loading"), so a request never silently loads the model with a default (smaller) context. The setting is in the app; `lms` has no flag for it. With it off, a request while no model is loaded fails with `No models loaded` instead, which the plugin reports (see Troubleshooting).
+Optional hardening: turn off just-in-time model loading, so a request never silently loads a model with a default (smaller) context. The app's switch is labeled "Just-in-Time Model Loading" in the Developer tab's server options; the setting itself is `justInTimeModelLoading` in `~/.lmstudio/.internal/http-server-config.json`, and `lms` has no flag for it. With it off, a request while no model is loaded fails with `No models loaded`, which the plugin reports (see Troubleshooting).
 
 ## 3. Start the server on loopback
 
@@ -79,11 +92,11 @@ The plugin has three options (declared as `userConfig` in `.claude-plugin/plugin
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `allowed_dirs` | `$HOME/github`, `$HOME/catalyst` | The folders the local model may read. Nothing outside them is readable. Folder names must not contain `,` or `:`. A folder that does not exist on your machine (`$HOME/catalyst` for most people) is skipped with a warning. |
+| `allowed_dirs` | `$HOME/github`, `$HOME/catalyst` | The folders the local model may read. Nothing outside them is readable *by the local model*. Folder names must not contain `,` or `:`. A folder that does not exist on your machine (`$HOME/catalyst` for most people) is skipped with a warning. |
 | `endpoint_url` | `http://127.0.0.1:1234` | The LM Studio server. Must be loopback. |
 | `model` | empty | A model id to request. Empty means whichever model LM Studio has loaded. |
 
-With `--plugin-dir` the plugin's id is `local-llm@inline`. If you have never set the options, the defaults apply. Set `allowed_dirs` to the folders where your big logs and documents live, and no wider. To see the options and which are unset:
+With `--plugin-dir` the plugin's id is `local-llm@inline`. If you have never set the options, the defaults apply. Set `allowed_dirs` to the folders where your big logs and documents live, and no wider. To keep a folder from Claude entirely, use Claude Code's own permission deny rules. To see the options and which are unset:
 
 ```bash
 claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@inline
@@ -109,25 +122,25 @@ The plugin ships what it needs, so you do not add an allow rule.
 ## Privacy and security
 
 - **The local model's inference never leaves your machine.** The model runs in LM Studio on loopback, and the launcher refuses any `endpoint_url` that is not `127.0.0.1`, `localhost`, or `[::1]`, so the file is never sent to a remote model server.
-- **Some text still reaches Claude.** The model's answer does, and an extraction answer can quote the file verbatim. When Claude spot-checks a fact it runs Grep in content mode, which returns matching lines. When LM Studio is down, Claude reads the file itself. Do not point `allowed_dirs` at, or ask for jobs on, files you would not show Claude.
+- **Some text still reaches Claude.** The model's answer does, and an extraction answer can quote the file verbatim. When Claude spot-checks a fact it runs Grep in content mode, which returns matching lines. `allowed_dirs` limits only the local model. When the local model cannot do a job (LM Studio down, a path outside `allowed_dirs`, a file too large, a bad answer), Claude reads the file itself with its own tools and permissions, wherever Claude Code is allowed to read. Do not ask for jobs on files you would not show Claude, and use Claude Code's permission deny rules for folders it must never read.
 - **One outbound call carries the model id.** At startup, and every 7 days per model, houtini-lm (the MCP server the plugin pins) asks `huggingface.co` for the loaded model's metadata, which sends the model id (for example `incoai/Qwen3.6-35B-A3B-Splash`), never file text. Houtini 3.3.4 has no setting to turn this off. So the claim is "the file is never sent to a remote model server", not "nothing leaves the machine". Houtini also keeps a cache at `~/.houtini-lm/model-cache.db`.
 - **The API key is a dummy.** LM Studio needs no key. The launcher sets `HOUTINI_LM_API_KEY=not-needed` because otherwise houtini falls back to `OPENROUTER_API_KEY` from your environment and would use it as the credential. The launcher also clears the other environment variables houtini reads, so nothing ambient changes its routing.
-- **Reads are fenced to `allowed_dirs` and read-only.** Every path is resolved through symlinks before it is compared with the roots, so these are refused: a path outside the roots (`outside the allowed roots`), a symlink that points out of a root, a sibling folder that shares a prefix (`repo-evil` next to `repo`), and any file over 1 MB. The launcher also refuses to start with no usable root, with `/` as a root, or with a relative path, because houtini reads any absolute path when its roots are unset.
+- **The local model's reads are fenced to `allowed_dirs` and read-only.** Every path is resolved through symlinks before it is compared with the roots, so these are refused: a path outside the roots (`outside the allowed roots`), a symlink that points out of a root, a sibling folder that shares a prefix (`repo-evil` next to `repo`), and any file over 1 MB. The launcher also refuses to start with no usable root, with `/` as a root, or with a relative path, because houtini reads any absolute path when its roots are unset.
 - **Output is treated as data.** The skill tells Claude to ignore any instructions it finds in the local model's answer or in the file.
 
 ## Smoke test
 
-Make a file of about 20k characters in a folder inside `allowed_dirs`, and start Claude Code from that folder:
+Make a file of about 20k characters in a folder inside one of your `allowed_dirs` (`$HOME/github` by default), and start Claude Code from that folder:
 
 ```bash
 mkdir -p "$HOME/github/local-llm-smoke"
 cd "$HOME/github/local-llm-smoke"
-for i in $(seq 1 400); do echo "2026-10-16 10:00:$((i % 60)) INFO job $i finished in $((i * 7 % 900)) ms"; done > smoke.log
+for i in $(seq 1 400); do printf '2026-10-16 10:00:%02d INFO job %d finished in %d ms\n' $((i % 60)) "$i" $((i * 7 % 900)); done > smoke.log
 wc -c smoke.log
-claude --plugin-dir "$HOME/github/claude-local-llm" "Summarize $PWD/smoke.log in 3 bullets."
+claude --plugin-dir "$HOME/github/claude-local-llm" "Use the delegate-local skill to summarize $PWD/smoke.log in 3 bullets."
 ```
 
-`wc -c` should report 10k or more. The shell fills in the absolute path, which matters: a bare "smoke.log in this folder" can make Claude read the file itself instead of delegating.
+`wc -c` should report 10k or more. The shell fills in the absolute path, and the prompt names the skill, so this tests your setup rather than Claude's choice to delegate. (Asking only to "use the local model" can skip the skill; Claude then calls the tool directly, and that call needs your permission because only the skill pre-approves it.) If Claude Code asks whether you trust the folder, accept it (it asks the first time you start in a folder).
 
 Success looks like this:
 
@@ -135,11 +148,13 @@ Success looks like this:
 - The result ends in a footer such as `Model: qwen3.6-35b-a3b-splash | 13226→130 tokens | TTFT: 4355ms, 148.7 tok/s, 5.2s | unknown · 1 file(s) read`.
 - Claude's reply says the local model produced the summary.
 
-If Claude reads the file itself instead, see Troubleshooting. Clean up when you are done: `rm -r "$HOME/github/local-llm-smoke"`.
+Optional: to see whether Claude delegates unprompted, repeat with "Summarize $PWD/smoke.log in 3 bullets." That depends on the model's judgment, so it is probabilistic; a miss is not a setup failure. Clean up when you are done: `rm -r "$HOME/github/local-llm-smoke"`.
 
 ## Troubleshooting
 
-**The server does not connect, or `/mcp` shows it failed.** The launcher exits with status 2 and a one-line reason before houtini starts. These are the refusals:
+### The server does not connect, or `/mcp` shows it failed
+
+The launcher exits with status 2 and a one-line reason before houtini starts. These are the refusals:
 
 | Message starts with | Cause and fix |
 | --- | --- |
@@ -148,21 +163,39 @@ If Claude reads the file itself instead, see Troubleshooting. Clean up when you 
 | `local-llm: allowed folder must not contain ':'` | Remove the `:` from the folder name or pick another folder. Commas are forbidden too. |
 | `local-llm: endpoint must be loopback` | `endpoint_url` must be `http(s)://` with host `127.0.0.1`, `localhost`, or `[::1]`, no user info, and a numeric port. |
 | `local-llm: none of the allowed folders exist` | Every folder in `allowed_dirs` is missing. Fix the paths. |
-| `local-llm: allowed folder must be an absolute path`, `... has leading/trailing whitespace`, `... is not a directory`, `cannot resolve allowed folder`, `refusing '/'` | Fix the entry named in the message. |
+| `local-llm: allowed folder must be an absolute path` | Use absolute paths (a leading `$HOME` or `~` is fine). A comma splits a folder name in two, and the fragment after the comma is what the message names, as a relative path: `/a/b,c` is read as `/a/b` and `c`. Rename the folder. |
+| `local-llm: allowed folder has leading/trailing whitespace`, `... is not a directory`, `cannot resolve allowed folder`, `refusing '/'` | Fix the entry named in the message. |
+| `local-llm: resolved folder would be altered by houtini's split/trim` | The folder's real path (after symlinks) contains `,` or `:` or edge whitespace. Use a folder whose real path does not. |
+| `local-llm: HOME is not an absolute path` | A `$HOME` or `~` entry needs `HOME` set to an absolute path in the environment Claude Code runs in. |
+| `local-llm: cannot enter the plugin directory` | The plugin folder moved or is unreadable. Re-clone it or fix its permissions. |
 
-**Where to read the server's stderr.** Claude Code saves each MCP server's stderr under `~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-plugin-local-llm-local-llm/`, one `.jsonl` file per start, where `<project>` is the folder you launched `claude` from with its slashes and dots turned into dashes. The refusal messages above are in the `Server stderr:` entries. `claude --debug` also prints them.
+### Where to read the server's stderr
 
-**The `allowed folders:` line.** On a healthy start, stderr shows `local-llm: allowed folders: <comma-separated resolved paths>`. This is the exact set the model can read, after symlinks are resolved. A folder that does not exist is skipped with `local-llm: allowed folder not found, skipping: <path>`, so a default like `$HOME/catalyst` on a machine without it is harmless. If a folder you expected is missing from the line, that is why.
+Claude Code saves each MCP server's stderr under `~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-plugin-local-llm-local-llm/`, one `.jsonl` file per start, where `<project>` is the folder you launched `claude` from with its slashes and dots turned into dashes. The refusal messages above are in the `Server stderr:` entries. `claude --debug` also prints them.
 
-**First launch is slow or times out.** On a cold `npx` cache the first start downloads `@houtini/lm`, which needs network and can take a few seconds. If Claude Code reports the server timed out, run `/mcp` and reconnect. Later starts use the cache.
+### The `allowed folders:` line
 
-**`outside the allowed roots` (or `READ FAILED`).** The file is not under any folder in `allowed_dirs`. Add its folder in the plugin options, or the symlink you used points elsewhere. Claude will read the file itself in the meantime and tell you why.
+On a healthy start, stderr shows `local-llm: allowed folders: <comma-separated resolved paths>`. This is the exact set the model can read, after symlinks are resolved. A folder that does not exist is skipped with `local-llm: allowed folder not found, skipping: <path>`, so a default like `$HOME/catalyst` on a machine without it is harmless. If a folder you expected is missing from the line, that is why: check the path for a typo.
 
-**`context_length_exceeded`.** The file does not fit the model's context. Check `lms ps`: if `CONTEXT` is not `32768`, reload with the command in step 2 (`lms unload` first if needed). If it is `32768`, the input is over the roughly 60k-character limit; Claude should split it or read slices, not send it whole.
+### First launch is slow or times out
 
-**`Error: fetch failed`, or `No models loaded`.** LM Studio is not serving, or no model is loaded. Run `lms server status` and `lms ps`, then start the server and load the model (steps 2 and 3). When this happens Claude does the job itself with its Read and Grep tools, and the final reply of that turn tells you the cause and how to retry. Later turns in the same session answer without mentioning it and do not call the local model again, so after you fix LM Studio, tell Claude to "try the local model again". Treat this as best-effort behavior from the skill's instructions, not a guarantee.
+On a cold `npx` cache the first start downloads `@houtini/lm`, which needs network and can take a few seconds. If Claude Code reports the server timed out, run `/mcp` and reconnect. Later starts use the cache.
 
-**Claude never delegates.** The skill only fires for files of about 10k characters or more; smaller files are cheaper to read directly. Ask for the job by name ("use the local model to summarize ...") if you want to force it.
+### `outside the allowed roots` (or `READ FAILED`)
+
+The file is not under any folder in `allowed_dirs`. Add its folder in the plugin options, or the symlink you used points elsewhere. If the folder is already listed, check the server log for `allowed folder not found, skipping` (a typo in the path). Claude will read the file itself in the meantime and tell you why.
+
+### `context_length_exceeded`
+
+The file does not fit the model's context. Check `~/.lmstudio/bin/lms ps`: if `CONTEXT` is not `32768`, reload with the command in step 2 (`~/.lmstudio/bin/lms unload` first if needed). If it is `32768`, the input is over the roughly 60k-character limit; Claude should split it or read slices, not send it whole.
+
+### `Error: fetch failed`, or `No models loaded`
+
+LM Studio is not serving, or no model is loaded. (If the `code_task_files` tool is missing from Claude's tool list instead, the plugin's server failed to start, which is not an LM Studio problem: see [the server does not connect](#the-server-does-not-connect-or-mcp-shows-it-failed) and its refusal table and log.) Run `~/.lmstudio/bin/lms server status` and `~/.lmstudio/bin/lms ps`, then start the server and load the model (steps 2 and 3). When this happens Claude does the job itself with its Read and Grep tools, and the final reply of that turn tells you the cause and how to retry. Later turns in the same session answer without mentioning it and do not call the local model again, so after you fix LM Studio, tell Claude to "try the local model again". Treat this as best-effort behavior from the skill's instructions, not a guarantee.
+
+### Claude never delegates
+
+The skill only fires for files of about 10k characters or more; smaller files are cheaper to read directly. Ask for the skill by name ("use the delegate-local skill to summarize ...") if you want to force it.
 
 ## Swapping the server
 
