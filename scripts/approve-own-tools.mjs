@@ -6,7 +6,8 @@
 // Why this is safe: code_task_files and verify_claims only read files, each server is fenced to the configured
 // allowed folders (scripts/launch-server.sh and scripts/launch-verify.sh fail closed, and the verify server
 // re-checks the fence, the loopback endpoint and the proxy environment itself), and all inference stays on
-// loopback. Deny rules still win over this hook.
+// loopback. A deny rule on a tool name still wins over this hook; Read(...) deny rules on folders do
+// not apply to MCP tool arguments, so allowed_dirs is the only boundary on what these tools read.
 // Names are exact, and the skill name is qualified: a bare `delegate-local` could be another plugin's skill.
 import { readFileSync } from 'node:fs';
 
