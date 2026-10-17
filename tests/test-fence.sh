@@ -188,6 +188,17 @@ if [ -s "$TMP/port" ]; then
   else
     bad "endpoint passthrough (requests: $(wc -l < "$TMP/requests.log" 2>/dev/null), $(jq -c '{init,stderr}' <<<"$out" | cut -c1-200))"
   fi
+  # no proxy: with Node's env proxy turned on, houtini's requests still go straight to the endpoint
+  node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/proxy-port" "$TMP/proxy.log" proxy &
+  PROXY_PID=$!
+  for _ in $(seq 1 50); do [ -s "$TMP/proxy-port" ] && break; sleep 0.1; done
+  pp="http://127.0.0.1:$(cat "$TMP/proxy-port" 2>/dev/null)"; : > "$TMP/proxy.log"; before=$(wc -l < "$TMP/requests.log")
+  out=$(NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--use-env-proxy HTTP_PROXY="$pp" http_proxy="$pp" HTTPS_PROXY="$pp" ALL_PROXY="$pp" NO_PROXY= no_proxy= \
+        LOCAL_LLM_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/port")" run_launcher "$A" list_models)
+  if [ -s "$TMP/proxy-port" ] && [ ! -s "$TMP/proxy.log" ] && [ "$(wc -l < "$TMP/requests.log")" -gt "$before" ]; then
+    ok "houtini with Node's env proxy on and *_PROXY set: the proxy gets nothing, the endpoint gets the requests"
+  else bad "houtini proxy bypass (proxy log: $(wc -l < "$TMP/proxy.log" 2>/dev/null) lines; $(jq -c '{init,stderr}' <<<"$out" | cut -c1-200))"; fi
+  kill "$PROXY_PID" 2>/dev/null
   # model pin: LOCAL_LLM_MODEL reaches houtini as HOUTINI_LM_MODEL; empty means no pin
   ep="http://127.0.0.1:$(cat "$TMP/port")"
   out=$(LOCAL_LLM_MODEL=fake-model LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A" discover)

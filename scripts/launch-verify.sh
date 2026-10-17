@@ -20,6 +20,7 @@ fi
 endpoint=${LOCAL_LLM_ENDPOINT_URL:-http://127.0.0.1:1234}
 node ./scripts/check-endpoint.mjs "$endpoint" || exit 2
 
+. ./scripts/no-proxy.sh  # no proxy may carry the request off loopback
 export LOCAL_VERIFY_ROOTS=$roots
 export LOCAL_LLM_ENDPOINT_URL=$endpoint
 exec node ./server/verify-server.mjs
