@@ -57,7 +57,7 @@ if [ "$(count "$TMP/out-a/rows.jsonl")" -eq "$nreq" ] && jq -e -s 'all(.[]; .not
 else bad "true quotes: $(head -c 300 "$TMP/out-a/rows.jsonl")"; fi
 if [ "$(count "$TMP/out-a/dropped.jsonl")" -eq "$nreq" ] && jq -e -s 'all(.[]; .note == "fabricated" and .reason == "quote_not_in_line")' "$TMP/out-a/dropped.jsonl" >/dev/null; then ok "quote-in-line drops the fabricated quote with a reason"
 else bad "fabricated quotes: $(head -c 300 "$TMP/out-a/dropped.jsonl")"; fi
-if jq -e -s 'all(.[]; .body.temperature == 0 and .body.response_format.json_schema.strict == true and .body.response_format.json_schema.schema.properties.rows.type == "array" and .body.max_tokens > 0)' <(jq -c 'select(.body)' "$LOG") >/dev/null; then ok "requests use temperature 0 and a strict json_schema"
+if jq -e -s 'all(.[]; .body.temperature == 0 and .body.reasoning_effort == "none" and .body.response_format.json_schema.strict == true and .body.response_format.json_schema.schema.properties.rows.type == "array" and .body.max_tokens > 0)' <(jq -c 'select(.body)' "$LOG") >/dev/null; then ok "requests use temperature 0, reasoning off and a strict json_schema"
 else bad "request shape"; fi
 idx="$TMP/out-a/index.md"
 if [ "$(count "$idx")" -lt 60 ] && grep -q "Windows: $nreq" "$idx" && grep -q "correction $nreq" "$idx" && grep -q "Tokens: $((nreq*10)) prompt, $((nreq*5)) completion" "$idx"; then ok "index.md is short and reports windows, kinds and token totals"

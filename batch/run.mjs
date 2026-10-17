@@ -132,7 +132,8 @@ const main = async () => {
       const lineMap = new Map(win.map((l) => [l.split('\t')[0], l]));
       const body = {
         messages: [{ role: 'user', content: `${job.prompt}\n\n--- BEGIN TEXT ---\n${win.join('\n')}\n--- END TEXT ---` }],
-        temperature: 0, max_tokens: MAX_TOKENS,
+        // reasoning off by default: a reasoning model otherwise spends the whole token budget thinking and returns no rows
+        temperature: 0, max_tokens: MAX_TOKENS, reasoning_effort: job.reasoning_effort ?? 'none',
         response_format: { type: 'json_schema', json_schema: { name: 'rows', strict: true, schema } },
       };
       stats.windows++; fs.windows++;
