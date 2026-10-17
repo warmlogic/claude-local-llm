@@ -102,13 +102,14 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
     else "incomplete (\(.[$c].counted)/\(.[$c].want))" end;
 if $mode == "review" then
   "# Operator review sheet (private; never commit)", "",
-  "Write `review-verdicts.tsv` beside this file, one line per entry: `<id>-<cfg><TAB>agree|disagree<TAB>note`.",
+  "Write `review-verdicts.tsv` beside this file, one line per entry: `<id>-<cfg><TAB><answer hash><TAB>agree|disagree<TAB>note`, with the hash shown under the entry. A line for an answer that was since redone is ignored.",
   "Then re-render with `bash measure/run.sh --report \($meta.run_dir)`. A disagreement flips that answer's usable, except that a FAILED job is never usable.", "",
   ([$F[] | . as $f | ("off", "on") as $c | select($f[$c].r1 != null) | {f: $f, c: $c, r: $f[$c]}
      | select((.r.usable.u // false) | not)] +
    ([$M[] | select(.on.usable.u // false) | {f: ., c: "on", r: .on}] | if length == 0 then [] else [first, last] | unique_by(.f.id) end)
    | .[] | "## \(.f.id)-\(.c) (\(if .r.usable == null then "incomplete" elif .r.usable.u then "usable" else "not usable" end))", "",
      "- Path: `\($paths[.f.id])`", "- Task: \(.f.task); status \(.r.r1.status | status_cell)",
+     "- Answer hash: `\(.r.r1.answer_sha // "" | .[0:12])`",
      "- Usable means: \($tasks.tasks[.f.task].usable)",
      "- Mechanical: \($mech["\(.f.id)-\(.c)"] // {} | tojson)", "",
      "Answer:", "", "~~~~text", (.r.answer1 // "(none)"), "~~~~", "",

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # report.sh <run-dir> <results-md>: renders a run's stored facts, mechanical checks and verdicts into <results-md>
 # (ids, types, tasks, size buckets and numbers only) and the private review sheet <run-dir>/review.md.
-# Operator verdicts in <run-dir>/review-verdicts.tsv (<id>-<cfg> TAB agree|disagree TAB note) are applied; a line
-# that does not parse or names an unknown answer stops the report with its line number.
+# Operator verdicts in <run-dir>/review-verdicts.tsv (<id>-<cfg> TAB <answer hash> TAB agree|disagree TAB note, the
+# hash as review.md shows it) are applied; a line that does not parse or names an unknown answer stops the report with
+# its line number, and a line whose answer was since replaced (a redone run) is ignored with a warning.
 # Fails when any local-model footer names a model other than the run's pinned MEASURE_LOCAL_MODEL.
 set -uo pipefail
 
@@ -15,7 +16,11 @@ die() { echo "report: $*" >&2; exit 1; }
 [ -f "$RUN_DIR/meta.json" ] && [ -f "$RUN_DIR/corpus.tsv" ] && [ -d "$RUN_DIR/facts" ] || die "$RUN_DIR is not a run dir"
 
 tmp=$(mktemp -d) || die "mktemp"; trap 'rm -rf "$tmp"' EXIT
-cat "$RUN_DIR"/facts/*.json 2>/dev/null | jq -s . > "$tmp/runs.json" || die "unreadable facts"
+# every run with the hash of its answer: verdicts and operator lines bind to the answer they graded
+for f in "$RUN_DIR"/facts/*.json; do
+  [ -e "$f" ] || continue
+  jq -c --arg s "$(answer_sha "$f")" '. + {answer_sha: $s}' "$f" || die "unreadable $f"
+done | jq -s . > "$tmp/runs.json" || die "unreadable facts"
 awk -F'\t' 'BEGIN{OFS="\t"} {print $1, $2, $3, $4, $5}' "$RUN_DIR/corpus.tsv" \
   | jq -R 'split("\t") | {id: .[0], slot: .[1], type: .[2], task: .[3], chars: (.[4] | tonumber)}' | jq -s . > "$tmp/corpus.json" \
   || die "unreadable manifest"
@@ -49,17 +54,22 @@ for f in "$RUN_DIR"/judge/*.verdict.json; do
   fi
 done
 
-# Operator verdicts: \r stripped, blank lines skipped, anything else must be "<known id>-<cfg> TAB agree|disagree".
+# Operator verdicts: \r stripped, blank lines skipped, anything else must be
+# "<known id>-<cfg> TAB <12-hex answer hash> TAB agree|disagree [TAB note]".
 : > "$tmp/ops.jsonl"
 if [ -f "$RUN_DIR/review-verdicts.tsv" ]; then
-  known=$(cd "$RUN_DIR/facts" && ls f*-1.json 2>/dev/null | sed 's/-1\.json$//')
   n=0
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n+1)); line=${line%$'\r'}
     [ -n "${line//[[:space:]]/}" ] || continue
-    IFS=$'\t' read -r aid verdict note <<<"$line"
-    case "$verdict" in agree|disagree) ;; *) die "review-verdicts.tsv line $n: expected <id>-<cfg> TAB agree|disagree TAB note" ;; esac
-    grep -qxF -- "$aid" <<<"$known" || die "review-verdicts.tsv line $n: $aid is not an answer in this run"
+    IFS=$'\t' read -r aid hash verdict note <<<"$line"
+    case "$verdict" in agree|disagree) ;; *) die "review-verdicts.tsv line $n: expected <id>-<cfg> TAB <answer hash> TAB agree|disagree TAB note" ;; esac
+    [[ "$hash" =~ ^[0-9a-f]{12}$ ]] || die "review-verdicts.tsv line $n: the answer hash must be the 12 hex characters review.md shows"
+    [ -s "$RUN_DIR/facts/$aid-1.json" ] && [[ "$aid" =~ ^f[0-9]+-(off|on)$ ]] || die "review-verdicts.tsv line $n: $aid is not an answer in this run"
+    if [ "$(answer_sha "$RUN_DIR/facts/$aid-1.json" | cut -c1-12)" != "$hash" ]; then
+      echo "report: warning: review-verdicts.tsv line $n: $aid was redone since that review (its answer changed); line ignored" >&2
+      continue
+    fi
     jq -nc --arg a "$aid" --arg v "$verdict" --arg note "${note:-}" '{($a): {agree: ($v == "agree"), note: $note}}' >> "$tmp/ops.jsonl" \
       || die "review-verdicts.tsv line $n"
   done < "$RUN_DIR/review-verdicts.tsv"

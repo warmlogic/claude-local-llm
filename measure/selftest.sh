@@ -263,13 +263,22 @@ check "report: a 1-main-file corpus can never pass" '2' "$(grep -cE '^\| (Claude
 check "report: a short corpus labels break-even incomplete too" '1' "$(grep -c '^- Break-even: 1 job(s) per session (incomplete: 1 of 10 main files' "$TMP/v/results.md")"
 
 variant; mkf "$TMP/v" f04-on-1 on job f04 1 20700 no-call; mkf "$TMP/v" f05-off-1 off job f05 1 47000
-printf 'f04-on\tdisagree\tlooks fine\r\n\nf05-off\tdisagree\tmissed a point\r\nf06-on\tagree\t\n' > "$TMP/v/review-verdicts.tsv"; render
+h() { answer_sha "$TMP/v/facts/$1-1.json" | cut -c1-12; }
+printf 'f04-on\t%s\tdisagree\tlooks fine\r\n\nf05-off\t%s\tdisagree\tmissed a point\r\nf06-on\t%s\tagree\t\n' "$(h f04-on)" "$(h f05-off)" "$(h f06-on)" \
+  > "$TMP/v/review-verdicts.tsv"; render
 check "report: an operator disagreement flips a judged answer, but a FAILED job stays not usable" 'no (op),no' \
   "$(cell '^\| f05 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $21); print $21}'),$(cell '^\| f04 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $22); print $22}')"
 check "report: operator lines with CRLF and blank lines parse; agreement counted" '- Operator review: agreed on 1 of 3.' "$(cell '^- Operator review')"
-printf 'f01-on\tagree\nf01-on\tmaybe\n' > "$TMP/v/review-verdicts.tsv"; render; rc=$?
+check "report: the review sheet shows each entry's answer hash" '1' "$(grep -c "^- Answer hash: \`$(h f05-off)\`$" "$TMP/v/review.md" | awk '{print ($1 > 0) ? 1 : 0}')"
+jq -c '.answer = "- a redone answer"' "$TMP/v/facts/f05-off-1.json" > "$TMP/v/x" && mv "$TMP/v/x" "$TMP/v/facts/f05-off-1.json"
+jq --arg s "$(answer_sha "$TMP/v/facts/f05-off-1.json")" '.answer_sha = $s' "$TMP/v/judge/f05-off.verdict.json" > "$TMP/v/x" \
+  && mv "$TMP/v/x" "$TMP/v/judge/f05-off.verdict.json"   # the redone answer, judged again
+render
+check "report: an operator line for an answer since redone is ignored with a warning; the new verdict stands" 'yes,1' \
+  "$(cell '^\| f05 \| doc' | awk -F'|' '{gsub(/^ | $/, "", $21); print $21}'),$(grep -c 'f05-off was redone since that review' "$TMP/v/report.err")"
+printf 'f01-on\t%s\tagree\nf01-on\t%s\tmaybe\n' "$(h f01-on)" "$(h f01-on)" > "$TMP/v/review-verdicts.tsv"; render; rc=$?
 check "report: a malformed operator line fails with its line number" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'line 2' "$TMP/v/report.err")"
-printf 'f99-on\tagree\n' > "$TMP/v/review-verdicts.tsv"; render; rc=$?
+printf 'f99-on\t0123456789ab\tagree\n' > "$TMP/v/review-verdicts.tsv"; render; rc=$?
 check "report: an operator line naming an unknown answer fails" '1,1' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'f99-on is not an answer' "$TMP/v/report.err")"
 
 variant; mkf "$TMP/v" f02-on-1 on job f02 1 20700 ok '{"call_footers":[{"model":"some-other-model","ttft_ms":1,"total_s":1,"flags":[]}]}'; render; rc=$?
