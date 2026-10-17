@@ -1,4 +1,4 @@
-# The only parser of the local server's result footer (the N3 swap seam: swapping the server rewrites this
+# The only parser of the local server's result footer (the swap seam: swapping the server rewrites this
 # file, the skill's names table and .mcp.json). Format, from houtini 3.3.4 dist/index.js formatFooter:
 #   <answer>\n\n---\nModel: <id> | <p>→<c> tokens[ (<r> reasoning / <v> visible)][ | <n> prompt tokens cached]
 #   | TTFT: <ms>ms[, <x> tok/s][, <s>s] | <lang> · <n>[/<m>] file(s) read[ | Quality: ...][ | ⚠ ...]
