@@ -282,6 +282,21 @@ out=$(call "$(claims_on "$INSIDE" '["[oddcode] x"]' 1)")
 if jq -e '.call.isError and (.call.text | endswith("endpoint error (HTTP 400)")) and (.stderr | contains("upstream HTTP 400 with unlisted error code weird_code_x"))' >/dev/null <<<"$out" \
    && ! grep -q canary <<<"$out"; then ok "an unlisted error code goes to stderr only; the reply stays the bare status"
 else bad "unlisted code ($(jq -c '{call, stderr: (.stderr[-300:])}' <<<"$out"))"; fi
+out=$(call "$(claims_on "$INSIDE" '["[badheaders] x"]' 1)")
+if jq -e '.call.isError and (.call.text | contains("fetch failed (HTTPParserError)"))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
+  ok "malformed headers echoing the prompt: neither the reply nor stderr carries the parser's raw bytes"
+else bad "malformed headers ($(jq -c '{call, canary_in_stderr: (.stderr | contains("canary"))}' <<<"$out" | cut -c1-300))"; fi
+node --input-type=module -e "
+  import { describeError, safeMessage, VerifyError } from '$REPO/server/errors.mjs';
+  const parser = Object.assign(new Error('canary-msg'), { name: 'HTTPParserError', code: 'HPE_INVALID', data: 'canary-data' });
+  const chain = new VerifyError('outer', { cause: new VerifyError('fetch failed (x)', { cause: new TypeError('canary-type', { cause: parser }) }) });
+  const foreign = Object.assign(new Error('canary-foreign'), { body: 'canary-body', status: 500, code: 'canary code with spaces' });
+  console.log(JSON.stringify({ d: describeError(chain), f: describeError(foreign), m: safeMessage(foreign), ok: safeMessage(chain) }));
+" > "$TMP/describe.json" 2>&1
+if ! grep -q canary "$TMP/describe.json" && jq -e '.d.message == "outer" and .d.cause.cause.cause.code == "HPE_INVALID" and .f == {name: "Error", status: 500}
+          and (.m | startswith("internal error")) and .ok == "outer"' "$TMP/describe.json" >/dev/null; then
+  ok "describeError: our messages and frames, metadata only for foreign errors and causes; never .data, .body or a foreign message"
+else bad "describeError ($(cut -c1-300 "$TMP/describe.json"))"; fi
 out=$(call "$(claims_on "$INSIDE" '["[cutbody] x"]' 1)")
 if jq -e '.call.isError and (.call.text | contains("reading the response failed (HTTP 200"))' >/dev/null <<<"$out"; then
   ok "a body cut off mid-stream: 'reading the response failed', not 'fetch failed'"

@@ -14,7 +14,9 @@
 //             and a finish_reason that echo the prompt; "[ctx]" -> LM Studio's real context-overflow 400
 //             (captured from LM Studio 0.4's Splash engine); "[nomodel]" -> a 404 with code model_not_found;
 //             "[fail-seed0]" -> an immediate 500 for the claim's first seed only; "[oddcode]" -> a 400 with an
-//             unlisted error code; "[cutbody]" -> a 200 whose body is cut off mid-stream; else NOT_IN_SOURCE. Logs the
+//             unlisted error code; "[cutbody]" -> a 200 whose body is cut off mid-stream; "[badheaders]" ->
+//             raw, malformed HTTP headers that echo the prompt (an HTTP parser error carries those bytes);
+//             else NOT_IN_SOURCE. Logs the
 //             parsed request body and the number of chat requests in flight (inflight) as it arrives.
 //   verify-stall-once  as verify, but the first request for each seed never answers.
 //   verify-stall       chat completions never answer.
@@ -98,6 +100,11 @@ const verify = (req, res) => {
         res.statusCode = 400;
         res.setHeader('content-type', 'application/json; charset=utf-8');
         return res.end(LMSTUDIO_CTX_ERROR);
+      }
+      if (claim.includes('[badheaders]')) {
+        const echo = prompt.replace(/[\r\n]+/g, ' ');
+        res.socket.write(`HTTP/1.1 200 OK\r\nX-Echo: ${echo}\r\nBad\u0001Header ${echo}\r\n\r\n`);
+        return setTimeout(() => res.socket.destroy(), 20);
       }
       if (claim.includes('[oddcode]')) return json(res, 400, { error: { message: `odd ${prompt}`, code: 'weird_code_x' } });
       if (claim.includes('[cutbody]')) {

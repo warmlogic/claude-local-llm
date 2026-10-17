@@ -10,9 +10,9 @@
 // beside the claims that did; the call fails outright only when no claim finished.
 // File text never appears in a result or an error.
 import { basename, isAbsolute } from 'node:path';
-import { inspect } from 'node:util';
 import { isLoopbackEndpoint, loopbackError } from '../scripts/loopback.mjs';
 import { fetchJson, pickModel, RequestTimeout, upstreamCode, withSlot } from './endpoint.mjs';
+import { logError, safeMessage, VerifyError } from './errors.mjs';
 import { formatSize, MAX_FILE_BYTES, readFenced } from './fence.mjs';
 
 export const DEFAULT_K = 10;
@@ -29,7 +29,7 @@ const SAMPLE_TEMPERATURE = 1.0;
 const SAMPLE_MAX_TOKENS = 100; // a label needs about 10; the rest absorbs leading whitespace
 const REDRAW_SEED_OFFSET = 500; // seed offset for a redrawn sample
 const SEED_STRIDE_PER_CLAIM = 1000; // claim i uses seeds i*stride + j; must exceed REDRAW_SEED_OFFSET + MAX_K
-if (SEED_STRIDE_PER_CLAIM <= REDRAW_SEED_OFFSET + MAX_K) throw new Error('seed stride overlaps the redraw seeds');
+if (SEED_STRIDE_PER_CLAIM <= REDRAW_SEED_OFFSET + MAX_K) throw new VerifyError('seed stride overlaps the redraw seeds');
 const RETRY_HINT = 'send fewer claims or a smaller k';
 
 const INSTRUCTIONS = 'Is the CLAIM supported by the STATE? Judge only from the STATE.\nCLAIM: ';
@@ -45,27 +45,27 @@ const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArr
 function normalizeClaim(c) {
   const claim = typeof c === 'string' ? { text: c, kind: 'computed' } : isPlainObject(c) ? { kind: 'computed', ...c } : null;
   if (!claim || Object.keys(claim).some((key) => key !== 'text' && key !== 'kind')) {
-    throw new Error('each claim must be a string or {text, kind}');
+    throw new VerifyError('each claim must be a string or {text, kind}');
   }
   if (typeof claim.text !== 'string' || !claim.text.trim() || claim.text.length > MAX_CLAIM_CHARS) {
-    throw new Error(`each claim's text must be a non-blank string of at most ${MAX_CLAIM_CHARS} characters`);
+    throw new VerifyError(`each claim's text must be a non-blank string of at most ${MAX_CLAIM_CHARS} characters`);
   }
-  if (!KINDS.includes(claim.kind)) throw new Error('a claim\'s kind must be "lookup" or "computed"');
+  if (!KINDS.includes(claim.kind)) throw new VerifyError('a claim\'s kind must be "lookup" or "computed"');
   return claim;
 }
 
 function validateArgs(args) {
-  if (args !== undefined && !isPlainObject(args)) throw new Error('arguments must be an object');
+  if (args !== undefined && !isPlainObject(args)) throw new VerifyError('arguments must be an object');
   const { paths, claims, k = DEFAULT_K } = args ?? {};
   if (!Array.isArray(paths) || !paths.length || paths.length > MAX_PATHS) {
-    throw new Error(`paths must be an array of 1 to ${MAX_PATHS} absolute file paths`);
+    throw new VerifyError(`paths must be an array of 1 to ${MAX_PATHS} absolute file paths`);
   }
   const relative = paths.filter((p) => typeof p !== 'string' || !isAbsolute(p));
-  if (relative.length) throw new Error(`all paths must be absolute strings. Not absolute: ${JSON.stringify(relative)}`);
+  if (relative.length) throw new VerifyError(`all paths must be absolute strings. Not absolute: ${JSON.stringify(relative)}`);
   if (!Array.isArray(claims) || !claims.length || claims.length > MAX_CLAIMS) {
-    throw new Error(`claims must be an array of 1 to ${MAX_CLAIMS} claims`);
+    throw new VerifyError(`claims must be an array of 1 to ${MAX_CLAIMS} claims`);
   }
-  if (!Number.isInteger(k) || k < 1 || k > MAX_K) throw new Error(`k must be an integer from 1 to ${MAX_K}`);
+  if (!Number.isInteger(k) || k < 1 || k > MAX_K) throw new VerifyError(`k must be an integer from 1 to ${MAX_K}`);
   return { paths, claims: claims.map(normalizeClaim), k };
 }
 
@@ -104,7 +104,7 @@ async function postRetryingStall(cfg, body, signal) {
   try {
     return await postOnce(cfg, body, signal);
   } catch (e) {
-    if (e instanceof RequestTimeout) throw new Error(`a request timed out twice (${cfg.requestTimeoutMs} ms each); ${RETRY_HINT}`);
+    if (e instanceof RequestTimeout) throw new VerifyError(`a request timed out twice (${cfg.requestTimeoutMs} ms each); ${RETRY_HINT}`);
     throw e;
   }
 }
@@ -167,7 +167,7 @@ async function sampleLabel(cfg, model, state, claim, seed, signal) {
       if (answer.label) return answer.label;
       whys.push(answer.why);
     }
-    throw new Error(`the model returned no valid label twice for one sample (${whys.join('; ')})`);
+    throw new VerifyError(`the model returned no valid label twice for one sample (${whys.join('; ')})`);
   });
 }
 
@@ -194,42 +194,42 @@ async function judgeClaim(cfg, model, state, claim, ci, k, signalIn) {
   } catch (e) {
     // A claim's own failure is logged with its stack; a stop of the whole call (budget or cancel) is
     // logged once by verifyClaims instead of once per claim.
-    if (!signalIn.aborted) console.error(`local-verify: claim ${ci} NOT_RUN: ${inspect(e)}`); // stderr is the MCP log
-    return { result: { ...base, label: 'NOT_RUN', reason: e.message }, error: e };
+    if (!signalIn.aborted) logError(`claim ${ci} NOT_RUN`, e); // stderr is the MCP log
+    return { result: { ...base, label: 'NOT_RUN', reason: safeMessage(e) }, error: e };
   }
 }
 
 // cancel: aborts when the client cancels the request (notifications/cancelled).
 export async function verifyClaims(cfg, args, cancel = new AbortController().signal) {
-  if (!isLoopbackEndpoint(cfg.endpoint)) throw new Error(loopbackError(cfg.endpoint));
+  if (!isLoopbackEndpoint(cfg.endpoint)) throw new VerifyError(loopbackError(cfg.endpoint));
   const { paths, claims, k } = validateArgs(args);
   const reads = await Promise.allSettled(paths.map((p) => readFenced(p, cfg.roots)));
-  const failed = reads.flatMap((r, i) => (r.status === 'rejected' ? [`${paths[i]}: ${r.reason.message}`] : []));
-  if (failed.length === 1) throw new Error(`cannot use ${failed[0]}`);
-  if (failed.length) throw new Error(`cannot use ${failed.length} paths: ${failed.join('; ')}`);
+  const failed = reads.flatMap((r, i) => (r.status === 'rejected' ? [`${paths[i]}: ${safeMessage(r.reason)}`] : []));
+  if (failed.length === 1) throw new VerifyError(`cannot use ${failed[0]}`);
+  if (failed.length) throw new VerifyError(`cannot use ${failed.length} paths: ${failed.join('; ')}`);
   const texts = reads.map((r) => r.value);
   const total = texts.reduce((n, t) => n + Buffer.byteLength(t), 0);
   if (total > MAX_INPUT_BYTES) {
-    throw new Error(`the files total ${formatSize(total)}, over the 1 MB combined limit (${MAX_INPUT_BYTES} bytes); send fewer files`);
+    throw new VerifyError(`the files total ${formatSize(total)}, over the 1 MB combined limit (${MAX_INPUT_BYTES} bytes); send fewer files`);
   }
   const state = texts.map((t, i) => `=== ${basename(paths[i])} ===\n${t}`).join('\n\n');
 
   const budget = new AbortController();
   const budgetTimer = setTimeout(
-    () => budget.abort(new Error(`verify_claims ran past its ${cfg.budgetMs} ms budget; ${RETRY_HINT}`)),
+    () => budget.abort(new VerifyError(`verify_claims ran past its ${cfg.budgetMs} ms budget; ${RETRY_HINT}`)),
     cfg.budgetMs,
   );
   const signal = AbortSignal.any([budget.signal, cancel]);
   try {
     const model = await pickModel(cfg, signal);
     const judged = await Promise.all(claims.map((c, ci) => judgeClaim(cfg, model, state, c, ci, k, signal)));
-    if (signal.aborted) console.error(`local-verify: call stopped: ${signal.reason?.message ?? signal.reason}`);
+    if (signal.aborted) console.error(`local-verify: call stopped: ${safeMessage(signal.reason)}`);
     const results = judged.map((j) => j.result);
     const firstError = judged.find((j) => j.error)?.error;
-    if (judged.every((j) => j.error)) throw new Error(firstError.message, { cause: firstError });
-    return firstError ? { model, k, partial: true, error: firstError.message, results } : { model, k, results };
+    if (judged.every((j) => j.error)) throw new VerifyError(safeMessage(firstError), { cause: firstError });
+    return firstError ? { model, k, partial: true, error: safeMessage(firstError), results } : { model, k, results };
   } finally {
     clearTimeout(budgetTimer);
-    budget.abort(new Error('the call is over')); // nothing of this call may keep a slot or a request
+    budget.abort(new VerifyError('the call is over')); // nothing of this call may keep a slot or a request
   }
 }

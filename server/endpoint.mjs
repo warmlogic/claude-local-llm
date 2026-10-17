@@ -5,11 +5,13 @@
 // parse error quoting one) can echo the prompt, and the prompt holds file text.
 // Redirects are an error, not followed: fetch would re-send the body to wherever they point.
 
+import { VerifyError } from './errors.mjs';
+
 export const PARALLEL_SLOTS = 4; // LM Studio's default parallel slots for one loaded model
 
-export class RequestTimeout extends Error {}
+export class RequestTimeout extends VerifyError {}
 
-export class EndpointError extends Error {
+export class EndpointError extends VerifyError {
   constructor(message, status) {
     super(message);
     this.status = status;
@@ -60,7 +62,7 @@ export function upstreamCode(json) {
 
 // An identifier-shaped code outside the allowlist goes to stderr (the MCP log) to help extend the
 // list; it never reaches the reply.
-const IDENTIFIER = /^[a-z][a-z0-9_.-]{0,63}$/;
+const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 function logUnlistedCodes(status, json) {
   const err = json?.error;
   const codes = [err?.code, err?.type].filter((c) => typeof c === 'string' && IDENTIFIER.test(c));
@@ -84,10 +86,11 @@ export async function fetchJson(url, init, timeoutMs, signal) {
     if (signal.aborted) throw signal.reason;
     if (timer.aborted) throw new RequestTimeout('a request to the endpoint timed out');
     if (e instanceof EndpointError) throw e;
-    const code = typeof e.cause?.code === 'string' ? e.cause.code : 'network error';
+    const c = e.cause;
+    const code = [c?.code, c?.name].find((v) => typeof v === 'string' && IDENTIFIER.test(v)) ?? 'network error';
     // Before a response, a connection failure ("fetch failed", the outage string the skill keys on);
     // after one, the body could not be read.
-    throw new Error(res ? `reading the response failed (HTTP ${res.status}, ${code})` : `fetch failed (${code})`, { cause: e });
+    throw new VerifyError(res ? `reading the response failed (HTTP ${res.status}, ${code})` : `fetch failed (${code})`, { cause: e });
   }
   let json;
   try {
@@ -153,7 +156,7 @@ export async function pickModel(cfg, signal) {
   if (cfg.model) return cfg.model;
   const get = (path) =>
     fetchJson(`${cfg.base}${path}`, {}, cfg.requestTimeoutMs, signal).catch((e) => {
-      if (e instanceof RequestTimeout) throw new Error(`the model list request to ${path} timed out after ${cfg.requestTimeoutMs} ms`);
+      if (e instanceof RequestTimeout) throw new VerifyError(`the model list request to ${path} timed out after ${cfg.requestTimeoutMs} ms`);
       throw e;
     });
   const pinHint = 'set the model plugin option';
@@ -163,27 +166,27 @@ export async function pickModel(cfg, signal) {
   } catch (e) {
     if (e.status !== 404) throw e;
     const v1 = await get('/v1/models').catch((e1) => {
-      if (e1.status === 404) throw new Error('no model list at the endpoint (404); endpoint_url should be the server root, without /v1');
+      if (e1.status === 404) throw new VerifyError('no model list at the endpoint (404); endpoint_url should be the server root, without /v1');
       throw e1;
     });
-    if (!Array.isArray(v1?.data)) throw new Error('unexpected response from /v1/models');
+    if (!Array.isArray(v1?.data)) throw new VerifyError('unexpected response from /v1/models');
     const listed = v1.data.filter((m) => typeof m?.id === 'string');
     const chat = listed.filter((m) => !isEmbedding(m));
     if (chat.length === 1) return chat[0].id;
     if (!chat.length) {
-      throw new Error(`No models loaded: no chat model listed${listed.length ? ' (only embeddings models)' : ''}`);
+      throw new VerifyError(`No models loaded: no chat model listed${listed.length ? ' (only embeddings models)' : ''}`);
     }
-    throw new Error(`cannot tell which of ${chat.length} listed models is loaded; ${pinHint}`);
+    throw new VerifyError(`cannot tell which of ${chat.length} listed models is loaded; ${pinHint}`);
   }
-  if (!Array.isArray(v0?.data)) throw new Error('unexpected response from /api/v0/models');
+  if (!Array.isArray(v0?.data)) throw new VerifyError('unexpected response from /api/v0/models');
   const models = v0.data.filter((m) => typeof m?.id === 'string');
   const chat = models.filter((m) => !isEmbedding(m));
   const loaded = chat.filter((m) => m.state === 'loaded');
   if (loaded.length === 1) return loaded[0].id;
-  if (loaded.length > 1) throw new Error(`cannot tell which of ${loaded.length} loaded chat models to use; ${pinHint}`);
+  if (loaded.length > 1) throw new VerifyError(`cannot tell which of ${loaded.length} loaded chat models to use; ${pinHint}`);
   if (chat.some((m) => m.state === undefined)) {
-    throw new Error(`cannot tell which model is loaded (no load state reported); ${pinHint}`);
+    throw new VerifyError(`cannot tell which model is loaded (no load state reported); ${pinHint}`);
   }
   const embeddingsOnly = models.some((m) => isEmbedding(m) && m.state === 'loaded');
-  throw new Error(`No models loaded in LM Studio: no chat model loaded${embeddingsOnly ? ' (only embeddings models are)' : ''}; load one, then retry`);
+  throw new VerifyError(`No models loaded in LM Studio: no chat model loaded${embeddingsOnly ? ' (only embeddings models are)' : ''}; load one, then retry`);
 }
