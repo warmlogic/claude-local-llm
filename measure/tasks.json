@@ -1,0 +1,21 @@
+{
+  "control_prompt": "Reply with the single word OK.",
+  "labels": ["design-or-spec", "plan-or-roadmap", "reference-or-howto", "report-or-analysis", "meeting-record", "log-or-run-output", "data-or-catalog", "other"],
+  "tasks": {
+    "summary": {
+      "prompt": "Summarize <P> in 5 to 8 bullet points: its main points, any decisions, and any open questions or action items.",
+      "usable": "No invented fact (every claim in the answer is supported by the file) and no missed key point (every essential point you list in reference is present in the answer; paraphrase is fine).",
+      "reference": "the essential points a good 5-to-8-bullet summary of this file must contain: its main points, decisions, and open questions or action items"
+    },
+    "classification": {
+      "prompt": "Classify <P>. Reply with only a JSON object {\"kind\": <one of: <LABELS>>, \"topic\": <at most 12 words>, \"evidence\": <an exact substring of the file, up to 200 characters, that supports the kind>}.",
+      "usable": "The kind equals your own label or one you rate equally defensible (otherwise put the kind in missed), and the topic invents nothing (otherwise put it in invented). The JSON shape and the verbatim evidence are checked mechanically before you see the answer.",
+      "reference": "your own kind label from the set <LABELS>, any other label you rate equally defensible, and a short topic"
+    },
+    "extraction": {
+      "prompt": "From <P>, extract a JSON object with exactly these fields: \"subject\" (one line), \"first_date\" and \"last_date\" (the first and the last date or timestamp in file order, copied verbatim, or null), \"key_items\" (the 5 most important errors, failures, decisions or conclusions, in file order, each {\"quote\": an exact substring of the file up to 200 characters, \"why\": up to 20 words}). Reply with only the JSON object.",
+      "usable": "first_date and last_date really are the first and the last date or timestamp in file order (or null when the file has none; a wrong date goes in missed), no clearly more important item is missing from key_items (put it in missed), and no why or subject invents anything (put it in invented). The JSON shape and the verbatim quotes are checked mechanically before you see the answer.",
+      "reference": "the true first and last date or timestamp in file order, and the 5 most important errors, failures, decisions or conclusions"
+    }
+  }
+}
