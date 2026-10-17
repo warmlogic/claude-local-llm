@@ -12,22 +12,24 @@ bash tests/test-fence.sh   # must pass before committing
 
 Tests drive `scripts/launch-server.sh` over stdio MCP JSON-RPC (`tests/mcp-call.mjs`, node stdlib; `tests/fake-endpoint.mjs` is a loopback stand-in for LM Studio) using `mktemp` roots and generated synthetic fixtures. Needs `node`, `jq`, `curl`. Cases that need a model (happy path, oversized input) print `SKIP` when LM Studio is unreachable at `LOCAL_LLM_ENDPOINT_URL` (default `http://127.0.0.1:1234`); every fence case, the 1 MB cap and endpoint passthrough run without one. The oversized case assumes LM Studio loads the model at a 32k context and fails, not skips, if a 130k-char file is accepted. Scratch dirs under `tests/.tmp-*` are gitignored and removed on exit.
 
-`tests/test-delegation.sh` is the delegation acceptance harness and is **not** part of the per-commit suite: every run is a real `claude -p` session and costs quota (a default run is 30 sessions: five each of a to d, and ten for e's two turns). It loads the plugin with `--plugin-dir`, passes no `--allowedTools`, scores the stream-json traces with jq (tool uses joined to their results by `tool_use_id`), and treats an unparseable trace, a missing result event or a non-zero `claude` exit as a failed run. `DELEG_SELFTEST=1 bash tests/test-delegation.sh` scores the hand-written traces in `tests/fixtures/deleg/` offline, and `test-fence.sh` runs that self-test on every commit. Re-run the harness after editing `skills/delegate-local/SKILL.md`.
+`tests/test-delegation.sh` is the delegation acceptance harness and is **not** part of the per-commit suite: every run is a real `claude -p` session and costs quota (a default run is 30 sessions: five each of a to d, and ten for e's two turns, plus a few cheap judge calls). It loads the plugin with `--plugin-dir`, passes no `--allowedTools`, scores the stream-json traces with jq (tool uses joined to their results by `tool_use_id`), and treats an unparseable trace, a missing result event or a non-zero `claude` exit as a failed run. `DELEG_SELFTEST=1 DELEG_JUDGE=stub bash tests/test-delegation.sh` scores the hand-written traces in `tests/fixtures/deleg/` offline, and `test-fence.sh` runs that self-test on every commit (every assertion must pass, the printed total must equal the number of `expect*` lines, and a missing or unsummarizable fixture is an error, never a pass). Re-run the harness after editing `skills/delegate-local/SKILL.md`.
 
 Cases (a case passes at 4 of 5):
 
-- **a**: a 20k-char file is delegated unprompted; Claude does not open it itself (no `Read`, no Bash `cat`/`head`/`tail`/`sed`/`awk` on it; Grep spot-checks are fine).
-- **b**: a 2k-char file is read directly, with no `code_task_files` call.
-- **c**: endpoint down: the tool fails with `fetch failed`, is not called again, and Claude reads the file itself.
+- **a**: a 20k-char file is delegated unprompted (`code_task_files` succeeds on it) and little of the file reaches Claude: exposure at most 0.10.
+- **b**: a 2k-char file is read directly: no `code_task_files` call, exposure at least 0.5.
+- **c**: endpoint down: the tool fails with `fetch failed`, is not called again, and Claude reads the file itself (exposure at least 0.5).
 - **d**: endpoint up with no model loaded (`fake-endpoint.mjs no-model`): the same, with `No models loaded`.
-- **e**: one session, two turns (`--resume`), endpoint down. Turn 1's final reply tells the user about the outage; turn 2 has no outage mention in any assistant text and no `code_task_files` call. It prints `turn1_notices` and `session_notices` for information.
+- **e**: one session, two turns (`--resume`), endpoint down. Turn 1 is as c and its final reply must tell the user about the outage with a cause and a way to retry; in turn 2 Claude reads the second file, makes no `code_task_files` call, and no assistant text block mentions the outage.
 - **f**: no `permission_denials` entry names the skill call or a plugin tool in any inspectable trace of a to e. Other denials print as "other denials (not plugin)" and do not gate: with default permissions Claude's own compound shell commands can still prompt, as in any session.
 
-"Claude read the file" means a successful `Read` with content, or a `Grep` with `output_mode: "content"` that returned matching lines (the Grep default is `files_with_matches`), after the tool failed; Bash is never credited. The notice detector looks for sentences naming the local model, LM Studio or local-llm together with an unavailability phrase.
+**Exposure** answers "did the file's content reach Claude's context?" without listing read commands. Every line of a fixture starts with a unique token (the log timestamps); exposure is the fraction of the file's tokens found in the text of all tool results except `code_task_files`, whose result is the local model's answer. Any tool or shell form that reads the file counts, and a narrow search for a pattern (a few lines) stays near 0. On the saved traces, delegated runs measured 0 to 0.09 and full reads measured 1.0, which is why the thresholds are 0.10 and 0.5.
 
-Knobs: `DELEG_RUNS` (5), `DELEG_CASES` ("a b c d e"), `DELEG_MODEL`, `DELEG_OUT` (trace dir, kept), `DELEG_ALLOWED_TOOLS` (passed to `--allowedTools`; setting it voids the no-prompt result, since it grants the permissions under test), `DELEG_SETTING_SOURCES` (default `project`, which keeps the user's own settings, allow rules and hooks out; hooks are not disabled because the plugin's own hook approves the skill call). Cases a and b need LM Studio to list a model at `127.0.0.1:1234`; a skipped case makes the run exit non-zero. Needs `claude`, `jq`, `node`, `curl` and `timeout` (or `gtimeout`).
+**Judge.** Whether text mentions the outage is decided by one `claude -p --model haiku` call with tools off and a JSON schema (`mentions_local_model_unavailable`, `gives_cause`, `gives_retry`; the verdict is in the result event's `.structured_output`), cached by text. `DELEG_JUDGE_CHECK=1 bash tests/test-delegation.sh` scores it against 24 labeled messages in `tests/fixtures/deleg/judge-labels.json` (the phrasings reviewers raised plus log sentences that must not count) and needs at least 23; the current prompt scored 24/24 in four of five checks and 23/24 in the fifth. `DELEG_JUDGE=stub` swaps in canned verdicts from `judge.json` for the offline suite.
 
-Measured at the current skill with the default model: a 5/5, b 5/5, c 5/5, d 5/5, e 5/5, f 0 plugin denials in 30 of 30 inspectable traces. Within a single turn the model reliably writes an outage note at the failure and recaps it in the final reply, and no wording suppressed that, which is why e spans two turns.
+Knobs: `DELEG_RUNS` (5), `DELEG_CASES` ("a b c d e"), `DELEG_MODEL`, `DELEG_OUT` (trace dir, kept), `DELEG_ALLOWED_TOOLS` (passed to `--allowedTools`; setting it voids the no-prompt result, since it grants the permissions under test), `DELEG_SETTING_SOURCES` (default `project`, which keeps the user's own settings, allow rules and hooks out; hooks are not disabled because the plugin's own hook approves the skill call). Cases a and b need LM Studio to list a model at `127.0.0.1:1234`; a skipped case makes the run exit non-zero. Needs `claude`, `jq`, `node`, `curl`, `shasum` and `timeout` (or `gtimeout`).
+
+Measured at the current skill with the default model: a 5/5, b 5/5, c 4/5, d 5/5, e 4/5, f 0 plugin denials in 30 of 30 inspectable traces. The misses were partial reads (exposure 0.10 in c and 0.19 in e, Claude sampled the file with head and awk instead of reading it). Within a single turn the model reliably writes an outage note at the failure and recaps it in the final reply, and no wording suppressed that, which is why e spans two turns.
 
 ## Project layout
 
@@ -47,9 +49,9 @@ scripts/
 tests/
   test-fence.sh      # fence + launcher + model-backed cases
   mcp-call.mjs       # minimal stdio MCP client used by the tests
-  fake-endpoint.mjs  # loopback HTTP listener that logs request headers; `no-model` mode mimics LM Studio with nothing loaded
+  fake-endpoint.mjs  # loopback HTTP listener that logs request headers; `no-model` mimics LM Studio with nothing loaded, `error500` fails every chat with HTTP 500
   test-delegation.sh # delegation acceptance harness (real claude -p sessions; not in the per-commit suite)
-  fixtures/deleg/    # hand-written stream-json traces for the harness's offline scorer self-test
+  fixtures/deleg/    # hand-written stream-json traces, tiny target files, canned judge verdicts and judge labels
 ```
 
 ## Non-obvious design decisions
