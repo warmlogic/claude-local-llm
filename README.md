@@ -9,7 +9,7 @@ Status:
 - ✅ Implemented: the MCP server (houtini-lm, pinned) behind a fenced launcher, the `delegate-local` skill, the permission hook, and the tests.
 - ✅ Implemented: a second server, local-verify, with one tool, `verify_claims`: the local model votes on whether short claims are supported by a file, without the file entering Claude's context. Its answer is a hint, never verification, and the skill does not use it yet.
 - ✅ Implemented: a repeatable measurement harness (`bash measure/run.sh`; see AGENTS.md, "Measuring") for Claude cost, tokens and answer quality on real files.
-- 🔲 Planned: the measured result. No full run has written `docs/results.md` yet, so the savings are still the design goal, not a measured result.
+- ✅ Implemented: the measured result, in `docs/results.md`. Delegation saves about 50% of Claude cost on files near the size cap and costs the same or more on 10k to 25k characters, so the skill's lower bound is being raised.
 - 🔲 Planned: a marketplace listing, for a permanent install. Today the plugin loads from a clone with `--plugin-dir`.
 
 ## Prerequisites
