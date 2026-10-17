@@ -1,0 +1,6 @@
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"assistant","message":{"id":"m29","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"cat /work/app-2k.log"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"K-001 INFO request handled\nK-002 INFO request handled\nK-003 INFO request handled\nK-004 INFO request handled\nK-005 INFO request handled\nK-006 INFO request handled\nK-007 INFO request handled\nK-008 INFO request handled\nK-009 INFO request handled\nK-010 INFO request handled"}]}}
+{"type":"assistant","message":{"id":"m30","content":[{"type":"text","text":"Summary: routine."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Summary: routine.","permission_denials":[]}

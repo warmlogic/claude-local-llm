@@ -1,0 +1,6 @@
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"assistant","message":{"id":"m5","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-20k.log"],"task":"summarize"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"A-001 INFO request handled\nA-002 INFO request handled\nA-003 INFO request handled\nA-004 INFO request handled\nA-005 INFO request handled\nA-006 INFO request handled\nA-007 INFO request handled\nA-008 INFO request handled\nA-009 INFO request handled\nA-010 INFO request handled\nA-011 INFO request handled\nA-012 INFO request handled\nA-013 INFO request handled\nA-014 INFO request handled\nA-015 INFO request handled\nA-016 INFO request handled\nA-017 INFO request handled\nA-018 INFO request handled\nA-019 INFO request handled\nA-020 INFO request handled\n---\nModel: m | 1 file(s) read"}]}}
+{"type":"assistant","message":{"id":"m6","content":[{"type":"text","text":"Summary: routine."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Summary: routine.","permission_denials":[]}

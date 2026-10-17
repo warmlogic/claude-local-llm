@@ -1,0 +1,146 @@
+[
+ {
+  "text": "The local model was unavailable (fetch failed), so I read both files myself. Check that LM Studio is running with a model loaded.",
+  "mentions": true,
+  "cause": true,
+  "retry": true
+ },
+ {
+  "text": "No model is loaded in LM Studio, so I summarized the file myself. Load one and tell me to retry.",
+  "mentions": true,
+  "cause": true,
+  "retry": true
+ },
+ {
+  "text": "I couldn't use the local model: the endpoint refused the connection (fetch failed). Start LM Studio with a model loaded and ask me to try again.",
+  "mentions": true,
+  "cause": true,
+  "retry": true
+ },
+ {
+  "text": "The local model was unavailable, so I read both files myself.",
+  "mentions": true,
+  "cause": false,
+  "retry": false
+ },
+ {
+  "text": "I read this one myself since I'm skipping the local model.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The local model wasn't used for this one.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The local model isn't reachable right now.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "LM Studio isn't running.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Delegation is still unavailable, so I read the file directly.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The MCP server is still down, so here is the summary from my own read.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The code_task_files tool failed earlier, so I'm reading this file directly.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Same as before, I read the file directly.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The local model was unavailable earlier, so I read this file myself.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Unable to reach the local LLM; I used my own reading instead.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Local model offline; read file directly.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "I'm not using the local model for this job.",
+  "mentions": true,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The billing server is down at 10:03 for about a minute, with one timeout to node 12.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The log shows 226 lines from 10:00:01Z to 10:03:46Z, mostly INFO request handled entries.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Activity: a steady stream of requests across five services, with ERROR entries for upstream timeouts.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Two ERROR lines mention a failed upstream call to node 7; the auth service was unavailable for one second.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "Summarized by the local model: the log is routine.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "I read the file with the Read tool and counted 41 WARN lines.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The mailer service reported that its queue was down, then recovered.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ },
+ {
+  "text": "The latency column peaks at 899 ms on the sync service.",
+  "mentions": false,
+  "cause": null,
+  "retry": null
+ }
+]

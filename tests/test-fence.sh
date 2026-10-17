@@ -22,8 +22,8 @@ done
 
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }                                 # roots and fixtures
 HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }  # under $HOME when the repo is
-FAKE_PID=""; NM_PID=""
-trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
+FAKE_PID=""; NM_PID=""; E5_PID=""
+trap '[ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; [ -z "$E5_PID" ] || kill "$E5_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
 
 # Ambient houtini variables must not leak into any case; the scrub test sets them explicitly.
 unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
@@ -299,12 +299,16 @@ done
 if jq -e '.hooks.PreToolUse | any(.matcher == "Skill" and any(.hooks[]; (.command | contains("scripts/approve-skill.mjs"))))' "$REPO/hooks/hooks.json" >/dev/null 2>&1 \
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"
 else bad "hooks.json registers scripts/approve-skill.mjs on PreToolUse for Skill"; fi
-st=$(DELEG_SELFTEST=1 bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); st_rc=$?
-st_calls=$(grep -cE '^  expect(_[ef])? "' "$SCRIPT_DIR/test-delegation.sh")
+st=$(DELEG_SELFTEST=1 DELEG_JUDGE=stub bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); st_rc=$?
+st_calls=$(grep -cE '^  expect(_[a-z]+)? "' "$SCRIPT_DIR/test-delegation.sh")
 st_total=$(sed -n 's/^selftest total: \([0-9]*\), failed: 0$/\1/p' <<<"$st")
 if [ "$st_rc" -eq 0 ] && [ -n "$st_total" ] && [ "$st_total" -eq "$st_calls" ] && ! grep -q 'selftest FAIL' <<<"$st"; then
   ok "delegation scorers pass their offline self-test ($st_total of $st_calls assertions)"
 else bad "delegation scorer self-test (rc=$st_rc, total=${st_total:-none}, expect calls=$st_calls): $(grep 'selftest FAIL' <<<"$st" | head -3 | tr '\n' ';')"; fi
+if ! grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" >/dev/null; then ok "no commented-out scorer assertions"
+else bad "commented-out scorer assertion: $(grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" | head -2)"; fi
+if [ "$(jq 'length' "$SCRIPT_DIR/fixtures/deleg/judge-labels.json" 2>/dev/null)" = 24 ]; then ok "judge self-check has its 24 labeled messages"
+else bad "judge-labels.json does not hold 24 items"; fi
 allowed=$(sed -n 's/^allowed-tools: //p' "$skill")
 missing=""
 for t in $allowed; do grep -qF "\`$t\`" "$skill" || missing="$missing $t"; done
@@ -329,6 +333,16 @@ if [ -s "$TMP/nm-port" ]; then
   if jq -e '.call.isError and (.call.text | contains("No models loaded"))' >/dev/null <<<"$out"; then ok "no-model endpoint: the tool error says 'No models loaded'"
   else bad "no-model endpoint: expected 'No models loaded' ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
 else bad "no-model fake endpoint did not start"; fi
+node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/e5-port" "$TMP/e5-requests.log" error500 &
+E5_PID=$!
+for _ in $(seq 1 50); do [ -s "$TMP/e5-port" ] && break; sleep 0.1; done
+if [ -s "$TMP/e5-port" ]; then
+  out=$(LOCAL_LLM_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/e5-port")" read_files "$TMP/root" "$TMP/root/twenty-k.txt")
+  if jq -e '.call.isError and (.call.text | test("^Error: .*endpoint error 500")) and (.call.text | contains("No models loaded") | not)' >/dev/null <<<"$out"; then
+    ok "HTTP 500 endpoint: the tool error is 'Error: … endpoint error 500' (the skill's Other failure row)"
+  else bad "HTTP 500 endpoint: expected 'endpoint error 500' ($(jq -c '.call' <<<"$out" | cut -c1-300))"; fi
+  kill "$E5_PID" 2>/dev/null
+else bad "error500 fake endpoint did not start"; fi
 
 if [ "$lm_up" = 1 ]; then
   out=$(read_files "$TMP/root" "$TMP/root/twenty-k.txt")

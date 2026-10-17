@@ -2,6 +2,7 @@
 // Writes its random port to <port-file> and appends one JSON line of request headers per request to <log-file>.
 // Modes:
 //   models    (default) answers every request with an OpenAI-style list of two fake chat models.
+//   error500  lists one loaded model but fails every chat completion with HTTP 500 (an "Other failure" for the skill).
 //   no-model  mirrors LM Studio with nothing loaded: /v1/models is an empty list, /api/v0/models shows one
 //             downloaded model with state "not-loaded", and chat completions fail with LM Studio's
 //             "No models loaded" error (HTTP 404).
@@ -16,6 +17,12 @@ const json = (res, status, body) => {
 };
 const server = createServer((req, res) => {
   appendFileSync(logFile, JSON.stringify({ url: req.url, headers: req.headers }) + '\n');
+  if (mode === 'error500') {
+    const models = [{ id: 'broken-model', object: 'model', type: 'llm', state: 'loaded' }];
+    if (req.url === '/v1/models' || req.url === '/api/v0/models') return json(res, 200, { object: 'list', data: models });
+    req.resume();
+    return json(res, 500, { error: 'Internal server error' });
+  }
   if (mode === 'no-model') {
     if (req.url === '/v1/models') return json(res, 200, { object: 'list', data: [] });
     if (req.url === '/api/v0/models') {
