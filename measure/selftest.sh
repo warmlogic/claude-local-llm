@@ -421,6 +421,24 @@ check "report: a run without a recorded local_model fails" '1,1' "$([ $rc -ne 0 
 check "trace_facts: a non-numeric rep fails instead of dropping it" '1' \
   "$(sed "s|@PATH@|$DOC|g" "$FX/ctl-off.jsonl" > "$TMP/t2.jsonl"; trace_facts "$TMP/tf2" "$TMP/t2.jsonl" n off ctl "" x "" 0 1 >/dev/null 2>&1 && echo 0 || echo 1)"
 
+# Exercise run.sh's actual job routing with session and file-integrity work stubbed.
+# The standard floor comes from the same helper as run.sh; no paid session can run.
+routes=$(
+  RUN_DIR="$TMP/routing"; mkdir -p "$RUN_DIR/facts"
+  MIN_DELEGATE_CHARS=$(node --input-type=module -e 'const { MIN_DELEGATE_CHARS } = await import(process.argv[2]); console.log(MIN_DELEGATE_CHARS)' read-floor "$MDIR/../scripts/context-cap.mjs")
+  snapshot_ok() { return 0; }; live_unchanged() { return 0; }
+  task_field() { echo 'Summarize fixture'; }
+  run_one() { basename "$8"; }
+  . <(sed -n '/^job() {/,/^}/p' "$MDIR/run.sh")
+  for spec in 'main 20000' 'main 29999' 'main 30000' 'main 50000' 's2k 2000'; do
+    set -- $spec
+    printf 'f01\t%s\tdoc\tsummary\t%s\tT\thash\t/fixture\n' "$1" "$2" > "$RUN_DIR/corpus.tsv"
+    job f01 on 1
+  done
+)
+check "run.sh: main slots below the delegation floor use the low-floor copy, boundary and larger slots use the normal copy" \
+  'plugin-lowfloor plugin-lowfloor plugin plugin plugin-lowfloor' "$(echo "$routes" | tr '\n' ' ' | sed 's/ $//')"
+
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"
 runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS=off "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }

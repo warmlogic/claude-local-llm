@@ -51,6 +51,8 @@ fi
 # --- preflight: nothing is spent unless every check passes ---------------------------------------------------
 for tool in "$CLAUDE" jq node curl shasum git; do command -v "$tool" >/dev/null 2>&1 || die "$tool is required"; done
 [ -n "$TIMEOUT" ] || die "timeout (or gtimeout) is required; on macOS: brew install coreutils"
+MIN_DELEGATE_CHARS=$(node --input-type=module -e 'const { MIN_DELEGATE_CHARS } = await import(process.argv[2]); console.log(MIN_DELEGATE_CHARS)' read-floor "$REPO/scripts/context-cap.mjs") \
+  || die "could not read MIN_DELEGATE_CHARS"
 mkdir -p "$MEASURE_HOME" && chmod 700 "$MEASURE_HOME" || die "cannot create $MEASURE_HOME"
 MEASURE_HOME="$(cd "$MEASURE_HOME" && pwd -P)"
 case "$MEASURE_HOME/" in
@@ -149,7 +151,10 @@ job() {
   local name="$1-$2-$3" path task prompt rc st plugin="$RUN_DIR/plugin"
   if [ -s "$RUN_DIR/facts/$name.json" ]; then echo "  $name: kept ($(jq -r .status "$RUN_DIR/facts/$name.json"))"; return; fi
   path=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 8); task=$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 4)
-  [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 2)" = main ] || plugin="$RUN_DIR/plugin-lowfloor"
+  if [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 2)" != main ] \
+      || [ "$(manifest_field "$RUN_DIR/corpus.tsv" "$1" 5)" -lt "$MIN_DELEGATE_CHARS" ]; then
+    plugin="$RUN_DIR/plugin-lowfloor"
+  fi
   snapshot_ok "$RUN_DIR" "$1"; rc=$?
   if [ "$rc" -ne 0 ]; then
     st=$([ "$rc" -eq 1 ] && echo corpus-changed || echo snapshot-failed)
