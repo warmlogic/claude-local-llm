@@ -8,11 +8,18 @@ import { isLoopbackEndpoint } from './loopback.mjs';
 // overhead); 30k leaves margin. Near 50k it saves about half the Claude tokens.
 export const MIN_DELEGATE_CHARS = 30_000;
 export const RESERVE_TOKENS = 4096; // prompt plus answer room
-export const CHARS_PER_TOKEN = 2.5; // conservative against the measured 2.7 on dense text
+// Qwen splits each digit: gen_log measured 1.74 chars/token, LM Studio logs 2.4,
+// numeric CSV about 1.0. Pure numeric data can still overflow at 1.6; that fails
+// loudly (context_length_exceeded), and Claude reads the file itself.
+export const CHARS_PER_TOKEN = 1.6;
 const FALLBACK_TOKENS = 32768;
 const LOOKUP_TIMEOUT_MS = 1000;
-const budget = (contextTokens, source) => ({
-  contextTokens, capChars: Math.max(0, Math.floor((contextTokens - RESERVE_TOKENS) * CHARS_PER_TOKEN)), source,
+const MAX_METADATA_CHARS = 1_000_000;
+// Houtini's HOUTINI_LM_MAX_FILE_MB=1 also bounds large loaded contexts.
+export const capForContext = (contextTokens, reserveTokens = RESERVE_TOKENS) =>
+  Math.min(1_000_000, Math.max(0, Math.floor((contextTokens - reserveTokens) * CHARS_PER_TOKEN)));
+const budget = (contextTokens, source, reason) => ({
+  contextTokens, capChars: capForContext(contextTokens), source, ...(reason ? { reason } : {}),
 });
 
 // http(s).get bypasses ambient env proxies and never follows redirects. The signal
@@ -23,12 +30,12 @@ const models = (endpoint) => new Promise((resolve, reject) => {
     agent: false, // avoid a global agent configured by --use-env-proxy
     signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
   }, (res) => {
-    if (res.statusCode !== 200) { res.resume(); reject(new Error('metadata unavailable')); return; }
+    if (res.statusCode !== 200) { res.resume(); reject(new Error(`http ${res.statusCode}`)); return; }
     let text = '';
     res.setEncoding('utf8');
-    res.on('data', (chunk) => { text += chunk; if (text.length > 1_000_000) req.destroy(new Error('metadata too large')); });
+    res.on('data', (chunk) => { text += chunk; if (text.length > MAX_METADATA_CHARS) req.destroy(new Error('metadata too large')); });
     res.on('error', reject);
-    res.on('end', () => { try { resolve(JSON.parse(text)); } catch (e) { reject(e); } });
+    res.on('end', () => { try { resolve(JSON.parse(text)); } catch { reject(new Error('no metadata')); } });
   });
   req.on('error', reject);
 });
@@ -37,17 +44,20 @@ export async function getContextCap({
   endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234',
   model = process.env.LOCAL_LLM_MODEL || '',
 } = {}) {
-  const fallback = budget(FALLBACK_TOKENS, 'fallback');
-  if (!isLoopbackEndpoint(endpoint)) return fallback;
+  const fallback = (reason, source = 'fallback') => budget(FALLBACK_TOKENS, source, reason);
+  if (!isLoopbackEndpoint(endpoint)) return fallback('not loopback');
   try {
     const list = (await models(endpoint))?.data;
-    if (!Array.isArray(list)) return fallback;
+    if (!Array.isArray(list)) return fallback('no metadata');
     const loaded = list.filter((m) => m?.state === 'loaded' && m.type !== 'embeddings' && (!model || m.id === model));
-    if (loaded.length !== 1) return fallback;
-    const tokens = loaded[0].loaded_context_length;
-    return Number.isSafeInteger(tokens) && tokens > 0 ? budget(tokens, 'loaded') : fallback;
-  } catch {
-    return fallback;
+    if (!loaded.length) return model
+      ? fallback('pinned model not loaded', 'pinned model not loaded') : fallback('no metadata');
+    if (loaded.some((m) => !Number.isSafeInteger(m.loaded_context_length) || m.loaded_context_length <= 0)) return fallback('invalid context');
+    return budget(loaded.reduce((min, m) => Math.min(min, m.loaded_context_length), Infinity), 'loaded');
+  } catch (e) {
+    const reason = e.name === 'AbortError' ? 'timeout'
+      : /^(http \d{3}|metadata too large|no metadata)$/.test(e.message) ? e.message : 'no metadata';
+    return fallback(reason);
   }
 }
 

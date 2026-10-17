@@ -22,8 +22,8 @@ done
 
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }                                 # roots and fixtures
 HOME_TMP=$(mktemp -d "$REPO/tests/.tmp-XXXXXX") || { echo "FAIL: mktemp"; exit 1; }  # under $HOME when the repo is
-FAKE_PID=""; NM_PID=""; E5_PID=""; CONTEXT_PID=""
-trap '[ -z "$CONTEXT_PID" ] || kill "$CONTEXT_PID" 2>/dev/null; [ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; [ -z "$E5_PID" ] || kill "$E5_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
+FAKE_PID=""; NM_PID=""; E5_PID=""; CONTEXT_PID=""; CTX16_PID=""
+trap '[ -z "$CTX16_PID" ] || kill "$CTX16_PID" 2>/dev/null; [ -z "$CONTEXT_PID" ] || kill "$CONTEXT_PID" 2>/dev/null; [ -z "$FAKE_PID" ] || kill "$FAKE_PID" 2>/dev/null; [ -z "$NM_PID" ] || kill "$NM_PID" 2>/dev/null; [ -z "$E5_PID" ] || kill "$E5_PID" 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP" "$HOME_TMP"' EXIT
 
 # Ambient houtini variables must not leak into any case; the scrub test sets them explicitly.
 unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PASSWORD LM_CONTEXT_WINDOW \
@@ -294,10 +294,14 @@ if [ -n "$dist" ]; then
     ok "all $flag_count bad-answer flags the harness takes from the skill table appear in houtini's dist, and the dist joins footer parts with ' | ' (a string check, not a footer render)"
   else bad "skill flags (rc=$flag_rc, $flag_count parsed) missing from houtini's dist:${flag_missing:- none} (or the footer is no longer one joined line)"; fi
 else skp "houtini 3.3.4 dist not in the npx cache; bad-answer flag check"; fi
+# Exercise the real setup guard. Even a broken guard cannot start a paid session.
+mkdir -p "$TMP/no-session"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/no-session/claude"
+chmod +x "$TMP/no-session/claude"
 # the harness refuses to start when the skill's flag rows cannot be read
 for f in skill-renamed-bad-row.md skill-renamed-other-row.md; do
-  out=$(DELEG_SELFTEST=1 DELEG_JUDGE=stub DELEG_SKILL_MD="$SCRIPT_DIR/fixtures/deleg/$f" bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); rc=$?
-  if [ "$rc" -ne 0 ] && grep -q "skill_flags:" <<<"$out"; then ok "harness start fails on a skill table with a missing flag row ($f)"
+  out=$(env -u DELEG_SELFTEST -u DELEG_PRINT_FLAGS -u DELEG_JUDGE_CHECK PATH="$TMP/no-session:$PATH" DELEG_JUDGE=stub DELEG_SKILL_MD="$SCRIPT_DIR/fixtures/deleg/$f" bash "$SCRIPT_DIR/test-delegation.sh" 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && grep -qF "the skill's names table cannot supply the bad-answer flags (see above)" <<<"$out"; then ok "harness start fails on a skill table with a missing flag row ($f)"
   else bad "harness start should fail on $f (rc=$rc: ${out:0:150})"; fi
 done
 
@@ -367,7 +371,7 @@ for n in 1 2 3 4; do head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; 
 # the prompt goes through stdin: a 260 KB value would exceed a single argument's limit on some systems
 hint_json() { printf '%s' "$1" | jq -Rsc --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:.}'; }
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
-if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 35,000 bytes (a char proxy). Context cap: 32,768 tokens, about 71,680 chars; loaded. If this turn\u0027s job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too."))' >/dev/null <<<"$h"; then
+if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 35,000 bytes (a char proxy). Context cap: 32,768 tokens, about 45,875 chars; loaded. If this turn\u0027s job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too."))' >/dev/null <<<"$h"; then
   ok "size hint: emits for a big absolute path"
 else bad "size hint: emits for a big absolute path ($h)"; fi
 h=$(hint_out "$(hint_json "Classify big.txt please.")")
@@ -395,7 +399,7 @@ for bad_in in 'not json' '' '{"prompt":42}' '{}'; do
   else bad "size hint: silent for input: ${bad_in:-<empty>}"; fi
 done
 h=$(hint_out "$(hint_json "Compare $SHD/many1.txt $SHD/many2.txt $SHD/many3.txt $SHD/many4.txt")")
-if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' ')" = 3 ]; then ok "size hint: caps the hint at 3 files"
+if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' ')" = 4 ]; then ok "size hint: caps the hint at 3 files"
 else bad "size hint: caps the hint at 3 files ($h)"; fi
 many_words=$(awk 'BEGIN{for(i=0;i<130000;i++) printf "w "}')
 h=$(hint_out "$(hint_json "$many_words $SHD/big.txt")"); rc=$?
@@ -449,13 +453,14 @@ if node --test "$SCRIPT_DIR/test-context-cap.mjs" > "$TMP/context-tests.log" 2>&
 else bad "context bounds suite: $(tail -15 "$TMP/context-tests.log" | tr '\n' ';')"; fi
 
 # the hook reads the plugin's own endpoint_url and model options (Claude Code exports them to hooks as CLAUDE_PLUGIN_OPTION_*)
-node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/context16.port" "$TMP/context16.log" context 16384 &
+node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/context16.port" "$TMP/context16.log" context 16384,65536 &
 CTX16_PID=$!
 for _ in $(seq 1 50); do [ -s "$TMP/context16.port" ] && break; sleep 0.1; done
-h=$(printf '%s' "$(hint_json "Classify $SHD/big.txt")" | env -u LOCAL_LLM_ENDPOINT_URL -u LOCAL_LLM_MODEL CLAUDE_PLUGIN_OPTION_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/context16.port")" CLAUDE_PLUGIN_OPTION_MODEL=fake-context node "$SH")
-if jq -e '.hookSpecificOutput.additionalContext | contains("too big for the loaded model")' >/dev/null <<<"$h"; then ok "size hint: follows the plugin's endpoint_url and model options (16k context makes a 35k file too big)"
+[ -s "$TMP/context16.port" ] || { echo "FAIL: context16 endpoint did not start"; exit 1; }
+h=$(printf '%s' "$(hint_json "Classify $SHD/big.txt")" | env LOCAL_LLM_ENDPOINT_URL="$HINT_ENDPOINT" LOCAL_LLM_MODEL=fake-context CLAUDE_PLUGIN_OPTION_ENDPOINT_URL="http://127.0.0.1:$(cat "$TMP/context16.port")" CLAUDE_PLUGIN_OPTION_MODEL=fake-context-2 node "$SH")
+if jq -e '.hookSpecificOutput.additionalContext | (contains("invoke the local-llm:delegate-local skill") and contains("65,536 tokens, about 98,304 chars; loaded"))' >/dev/null <<<"$h"; then ok "size hint: plugin endpoint_url and model options beat conflicting shell values (pin selects 64k over the 16k minimum)"
 else bad "size hint: plugin endpoint_url option ignored ($h)"; fi
-kill "$CTX16_PID" 2>/dev/null; wait "$CTX16_PID" 2>/dev/null
+kill "$CTX16_PID" 2>/dev/null; wait "$CTX16_PID" 2>/dev/null; CTX16_PID=""
 
 # --- the local-verify server: its own offline suite (fake endpoint only) --------
 vt=$(bash "$SCRIPT_DIR/test-verify.sh" 2>&1); vt_rc=$?

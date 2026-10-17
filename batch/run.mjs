@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmS
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopback.mjs';
-import { getContextCap } from '../scripts/context-cap.mjs';
+import { getContextCap, capForContext } from '../scripts/context-cap.mjs';
 import { upstreamCode } from '../server/endpoint.mjs';
 
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -119,8 +119,9 @@ const loadJob = async (path, endpoint) => {
   let job;
   try { job = JSON.parse(readFileSync(path, 'utf8')); } catch (e) { usage(`cannot read job: ${e.message}`); }
   const defaults = job?.max_window_chars === undefined ? await getContextCap({ endpoint }) : null;
-  const cap = defaults ? defaults.capChars : job.max_window_chars;
-  const capSource = defaults ? defaults.source : 'job';
+  const cap = defaults ? capForContext(defaults.contextTokens, MAX_TOKENS + 1024) : job.max_window_chars;
+  const capSource = defaults ? `${defaults.source}${defaults.reason ? ` (assumed 32k context; ${defaults.reason})` : ''}` : 'job';
+  if (defaults && cap < 1) usage(`the loaded model's context (${defaults.contextTokens} tokens) leaves no room for a window; load a larger context or set max_window_chars`);
   if (typeof job?.prompt !== 'string' || !Number.isInteger(cap) || cap < 1) usage('job needs a prompt and a positive integer max_window_chars');
   if (!job.row_schema || typeof job.row_schema !== 'object' || Array.isArray(job.row_schema)) usage('job row_schema must be a JSON schema object');
   const reserved = RESERVED_ROW_KEYS.filter((k) => Object.hasOwn(job.row_schema.properties ?? {}, k));

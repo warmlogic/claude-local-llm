@@ -1,7 +1,7 @@
 // Loopback HTTP listener standing in for LM Studio. Usage: node fake-endpoint.mjs <port-file> <log-file> [mode] [redirect-url|context-tokens]
 // Writes its random port to <port-file> and appends one JSON line of request headers per request to <log-file>.
 // Modes:
-//   context   loaded chat plus embeddings/unloaded decoys; argv[5] is loaded_context_length.
+//   context   loaded chat plus embeddings/unloaded decoys; argv[5] is loaded_context_length (comma-separated for multiple loaded chat models).
 //             Chat completions behave like batch.
 //   models    (default) answers every request with an OpenAI-style list of two fake chat models.
 //   error500  lists one loaded model but fails every chat completion with HTTP 500 (an "Other failure" for the skill).
@@ -177,7 +177,7 @@ const server = createServer((req, res) => {
     if (req.url === '/api/v0/models') return json(res, 200, { data: [
       { id: 'fake-embed', type: 'embeddings', state: 'loaded', loaded_context_length: 999999 },
       { id: 'fake-idle', type: 'llm', state: 'not-loaded', loaded_context_length: 999999 },
-      { id: 'fake-context', type: 'llm', state: 'loaded', loaded_context_length: Number(redirectUrl) },
+      ...redirectUrl.split(',').map((n, i) => ({ id: i ? `fake-context-${i + 1}` : 'fake-context', type: 'llm', state: 'loaded', loaded_context_length: Number(n) })),
     ] });
     return batch(req, res);
   }

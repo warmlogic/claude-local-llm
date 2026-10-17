@@ -2,14 +2,14 @@
 
 Offload file-heavy, low-stakes text jobs from Claude Code to a model running locally in LM Studio.
 
-When you ask Claude to summarize, classify, extract from, or draft from a big log or document (from about 30k characters through the loaded model's context cap; about 70k without a size hint), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The local model reads the file and returns a short answer, so the bulk of the file stays out of Claude's context; only the answer, and any lines Claude spot-checks, reach it. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and spot-checks it.
+When you ask Claude to summarize, classify, extract from, or draft from a big log or document (from about 30k characters through the loaded model's context cap; about 45k without a size hint), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The local model reads the file and returns a short answer, so the bulk of the file stays out of Claude's context; only the answer, and any lines Claude spot-checks, reach it. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and spot-checks it.
 
 Status:
 
 - ✅ Implemented: the MCP server (houtini-lm, pinned) behind a fenced launcher, the `delegate-local` skill, the permission hook, and the tests.
 - ✅ Implemented: a second server, local-verify, with one tool, `verify_claims`: the local model votes on whether short claims are supported by a file, without the file entering Claude's context. Its answer is a hint, never verification, and the skill does not use it yet.
 - ✅ Implemented: a repeatable measurement harness (`bash measure/run.sh`; see AGENTS.md, "Measuring") for Claude cost, tokens and answer quality on real files.
-- ✅ Implemented: the measured result, in `docs/results.md`. Delegation saves about 50% of Claude cost on files near the size cap and costs the same or more on 20k to 25k characters (below 20k is unmeasured), so the skill delegates only from about 30k characters up to a cap set by the loaded model's context.
+- ✅ Implemented: the measured result, in `docs/results.md`. Delegation saves about 50% of Claude cost near 50k characters and costs the same or more on 20k to 25k characters (below 20k is unmeasured), so the skill delegates only from about 30k characters up to a cap set by the loaded model's context.
 - 🔲 Planned: a marketplace listing, for a permanent install. Today the plugin loads from a clone with `--plugin-dir`.
 
 ## Prerequisites
@@ -66,7 +66,7 @@ Do not pass `--ttl`: without it, LM Studio never unloads the model for being idl
 
 The `CONTEXT` column should read `32768`.
 
-The model must hold the whole file, instructions and answer. The size hint reads the loaded context from LM Studio and estimates the input cap as `floor((contextTokens - 4096) * 2.5)`: 71,680 characters at 32k tokens, or 153,600 at 64k. This reserves prompt and answer room and uses a conservative char estimate. If metadata is unavailable or ambiguous, it falls back to 32768 tokens (about 70k chars). Other loaded contexts work too; the cap follows them.
+The model must hold the whole file, instructions and answer. The size hint reads the loaded context from LM Studio and estimates the input cap as `floor((contextTokens - 4096) * 1.6)`: 45,875 characters at 32k tokens, or 98,304 at 64k. The cap is clamped to 1,000,000 characters, matching the file limit. It reserves prompt and answer room using 1.6 chars/token; measured rates are 1.74 for the log fixture and 2.4 for LM Studio logs. Pure numeric data (about 1.0) can still overflow: `context_length_exceeded` fails loudly, and Claude reads the file itself. With several loaded chat models, it uses the smallest context, or the loaded model selected by the plugin's `model` option. Unavailable or invalid metadata falls back to an assumed 32768 tokens (about 45k chars), with a reason in the hint. Other loaded contexts work too; the cap follows them.
 
 Optional hardening, only if you set the plugin's `model` option: just-in-time (JIT) model loading matters only when a request names a model, and the plugin's server (houtini) names one only when `model` is set. With JIT on, naming a model that is not loaded makes LM Studio load it with its default (smaller) context. With JIT off, that request fails with `Invalid model identifier ... just-in-time (JIT) model loading is disabled` instead. With `model` empty (the default) the server uses whichever model is loaded, JIT never applies, and nothing loaded gives `No models loaded` either way. To turn JIT off, use the app's "Just-in-Time Model Loading" switch in the Developer tab's server options, then restart the server. The setting is stored as `justInTimeModelLoading` in `~/.lmstudio/.internal/http-server-config.json`; `lms` has no flag for it.
 
@@ -119,7 +119,7 @@ The plugin ships what it needs, so you do not add an allow rule.
 
 - A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) allows exactly three things, by exact name: a `Skill` call for `local-llm:delegate-local`, and the read-only tools `mcp__plugin_local-llm_local-llm__code_task_files` and `mcp__plugin_local-llm_local-verify__verify_claims`. That is why a plain "use the local model to summarize ..." needs no prompt either. Every other tool, including the server's other tools (`chat`, `discover`, ...), is left to Claude Code's normal permission flow. A deny rule on the tool itself still wins over the hook: denying `mcp__plugin_local-llm_local-llm__code_task_files` removes the tool, and Claude reads the file itself. A `Read(...)` deny rule on a folder does not stop the plugin's tools; `allowed_dirs` does.
 - The skill's `allowed-tools` line covers `code_task_files` for the turn that loads the skill.
-- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) stats files named in your prompt, using bytes as a char proxy. From 30,000 bytes through the loaded context cap it instructs Claude to invoke the skill; above the cap it says to read directly or split. Below 30,000 it is silent. It reads no file contents and queries loopback context metadata at most once per eligible prompt, with a 1-second timeout and a 32k-token fallback.
+- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) stats files named in your prompt, using bytes as a char proxy. From 30,000 bytes through the loaded context cap it instructs Claude to invoke the skill; above the cap it says to Grep or Read relevant slices, or use `batch/run.mjs` for many-window jobs. Files that together exceed the cap get one call per file. Below 30,000 it is silent. It reads no file contents and queries loopback context metadata at most once per eligible prompt, with a 1-second timeout and a 32k-token fallback.
 - The skill sends Claude to the Read and Grep tools for the rest, because compound shell commands can still prompt in any session.
 
 ## Privacy and security
@@ -194,7 +194,7 @@ The file is not under any folder in `allowed_dirs`. Add its folder in the plugin
 
 ### `context_length_exceeded`
 
-The file does not fit the model's context. Check `~/.lmstudio/bin/lms ps` and the size hint's cap. Claude should split inputs above that cap or read slices. The cap is a conservative char estimate, so unusual text or large instructions can still overflow; use smaller pieces. If the hint says `fallback`, check that the endpoint exposes `/api/v0/models` and exactly one chat model is loaded (or name the loaded model with `LOCAL_LLM_MODEL`).
+The file does not fit the model's context. Check `~/.lmstudio/bin/lms ps` and the size hint's cap. Claude should split inputs above that cap or read slices. The cap estimates chars from tokens, so digit-dense text or large instructions can still overflow; Claude reads the file itself on that error. If the hint assumes a 32k context, check its metadata failure reason and that the endpoint exposes `/api/v0/models`. Select a loaded model with the plugin's `model` option. A pin that is absent or unloaded is reported as `pinned model not loaded`.
 
 ### `Error: fetch failed`, `No models loaded`, or `Invalid model identifier`
 

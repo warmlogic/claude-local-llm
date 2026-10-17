@@ -22,7 +22,7 @@ Ten files of 20k to 36k characters (classification, summary and extraction jobs)
 
 The first full measurement, before the size-hint fix, delegated 1 of 23 plugin-on runs (cost -1.5%). Delegation reliability was fixed first; the table above is the result once the tool is actually called.
 
-## B. Files near the cap
+## B. Files near 50k characters
 
 An ad-hoc check that `measure/run.sh` does not reproduce: no control subtraction and not the frozen corpus. 2026-10-17, main at fdc1b75: three real documents of 48k to 54k characters, "Summarize <path> in 5 bullets", 2 reps each.
 
@@ -36,7 +36,7 @@ A warm-cache repeat with the plugin off cost $0.015 against $0.023 to $0.033 del
 
 ## Gate
 
-The plan's gate (per-job Claude cost at least 50% lower) is met only for files near the cap. It is not met as a general claim.
+The plan's gate (per-job Claude cost at least 50% lower) is met only for files near 50k characters. It is not met as a general claim.
 
 ## Implications
 

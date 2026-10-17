@@ -59,17 +59,22 @@ for (const m of prompt.matchAll(CANDIDATE)) {
 if (files.length > 0) {
   // The plugin's endpoint_url and model options reach hooks as CLAUDE_PLUGIN_OPTION_* (once set), not via .mcp.json's env.
   const env = process.env;
-  const { contextTokens, capChars, source } = await getContextCap({
+  const { contextTokens, capChars, source, reason } = await getContextCap({
     endpoint: env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL || env.LOCAL_LLM_ENDPOINT_URL || undefined,
     model: env.CLAUDE_PLUGIN_OPTION_MODEL ?? env.LOCAL_LLM_MODEL ?? undefined,
   });
   const number = (n) => n.toLocaleString('en-US');
-  const context = `${number(contextTokens)} tokens, about ${number(capChars)} chars; ${source}`;
+  const context = source === 'loaded'
+    ? `${number(contextTokens)} tokens, about ${number(capChars)} chars; loaded`
+    : `assumed 32k context (model metadata unavailable: ${reason}); about ${number(capChars)} chars; ${source}`;
   const lines = files.map(({ path, size }) => {
     const prefix = `local-llm: ${path} is about ${number(size)} bytes (a char proxy).`;
-    if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); read it directly or split it.`;
+    if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices, or use batch/run.mjs for many-window jobs.`;
     return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too.`;
   });
+  if (files.length > 1 && files.reduce((sum, f) => sum + f.size, 0) > capChars) {
+    lines.push('local-llm: The files together exceed the loaded context; delegate them one call per file.');
+  }
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: lines.join('\n') },
   }));
