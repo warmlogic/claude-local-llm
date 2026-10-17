@@ -188,7 +188,9 @@ if [ -s "$TMP/port" ]; then
   else
     bad "endpoint passthrough (requests: $(wc -l < "$TMP/requests.log" 2>/dev/null), $(jq -c '{init,stderr}' <<<"$out" | cut -c1-200))"
   fi
-  # no proxy: with Node's env proxy turned on, houtini's requests still go straight to the endpoint
+  # no proxy: with Node's env proxy turned on, houtini's requests still go straight to the endpoint.
+  # Its positive control (the same environment does send a plain Node fetch to the proxy) is the
+  # "control:" case in tests/test-verify.sh, which this suite runs below.
   node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/proxy-port" "$TMP/proxy.log" proxy &
   PROXY_PID=$!
   for _ in $(seq 1 50); do [ -s "$TMP/proxy-port" ] && break; sleep 0.1; done

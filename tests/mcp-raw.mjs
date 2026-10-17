@@ -1,12 +1,12 @@
 // Send raw lines to a stdio MCP server and collect what comes back.
-// Usage: node mcp-raw.mjs <server-command> <json-array> <expected-responses>
+// Usage: node mcp-raw.mjs <server-command> <json-array> <expected-responses> [timeout-ms, default 30000]
 // Each array element is sent as one line: a string as-is (so malformed JSON can be sent), anything else
 // JSON-encoded. An element {"delay_ms": n} waits n ms instead. Waits for <expected-responses> responses.
 // Prints one JSON line: {"responses":[{...msg, "at_ms": n}],"exit":int|null,"timedOut":bool,"stderr":str}
 import { spawn } from 'node:child_process';
 
-const [cmd, linesJson, expected] = process.argv.slice(2);
-const TIMEOUT_MS = 30000;
+const [cmd, linesJson, expected, timeoutArg] = process.argv.slice(2);
+const TIMEOUT_MS = Number(timeoutArg ?? 30000);
 const t0 = Date.now();
 const child = spawn(cmd, [], { stdio: ['pipe', 'pipe', 'pipe'] });
 const out = { responses: [], exit: null, timedOut: false, stderr: '' };

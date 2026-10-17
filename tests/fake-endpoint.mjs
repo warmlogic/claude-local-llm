@@ -11,7 +11,9 @@
 //             the CLAIM line: "[yes]" -> SUPPORTED; "[split]" -> SUPPORTED on even seeds, CONTRADICTED on
 //             odd; "[stall]" -> never answers; "[fail]" -> HTTP 500 whose error message echoes the prompt;
 //             "[echo400]" -> HTTP 400 likewise; "[html]" -> a non-JSON 200; "[badfinish]" -> non-JSON content
-//             and a finish_reason that echo the prompt; else NOT_IN_SOURCE. Logs the
+//             and a finish_reason that echo the prompt; "[ctx]" -> LM Studio's real context-overflow 400
+//             (captured from LM Studio 0.4's Splash engine); "[nomodel]" -> a 404 with code model_not_found;
+//             "[fail-seed0]" -> an immediate 500 for the claim's first seed only; else NOT_IN_SOURCE. Logs the
 //             parsed request body and the number of chat requests in flight (inflight) as it arrives.
 //   verify-stall-once  as verify, but the first request for each seed never answers.
 //   verify-stall       chat completions never answer.
@@ -24,6 +26,7 @@
 //   verify-v1-many       as verify-v1, with two chat models listed.
 //   verify-nostate       as verify, but /api/v0/models entries carry no load state.
 //   verify-badlist       as verify, but /api/v0/models answers an object with no data array.
+//   verify-nolists       as verify, but both /api/v0/models and /v1/models are 404s (endpoint_url with /v1).
 //   proxy     an HTTP proxy that must never be used: logs each request (absolute URL) and answers 502.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -37,6 +40,7 @@ const json = (res, status, body) => {
 const seen = new Set();
 let inflight = 0;
 const DELAY_MS = 20; // keeps requests in flight long enough to overlap
+const LMSTUDIO_CTX_ERROR = "{\"error\":\"Engine protocol predict request returned 400: {\\\"error\\\":{\\\"message\\\":\\\"prompt exceeds the context window\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"code\\\":\\\"context_length_exceeded\\\"}}\"}";
 const claimOf = (body) => (body.messages?.at(-1)?.content.match(/^CLAIM: (.*)$/m) || [])[1] ?? '';
 const verifyLabel = (body) => {
   const claim = claimOf(body);
@@ -56,7 +60,7 @@ const MODELS_V1 = {
 };
 const verify = (req, res) => {
   if (req.url === '/api/v0/models') {
-    if (MODELS_V1[mode]) return json(res, 404, { error: 'Unexpected endpoint' });
+    if (MODELS_V1[mode] || mode === 'verify-nolists') return json(res, 404, { error: 'Unexpected endpoint' });
     if (mode === 'verify-badlist') return json(res, 200, { object: 'list' });
     return json(res, 200, { object: 'list', data: MODELS_V0[mode] ?? MODELS_V0.verify });
   }
@@ -79,9 +83,16 @@ const verify = (req, res) => {
       seen.add(body.seed);
       return; // never answer
     }
+    if (claim.includes('[fail-seed0]') && body.seed % 1000 === 0) return json(res, 500, { error: { code: 'server_error' } });
     setTimeout(() => {
       if (claim.includes('[fail]')) return json(res, 500, { error: { message: `upstream echo: ${prompt}`, code: 'server_error' } });
       if (claim.includes('[echo400]')) return json(res, 400, { error: `bad request: ${prompt}` });
+      if (claim.includes('[ctx]')) {
+        res.statusCode = 400;
+        res.setHeader('content-type', 'application/json; charset=utf-8');
+        return res.end(LMSTUDIO_CTX_ERROR);
+      }
+      if (claim.includes('[nomodel]')) return json(res, 404, { error: { message: `model not found ${prompt}`, code: 'model_not_found' } });
       if (claim.includes('[badfinish]')) return answer(res, `not json ${prompt}`, `canary-finish ${prompt}`);
       if (claim.includes('[html]')) {
         res.setHeader('content-type', 'text/html');

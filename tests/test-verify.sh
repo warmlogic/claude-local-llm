@@ -74,7 +74,7 @@ done
 for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@127.0.0.1:1234" \
           "http://localhost:1@evil.example/" "http://10.0.0.5:1234" "http://127.1:1234" "127.0.0.1:1234"; do
   out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
-  if did_not_start "$out" "loopback"; then ok "launcher refuses non-loopback endpoint $ep"
+  if did_not_start "$out" "local-verify: endpoint must be loopback"; then ok "launcher refuses non-loopback endpoint $ep"
   else bad "launcher refuses non-loopback endpoint $ep ($out)"; fi
 done
 for v in abc 0 -5 1.5; do
@@ -148,13 +148,18 @@ check_refused "relative path" "root/inside.txt" "must be absolute"
 check_refused "missing file" "$ROOT/missing.txt" "no such file"
 check_refused "a directory" "$ROOT/sub" "not a regular file"
 check_refused "a FIFO (opened non-blocking, so no hang)" "$ROOT/pipe" "not a regular file"
-check_refused "file over 1 MB" "$ROOT/big.txt" "over the 1 MB limit"
+check_refused "file over 1 MB, sized in bytes near the cap" "$ROOT/big.txt" "file is $(wc -c < "$ROOT/big.txt" | tr -d ' ') bytes, over the 1 MB limit"
 check_refused "empty file" "$ROOT/empty.txt" "the file is empty"
 check_refused "binary file" "$ROOT/binary.bin" "not UTF-8 text"
 out=$(call "$(jq -nc --arg a "$INSIDE" --arg b "$TMP/outside/secret.txt" '{paths:[$a,$b], claims:["[yes] x"]}')")
 if jq -e '.call.isError and (.call.text | contains("outside the allowed folders"))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
   ok "one path outside the roots fails the whole call"
 else bad "one path outside the roots fails the whole call ($(brief "$out"))"; fi
+out=$(call "$(jq -nc --arg a "$ROOT/missing.txt" --arg b "$TMP/outside/secret.txt" --arg c "$INSIDE" '{paths:[$a,$b,$c], claims:["[yes] x"]}')")
+if jq -e --arg a "$ROOT/missing.txt: no such file" --arg b "$TMP/outside/secret.txt: path is outside" \
+     '.call.isError and (.call.text | contains("cannot use 2 paths") and contains($a) and contains($b))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
+  ok "several bad paths: every one is listed with its cause"
+else bad "several bad paths ($(brief "$out"))"; fi
 before=$(chat_count "$LOG")
 out=$(call "$(jq -nc --arg a "$ROOT/half1.txt" --arg b "$ROOT/half2.txt" '{paths:[$a,$b], claims:["[yes] x"]}')")
 if jq -e '.call.isError and (.call.text | contains("over the 1 MB combined limit"))' >/dev/null <<<"$out" \
@@ -239,6 +244,8 @@ model_case "/api/v0/models without load state: refuses to guess" verify-nostate 
   '.call.isError and (.call.text | contains("cannot tell which model is loaded"))'
 model_case "/api/v0/models without a data array: an unexpected response, not 'nothing loaded'" verify-badlist \
   '.call.isError and (.call.text | contains("unexpected response from /api/v0/models"))'
+model_case "both model lists 404: endpoint_url probably ends in /v1" verify-nolists \
+  '.call.isError and (.call.text | contains("endpoint_url should be the server root, without /v1"))'
 model_case "nothing loaded: 'No models loaded'" no-model \
   '.call.isError and (.call.text | contains("No models loaded"))'
 if [ "$(chat_count "$LOG")" = 0 ]; then ok "no chat request goes out when no model is known to be loaded"
@@ -257,6 +264,15 @@ upstream_case() { # <label> <claim> <message-fragment>
 upstream_case "a 400 whose message echoes the prompt: status only, no file text" "[echo400] x" "endpoint error (HTTP 400)"
 upstream_case "a 500 with an error field: status and allowlisted code, not retried" "[fail] x" "endpoint error (HTTP 500, server_error)"
 upstream_case "a non-JSON 200: a fixed message, no body" "[html] x" "non-JSON response (HTTP 200)"
+upstream_case "LM Studio's real context-overflow 400: the context hint, no file text" "[ctx] x" \
+  "endpoint error (HTTP 400, context_length_exceeded): the files are too large for the model's context"
+upstream_case "a 404 with code model_not_found: the model-option hint" "[nomodel] x" \
+  "endpoint error (HTTP 404, model_not_found): check the model plugin option, or leave it empty"
+printf 'canary-ctx: the context window is 32k tokens and the context length is fixed\n' > "$ROOT/mentions-context.txt"
+out=$(call "$(claims_on "$ROOT/mentions-context.txt" '["[echo400] x"]' 1)")
+if jq -e '.call.isError and (.call.text | endswith("endpoint error (HTTP 400)"))' >/dev/null <<<"$out" && ! grep -q canary <<<"$out"; then
+  ok "a file that mentions the context window, echoed in a 400: no context hint is read out of the echo"
+else bad "echoed context words ($(brief "$out"))"; fi
 before=$(chat_count "$LOG")
 out=$(call "$(claims_on "$INSIDE" '["[badfinish] x"]' 1)")
 if jq -e '.call.isError and (.call.text | contains("finish_reason unrecognized, non-JSON content"))' >/dev/null <<<"$out" \
@@ -277,20 +293,33 @@ if jq -e '.call.isError and (.call.text | contains("HTTP 307): redirects are not
   ok "a 307 from the endpoint is not followed: the call fails and the redirect target gets nothing"
 else bad "redirect (target got $(chat_count "$target_log") chat requests; $(brief "$out"))"; fi
 
-# --- no proxy: the launcher keeps requests on loopback even with Node's env proxy turned on ----
+# --- no proxy: nothing reaches a proxy, through the launcher or with the server started directly ---
 start_fake proxy proxy; proxy_ep=$EP proxy_log=$LOG
 start_fake viaproxy verify
-proxy_env=(NODE_USE_ENV_PROXY=1 HTTP_PROXY="$proxy_ep" http_proxy="$proxy_ep" HTTPS_PROXY="$proxy_ep" ALL_PROXY="$proxy_ep" NO_PROXY= no_proxy=)
-out=$(env "${proxy_env[@]}" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
-if [ -s "$proxy_log" ]; then ok "control: without the launcher, Node's env proxy does catch the request"
-else bad "control: the proxy saw nothing even without the launcher, so the cases below prove nothing ($(brief "$out"))"; fi
+proxy_env=(HTTP_PROXY="$proxy_ep" http_proxy="$proxy_ep" HTTPS_PROXY="$proxy_ep" ALL_PROXY="$proxy_ep" NO_PROXY= no_proxy=)
+# Positive control (test-fence.sh's houtini proxy case relies on it too): with this environment a
+# plain Node fetch of the endpoint really does go to the proxy, so a silent proxy below means a refusal.
+env "${proxy_env[@]}" NODE_USE_ENV_PROXY=1 node -e "fetch('$EP/v1/models').catch(() => {})" >/dev/null 2>&1
+if [ -s "$proxy_log" ]; then ok "control: Node's env proxy does catch a loopback fetch in this environment"
+else bad "control: the proxy saw nothing, so the proxy cases below prove nothing"; fi
 for variant in "NODE_USE_ENV_PROXY=1" "NODE_OPTIONS=--use-env-proxy"; do
   : > "$proxy_log"; before=$(chat_count "$LOG")
   out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)" "${proxy_env[@]}" "$variant")
   if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ] && [ "$(chat_count "$LOG")" = $((before + 1)) ]; then
     ok "launcher with $variant and *_PROXY set: the proxy gets nothing, the endpoint gets the request"
   else bad "proxy bypass with $variant (proxy log $(wc -l < "$proxy_log") lines; $(brief "$out"))"; fi
+  : > "$proxy_log"
+  out=$(env "${proxy_env[@]}" "$variant" LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
+  if did_not_start "$out" "refusing to start: Node's env proxy is on" && [ ! -s "$proxy_log" ]; then
+    ok "server started directly with $variant and *_PROXY set refuses to start; the proxy gets nothing"
+  else bad "direct start with $variant (proxy log $(wc -l < "$proxy_log") lines; $(jq -c '{init,exit,stderr}' <<<"$out" | cut -c1-300))"; fi
 done
+: > "$proxy_log"
+out=$(env "${proxy_env[@]}" NODE_USE_ENV_PROXY=1 NO_PROXY='*' no_proxy='*' LOCAL_VERIFY_ROOTS="$REAL_ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" \
+      node "$DRIVER" "$TMP/direct.sh" "$TOOL" "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
+if jq -e '.call.isError == false' >/dev/null <<<"$out" && [ ! -s "$proxy_log" ]; then
+  ok "started directly with the env proxy on but NO_PROXY='*': it runs, and the proxy gets nothing"
+else bad "direct start with NO_PROXY='*' ($(jq -c '{init,stderr,call}' <<<"$out" | cut -c1-300))"; fi
 
 # --- time: one retry on a stall, one redraw of a cut-off answer, the call budget ---------------
 start_fake once verify-stall-once
@@ -339,34 +368,81 @@ if jq -e '.call.isError == false' >/dev/null <<<"$out" && call_text "$out" | jq 
   ok "a failed sample: only its claim is NOT_RUN"
 else bad "partial on a failed sample ($(brief "$out"))"; fi
 
-# --- the budget holds while queued behind another call's requests ----------------------------
+# --- slots: a queued request leaves on abort, and no failure or abort ever leaks a slot ---------
 node --input-type=module -e "
   import { withSlot, slotState, PARALLEL_SLOTS } from '$REPO/server/endpoint.mjs';
   const never = new AbortController().signal;
-  const holders = Array.from({ length: PARALLEL_SLOTS }, () => withSlot(never, () => new Promise((r) => setTimeout(r, 1500))));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const aborter = new AbortController();
+  const holders = [
+    withSlot(never, () => sleep(600)),
+    withSlot(never, () => sleep(300).then(() => { throw new Error('holder failed'); })),
+    withSlot(aborter.signal, () => new Promise((_, rej) => aborter.signal.addEventListener('abort', () => rej(aborter.signal.reason)))),
+    withSlot(never, () => sleep(600)),
+  ];
+  setTimeout(() => aborter.abort(new Error('holder aborted')), 200);
   const t0 = Date.now();
   const err = await withSlot(AbortSignal.timeout(100), async () => 'ran').catch((e) => e);
   const waited = Date.now() - t0, queued = slotState().waiting;
-  await Promise.all(holders);
+  await Promise.allSettled(holders);
   const after = slotState();
-  const good = err instanceof Error && waited < 800 && queued === 0 && after.freeSlots === PARALLEL_SLOTS && after.waiting === 0;
-  console.log(JSON.stringify({ good, waited, queued, after }));
+  const ran = await withSlot(AbortSignal.timeout(500), async () => 'ran').catch((e) => String(e));
+  const good = err instanceof Error && waited < 500 && queued === 0 && after.freeSlots === PARALLEL_SLOTS && after.waiting === 0 && ran === 'ran';
+  console.log(JSON.stringify({ good, waited, queued, after, ran }));
 " > "$TMP/slot.json" 2>&1
-if jq -e '.good' "$TMP/slot.json" >/dev/null 2>&1; then ok "a queued request leaves the queue when its signal aborts; slots are conserved ($(jq -c '{waited}' "$TMP/slot.json"))"
-else bad "withSlot abort while queued ($(cat "$TMP/slot.json"))"; fi
-start_fake twocalls verify
+if jq -e '.good' "$TMP/slot.json" >/dev/null 2>&1; then
+  ok "withSlot: a queued request leaves on abort; holders that resolve, reject or abort all return their slot ($(jq -c '{waited}' "$TMP/slot.json"))"
+else bad "withSlot slots ($(cat "$TMP/slot.json"))"; fi
 call_line() { jq -nc --argjson id "$1" --argjson a "$2" '{jsonrpc:"2.0",id:$id,method:"tools/call",params:{name:"verify_claims",arguments:$a}}'; }
+raw_env=(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_MODEL= LOCAL_VERIFY_REQUEST_TIMEOUT_MS=60000)
+start_fake leak verify
+lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 8)")" \
+  --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" '[$i, $a, {delay_ms: 1500}, $b]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=800 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 6000)
+a=$(jq -c '.responses[] | select(.id == 2)' <<<"$out"); b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
+if jq -e '.result.isError and (.result.content[0].text | contains("budget"))' >/dev/null <<<"$a" \
+   && jq -e '.at_ms < 3000 and .result.isError == false and (.result.content[0].text | fromjson | (has("partial") | not) and .results[0].label == "SUPPORTED")' >/dev/null <<<"$b"; then
+  ok "same server: after a call overruns its budget with every slot stalled, the next call gets slots and answers ($(jq '.at_ms' <<<"$b") ms)"
+else bad "slot leak after an overrun (a: $(cut -c1-200 <<<"$a"); b: $(cut -c1-200 <<<"$b"); $(jq -c '{timedOut,exit}' <<<"$out"))"; fi
+start_fake cancel verify
+lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 8)")" \
+  --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" \
+  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2,reason:"user interrupt"}}, {delay_ms: 100}, $b]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 3000)
+b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
+if jq -e '.at_ms < 2000 and .result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("request 2 cancelled")' >/dev/null <<<"$out"; then
+  ok "notifications/cancelled aborts the call: no reply for it, its slots free, the next call answers ($(jq '.at_ms' <<<"$b") ms)"
+else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c1-200 <<<"$b"))"; fi
+start_fake twocalls verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" \
   --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 3)")" \
   --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] c","[stall] d","[stall] e"]' 1)")" \
   '[$i, $a, {delay_ms: 300}, $b]')
-out=$(LOCAL_VERIFY_REQUEST_TIMEOUT_MS=60000 LOCAL_VERIFY_BUDGET_MS=1500 LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" LOCAL_LLM_MODEL= \
-      node "$RAW" "$LAUNCHER" "$lines" 3)
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=1500 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3)
 b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
 if jq -e '.at_ms < 4000 and .result.isError == false and (.result.content[0].text | fromjson |
           .partial == true and ([.results[].label] == ["SUPPORTED","NOT_RUN","NOT_RUN"]))' >/dev/null <<<"$b"; then
-  ok "two concurrent calls: the second, queued behind the first's stalled requests, returns at its budget with partial results ($(jq '.at_ms' <<<"$b") ms)"
-else bad "two concurrent calls ($(cut -c1-300 <<<"$b"); $(jq -c '{timedOut,exit}' <<<"$out"))"; fi
+  ok "smoke: two concurrent calls on one server; the second returns partial results at its budget ($(jq '.at_ms' <<<"$b") ms; the withSlot check above is the discriminating one)"
+else bad "smoke: two concurrent calls ($(cut -c1-300 <<<"$b"); $(jq -c '{timedOut,exit}' <<<"$out"))"; fi
+start_fake siblings verify
+# Claim a's first sample fails at once while its 19 siblings sit queued ahead of claim b's 20; the
+# call stays open for b, so only the claim's own stop keeps a's siblings from being sent.
+out=$(call "$(claims_on "$INSIDE" '["[fail-seed0] a","[yes] b"]' 20)")
+sent_a=$(jq -s '[.[] | select(.body) | select(.body.messages[-1].content | contains("CLAIM: [fail-seed0]"))] | length' "$LOG")
+if jq -e '.call.isError == false and (.call.text | fromjson | .partial and ([.results[].label] == ["NOT_RUN","SUPPORTED"]))' >/dev/null <<<"$out" \
+   && [ "$sent_a" -le 5 ]; then
+  ok "a failed sample stops its siblings while the call goes on: $sent_a of claim a's 20 requests sent"
+else bad "sibling cancel ($sent_a of claim a's 20 requests; $(brief "$out"))"; fi
+
+# --- the eval fixtures are well-formed: valid kinds, existing files, 24 easy lookup items -------
+FIX="$SCRIPT_DIR/fixtures/verify"
+missing=$(jq -r '.[].file' "$FIX/easy.json" "$FIX/hard.json" | sort -u | while read -r f; do [ -f "$FIX/$f" ] || echo "$f"; done)
+if jq -e 'length == 48 and all(.[]; (.kind == "lookup" or .kind == "computed") and (.gold | type == "string") and (.claim | type == "string"))' "$FIX/easy.json" "$FIX/hard.json" >/dev/null \
+   && [ "$(jq '[.[] | select(.kind == "lookup")] | length' "$FIX/easy.json")" = 24 ] \
+   && [ "$(jq '[.[] | select(.kind == "lookup")] | length' "$FIX/hard.json")" = 0 ] && [ -z "$missing" ]; then
+  ok "eval fixtures: 48 items per set, valid kinds, every file present, 24 easy lookup items"
+else bad "eval fixtures (missing files: ${missing:-none})"; fi
 
 echo
 echo "verify pass=$pass fail=$fail"
