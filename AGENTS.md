@@ -56,6 +56,7 @@ Knobs: `MEASURE_HOME`, `MEASURE_MODEL`, `MEASURE_LOCAL_MODEL` (`qwen3.6-35b-a3b-
 ```text
 .claude-plugin/
   plugin.json        # name/description/userConfig — unversioned; see "Unversioned" below
+  marketplace.json   # lists this repo as its own marketplace (warmlogic-local-llm) for a permanent install; README section 4
 package.json         # no dependencies; pins npm's project root to the plugin (see launch-server.sh)
 .mcp.json            # two servers, local-llm (launch-server.sh) and local-verify (launch-verify.sh); both get userConfig via env
 skills/

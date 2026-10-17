@@ -10,7 +10,7 @@ Status:
 - ✅ Implemented: a second server, local-verify, with one tool, `verify_claims`: the local model votes on whether short claims are supported by a file, without the file entering Claude's context. Its answer is a hint, never verification, and the skill does not use it yet.
 - ✅ Implemented: a repeatable measurement harness (`bash measure/run.sh`; see AGENTS.md, "Measuring") for Claude cost, tokens and answer quality on real files.
 - ✅ Implemented: the measured result, in `docs/results.md`. Delegation saves about 50% of Claude cost near 50k characters and costs the same or more on 20k to 25k characters (below 20k is unmeasured), so the skill delegates only from about 30k characters up to a cap set by the loaded model's context.
-- 🔲 Planned: a marketplace listing, for a permanent install. Today the plugin loads from a clone with `--plugin-dir`.
+- ✅ Implemented: a permanent install from the clone as a marketplace (section 4), or per session with `--plugin-dir`.
 
 ## Prerequisites
 
@@ -88,7 +88,16 @@ git clone git@github.com:warmlogic/claude-local-llm.git "$HOME/github/claude-loc
 claude --plugin-dir "$HOME/github/claude-local-llm"
 ```
 
-`--plugin-dir` loads the plugin for that session only, so pass it each time. A marketplace listing for a permanent install is 🔲 planned.
+`--plugin-dir` loads the plugin for that session only, so pass it each time.
+
+For a permanent install, add the clone as a marketplace and install from it. The repo's `.claude-plugin/marketplace.json` lists the plugin:
+
+```bash
+claude plugin marketplace add "$HOME/github/claude-local-llm"
+claude plugin install local-llm@warmlogic-local-llm
+```
+
+It then loads in every session, under the id `local-llm@warmlogic-local-llm` (use that id with `plugin configure` below instead of `local-llm@inline`). The plugin is unversioned, so every merge to `main` is a release. Pull the clone, then run `claude plugin marketplace update warmlogic-local-llm` and `claude plugin update local-llm@warmlogic-local-llm`, and restart or `/reload-plugins`. To remove it: `claude plugin uninstall local-llm@warmlogic-local-llm`, then `claude plugin marketplace remove warmlogic-local-llm`.
 
 The plugin has three options (declared as `userConfig` in `.claude-plugin/plugin.json`):
 

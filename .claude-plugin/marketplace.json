@@ -1,0 +1,11 @@
+{
+  "name": "warmlogic-local-llm",
+  "owner": { "name": "warmlogic" },
+  "plugins": [
+    {
+      "name": "local-llm",
+      "source": "./",
+      "description": "Hand big read-only text jobs to a local model in LM Studio, fenced and on loopback"
+    }
+  ]
+}
