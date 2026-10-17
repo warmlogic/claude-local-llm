@@ -93,6 +93,8 @@ summarize() {
     def frac($blob): (([$lines[] | select(any(.[]; . as $t | $blob | contains($t)))] | length) / ($lines | length)) * 100 | round / 100;
     def plen: .input.paths | if type == "array" then length else 0 end;
     def names_target: .input.paths | if type == "array" then any(.[]; type == "string" and (split("/") | last == $base)) else false end;
+    # every flag houtini emits (Quality:, UPSTREAM ERROR, TRUNCATED) is a part of the one Model: footer line (dist formatFooter
+    # joins its parts with " | "), which test-fence.sh re-checks against the pinned dist
     # the footer houtini writes is the last "Model:" line of the result; the body cannot forge it
     def footer_ok: (.res.text | split("\n") | map(select(startswith("Model:"))) | last // "") as $f
       | ([$f | capture("· (?<r>[0-9]+)(/(?<t>[0-9]+))? file\\(s\\) read")] | .[0]) as $c
