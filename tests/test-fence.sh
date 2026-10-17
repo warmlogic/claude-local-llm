@@ -318,7 +318,7 @@ if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-loca
    | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
   ok "approval hook allows the plugin's own skill"
 else bad "approval hook allows the plugin's own skill"; fi
-for t in mcp__plugin_local-llm_local-llm__code_task_files; do
+for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_local-verify__verify_claims; do
   if hook_out "{\"tool_name\":\"$t\",\"tool_input\":{}}" \
      | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
     ok "approval hook allows the plugin's read-only tool $t"
@@ -333,7 +333,12 @@ for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}
              '{"tool_name":"mcp__plugin_local-llm_local-llm__embed","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task_files2","tool_input":{}}' \
-             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify_claims","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify_claims2","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-llm__verify_claims","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_other_local-verify__verify_claims","tool_input":{}}' \
+             '{"tool_name":"mcp__local-verify__verify_claims","tool_input":{}}' \
+             '{"tool_name":"MCP__PLUGIN_LOCAL-LLM_LOCAL-VERIFY__VERIFY_CLAIMS","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_other_local-llm__code_task_files","tool_input":{}}' \
              '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
   if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
@@ -343,8 +348,8 @@ if jq -e '.hooks.PreToolUse | any((.matcher | split("|") | index("Skill") != nul
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"
 else bad "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"; fi
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$REPO/hooks/hooks.json" 2>/dev/null)
-if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files" ]; then
-  ok "PreToolUse matcher covers exactly the skill and the read-only file tool"
+if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
+  ok "PreToolUse matcher covers exactly the skill and the two read-only file tools"
 else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------
