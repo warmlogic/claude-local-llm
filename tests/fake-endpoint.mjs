@@ -33,6 +33,12 @@
 //   verify-twoloaded     as verify, but /api/v0/models shows two loaded chat models.
 //   verify-embedonly     as verify, but only an embeddings model is loaded.
 //   verify-slowlist      as verify, but /api/v0/models never answers.
+//   batch     stands in for the model behind batch/run.mjs: a chat completion answers two rows for the first
+//             "L<n>\t..." line of the request text, one quoting that line truly and one with a fabricated
+//             quote, and logs the parsed request body (body). usage reports 10 prompt and 5 completion tokens.
+//   batch-bad          as batch, but every reply's content is not JSON.
+//   batch-bad-once     as batch, but the first reply to each distinct request is not JSON.
+//   batch-length       as batch, but every reply is cut off (finish_reason "length").
 //   proxy     an HTTP proxy that must never be used: logs each request (absolute URL) and answers 502.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -125,6 +131,31 @@ const verify = (req, res) => {
     }, DELAY_MS);
   });
 };
+const batch = (req, res) => {
+  let raw = '';
+  req.on('data', (d) => { raw += d; });
+  req.on('end', () => {
+    if (req.url !== '/v1/chat/completions') return json(res, 404, { error: `Unexpected endpoint (${req.url})` });
+    const body = JSON.parse(raw);
+    appendFileSync(logFile, JSON.stringify({ url: req.url, body }) + '\n');
+    const text = body.messages.at(-1).content;
+    const key = text.length + text.slice(-200);
+    const first = !seen.has(key);
+    seen.add(key);
+    const line = text.match(/^(L\d+)\t[^\t]*\t[^\t]*\t(.*)$/m);
+    const reply = (content, finish = 'stop') => json(res, 200, {
+      choices: [{ message: { role: 'assistant', content }, finish_reason: finish }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    if (mode === 'batch-bad' || (mode === 'batch-bad-once' && first)) return reply('not json');
+    if (mode === 'batch-length') return reply('{"rows":[', 'length');
+    const rows = line ? [
+      { line: line[1], kind: 'correction', quote: line[2].slice(0, 12), note: 'true quote' },
+      { line: line[1], kind: 'stuck', quote: 'FABRICATED-QUOTE-NOT-IN-LINE', note: 'fabricated' },
+    ] : [];
+    reply(JSON.stringify({ rows }));
+  });
+};
 const proxy = (req, res) => {
   req.resume();
   json(res, 502, { error: 'proxy must not be used' });
@@ -132,6 +163,7 @@ const proxy = (req, res) => {
 const server = createServer((req, res) => {
   appendFileSync(logFile, JSON.stringify({ url: req.url, headers: req.headers }) + '\n');
   if (mode === 'proxy') return proxy(req, res);
+  if (mode.startsWith('batch')) return batch(req, res);
   if (mode.startsWith('verify')) return verify(req, res);
   if (mode === 'error500') {
     const models = [{ id: 'broken-model', object: 'model', type: 'llm', state: 'loaded' }];
