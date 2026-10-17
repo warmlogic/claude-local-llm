@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Picks the measurement corpus by a fixed rule (AGENTS.md, "Measuring"). Prints the private manifest TSV:
 # id <TAB> slot <TAB> type <TAB> task <TAB> chars <TAB> mtime_iso <TAB> sha256 <TAB> path
-# Paths never leave $MEASURE_HOME: run.sh writes this output there and nowhere else. Sizes are characters (wc -m in
+# Paths never leave $MEASURE_HOME: run.sh writes this output there and nowhere else.
+# The secret filter below is best-effort defense-in-depth, not a guarantee: no pattern list is complete, so it errs
+# toward dropping files. The requirement it backs is that the corpus is processed locally and that no file content
+# or path is ever committed; the baseline sessions read these files by design. Sizes are characters (wc -m in
 # UTF-8), as the spec states them. Warnings go to stderr and never name a file; a missing root is a warning, and a
 # failed filter command exits non-zero ("selection crashed") rather than letting a file through.
 # Usage: select-corpus.sh [cutoff_epoch]   (default: now)
@@ -20,12 +23,18 @@ SECRET_BODY_RE='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]
 # run of non-alphanumeric characters on the line before the separator), and bare Bearer or Basic
 # credentials. measure/entropy.mjs then drops any file with a high-entropy token, which no pattern list can name.
 CRED_RE='(authorization|bearer|basic|token|secret|password|passwd|api[_-]?key|cookie|set-cookie|private[_-]?key|client[_-]?secret|session)[^[:alnum:]]*[:=][[:space:]]*[^[:space:]]|(bearer|basic)[[:space:]]+[A-Za-z0-9._~+/=-]{8,}'
+# URL userinfo with a password (scheme://user:pass@host) and credential arguments (--user u:p, -u u:p, --password x,
+# mysql-style -p<value>).
+URL_CRED_RE='[a-z][a-z0-9+.-]*://[^/[:space:]:@]+:[^/[:space:]@]+@'
+ARG_CRED_RE='(^|[[:space:]])(--user|-u)[[:space:]=]*[^[:space:]:]+:[^[:space:]]+|--password[[:space:]=]+[^[:space:]]|(mysql|mysqldump|mysqladmin|psql|pg_dump|mongo|mongosh|redis-cli)[^|;&]*[[:space:]]-p[^[:space:]]+'
 
 TRANSCRIPT_RE='transcript|meeting|standup|1on1|1-on-1|interview|call-notes'
 LOG_NAME_RE='(^|[_.-])(logs?|stderr|stdout|trace)([_.-]|$)|^(train|run|job)_'
 LOG_DIR_RE='^(logs?|debug|runs?)$'
 
 warn() { echo "select-corpus: warning: $*" >&2; }
+[ "$(printf '\303\251' | LC_ALL=en_US.UTF-8 wc -m 2>/dev/null | tr -d ' ')" = 1 ] \
+  || { echo "select-corpus: the en_US.UTF-8 locale is unavailable, so wc -m would count bytes, not characters" >&2; exit 2; }
 # keep <grep args...>: a name filter; grep's 1 means "no line kept", anything above it is a crash
 keep() { local rc=0; grep "$@" || rc=$?; [ "$rc" -le 1 ] || { echo "select-corpus: grep failed (rc=$rc)" >&2; exit 2; }; }
 
@@ -50,7 +59,8 @@ while IFS= read -r p; do
   [ "$b" -ge 1800 ] && [ "$b" -le 200000 ] || continue   # bytes bound chars from both sides (1 to 4 bytes each)
   rc=0; grep -Iq . "$p" 2>/dev/null || rc=$?
   [ "$rc" -eq 0 ] || { [ "$rc" -eq 1 ] || n_unreadable=$((n_unreadable+1)); continue; }   # 1: binary or empty; 2: unreadable
-  iconv -f UTF-8 -t UTF-8 "$p" >/dev/null 2>&1 || continue
+  rc=0; iconv -f UTF-8 -t UTF-8 "$p" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { [ "$rc" -eq 1 ] || n_unreadable=$((n_unreadable+1)); continue; }   # 1: not valid UTF-8
   c=$(LC_ALL=en_US.UTF-8 wc -m < "$p" 2>/dev/null | tr -d ' ') && [ -n "$c" ] || { n_unreadable=$((n_unreadable+1)); continue; }
   slot=""
   if [ "$c" -ge 20000 ] && [ "$c" -le 50000 ]; then slot=main
@@ -58,7 +68,7 @@ while IFS= read -r p; do
   elif [ "$c" -ge 4500 ] && [ "$c" -le 5500 ]; then slot=s5k
   elif [ "$c" -ge 9000 ] && [ "$c" -le 11000 ]; then slot=s10k
   else continue; fi
-  rc=0; grep -E -i -q -e "$SECRET_BODY_RE" -e "$CRED_RE" "$p" 2>/dev/null || rc=$?
+  rc=0; grep -E -i -q -e "$SECRET_BODY_RE" -e "$CRED_RE" -e "$URL_CRED_RE" -e "$ARG_CRED_RE" "$p" 2>/dev/null || rc=$?
   [ "$rc" -eq 1 ] || { [ "$rc" -eq 0 ] && n_secret=$((n_secret+1)) || n_scan_fail=$((n_scan_fail+1)); continue; }   # only "no match" passes
   base=$(basename "$p" | tr '[:upper:]' '[:lower:]'); lp=$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')
   if printf '%s' "$base" | grep -E -q "$TRANSCRIPT_RE" && printf '%s' "$base" | grep -E -q '\.(txt|md|vtt|srt)$'; then t=transcript
