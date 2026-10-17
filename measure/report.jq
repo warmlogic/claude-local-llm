@@ -4,12 +4,14 @@
 #   meta (header facts), mode ("results" or "review"), paths ({id: path}, review mode only) and tasks.
 # Results mode prints only ids, types, tasks, size buckets and numbers; paths and answers never reach it.
 #
-# Completeness, the one rule: a run COUNTS when it has usage and its status is ok or a delegation failure (no-call,
-# call-error, no-server: real plugin behavior, kept at its actual tokens). Every other run (missing, timeout,
-# unknown, is-error, exit-N, facts-error, corpus-changed, base-no-read, plugin-leak) does not measure what it should.
-# A metric is complete only when every run it expects counts (a job's cost also expects its configuration's
-# controls) and the corpus is full (10 main files, each small slot,
-# both configurations, not a partial run). An incomplete metric shows "incomplete" and can never PASS.
+# Completeness, the one rule (valid_run below, used by every count, median, control, total and gate): a run is
+# MEASURED only on positive evidence. All four usage counters are numbers; no trace line but the last failed to
+# parse; the plugin tool is listed exactly when the configuration is on (controls included); and the status is ok,
+# or, for a plugin-on job only, a delegation failure (no-call, call-error), which is real plugin behavior kept at
+# its actual tokens. Anything else, including no-server (a dead server measures nothing about delegation), leaves
+# the metric it feeds incomplete. A metric is complete only when every run it expects is measured (a job's cost
+# also expects its configuration's controls) and the corpus is full (10 main files, each small slot, both
+# configurations, not a partial run). An incomplete metric shows "incomplete" and can never PASS.
 
 def median_by(f): map(select(f != null)) | sort_by(f) | if length == 0 then null else .[(length - 1) / 2 | floor] end;
 def median: map(select(. != null)) | sort | if length == 0 then null else .[(length - 1) / 2 | floor] end;
@@ -23,7 +25,11 @@ def bucket: if .slot == "main" then (if .chars < 30000 then "20–30k" elif .cha
 def status_cell: if . == null then "not run" elif . == "ok" then "ok" else "FAILED: " + . end;
 def row: "| " + (map(na) | join(" | ")) + " |";
 def table(h): (h | row), (h | map("---") | row);
-def counts: .T != null and (.status as $s | ["ok", "no-call", "call-error", "no-server"] | index($s) != null);
+def valid_run:
+  ([.T, .input, .cache_creation, .cache_read, .output] | all(type == "number"))
+  and .parse_errors == 0
+  and .tool_listed == (.cfg == "on")
+  and (.status == "ok" or (.kind == "job" and .cfg == "on" and (.status == "no-call" or .status == "call-error")));
 def sumc: if any(.[]; . == null) or length == 0 then null else add end;
 # gate <value> <complete> <reasons> <pass-test>: PASS needs a complete metric
 def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplete: \($why | join("; ")))" elif $pass then "PASS" else "FAIL" end;
@@ -39,21 +45,30 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
     (("off", "on") as $c | select($cfgs | index($c) == null) | "config \($c) not run")]) as $corpus_why
 # controls: the median of the counted reps, complete when all expected reps count
 | (reduce ("off", "on") as $c ({};
-    ([$runs[] | select(.kind == "ctl" and .cfg == $c)]) as $all | ([$all[] | select(counts)]) as $ok
+    ([$runs[] | select(.kind == "ctl" and .cfg == $c)]) as $all | ([$all[] | select(valid_run)]) as $ok
     | .[$c] = (($ok | median_by(.T)) // {}) + {complete: (($ok | length) == $ctl_reps), counted: ($ok | length),
         spread: ($ok | map(.T) | if length == 0 then null else "\(min)–\(max) (n=\(length))" end)})) as $C
 | def job: if .T == null or $C[.cfg].T == null then null else .T - $C[.cfg].T end;
   def jobusd: if .usd == null or $C[.cfg].usd == null then null else .usd - $C[.cfg].usd end;
   def growth: if .ctx_max == null or $C[.cfg].ctx_max == null then null else .ctx_max - $C[.cfg].ctx_max end;
   def e2e: if .duration_ms != null then .duration_ms / 1000 else .wall_s end;
-  def slow: .status == "timeout" or any(.call_footers[]?; (.total_s // 0) > 60);
-  # usable <aid> <rep-1 run>: null (incomplete) unless rep 1 counts and, when it ran ok, was checked and judged.
+  # slow: "slow" for a timeout or a local call over 60 s; a plugin-on run with no footer falls back to its session
+  # time; a call without a total, or no time at all, is "unknown", never fast
+  def slow: if .status == "timeout" then "slow"
+    elif (.call_footers // []) | length > 0 then
+      (if any(.call_footers[]; (.total_s // 0) > 60) then "slow" elif any(.call_footers[]; .total_s == null) then "unknown" else "fast" end)
+    elif .cfg == "on" then (e2e as $e | if $e == null then "unknown" elif $e > 60 then "slow" else "fast" end)
+    else "fast" end;
+  def slowcell: if .off.slow == "slow" or .on.slow == "slow" then "SLOW" elif .off.slow == "unknown" or .on.slow == "unknown" then "unknown" else "" end;
+  # usable <aid> <rep-1 run>: null (incomplete) unless rep 1 is measured and, when it ran ok, was mechanically
+  # checked against its graded copy (a missing copy is ok: null, so incomplete) and judged.
   # FAILED is never usable, and an operator disagreement cannot change that.
   def usable($aid; $r1):
     ($mech[$aid] // null) as $m | ($verdicts[$aid] // null) as $v
-    | if $r1 == null or ($r1 | counts | not) then null
+    | if $r1 == null or ($r1 | valid_run | not) then null
       elif $r1.status != "ok" then {u: false, why: "FAILED"}
       elif $m == null then null
+      elif $m.ok == null then null
       else (if ($m.ok | not) then {u: false, why: ("mechanical: " + $m.reason)}
             elif $v == null then null
             else {u: (($v.invented | length) == 0 and ($v.missed | length) == 0), why: null,
@@ -66,7 +81,7 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
   [$corpus[] | . as $f | (if $f.slot == "main" then 1 else $small_reps end) as $want
    | reduce ("off", "on") as $c ($f;
        ([$runs[] | select(.kind == "job" and .id == $f.id and .cfg == $c) | . + {job: job, jobusd: jobusd, growth: growth}]) as $reps
-       | ([$reps[] | select(counts)]) as $ok
+       | ([$reps[] | select(valid_run)]) as $ok
        | ($reps | map(select(.rep == 1)) | first) as $r1
        | (($ok | length) == $want and ($reps | length) == $want and $C[$c].complete) as $complete
        | .[$c] = (if $complete then ($ok | median_by(.job)) else {} end)
@@ -76,7 +91,7 @@ def gate($v; $complete; $why; $pass): if ($complete | not) then "FAIL (incomplet
               ttft_s: ([$reps[] | (.footer // (.call_footers // [] | last)) | .ttft_ms // null | if . == null then null else . / 1000 end] | median),
               local_s: ([$reps[] | [.call_footers[]?.total_s // empty] | max] | median),
               e2e_s: ([$reps[] | e2e] | median),
-              slow: any($reps[]; slow),
+              slow: ([$reps[] | slow] | if index("slow") != null then "slow" elif index("unknown") != null then "unknown" else "fast" end),
               usable: usable("\($f.id)-\($c)"; $r1)})
    | . + {savings: (if .off.complete and .on.complete then ratio(.on.job; .off.job) else null end),
           savings_usd: (if .off.complete and .on.complete then ratio(.on.jobusd; .off.jobusd) else null end)}] as $F
@@ -119,10 +134,10 @@ else
   "# Measured savings and quality", "",
   "- Run: \($meta.date_start) to \($meta.date_end // "(not recorded)"); corpus cutoff \($meta.cutoff); repo \($meta.repo_sha)\(if $meta.repo_dirty then " (dirty)" else "" end)",
   "- Claude Code \($meta.claude_version); job models \([$runs[] | .models[]?] | unique | join(", ") | if . == "" then "n/a" else . end); judge \([$verdicts[] | .judge_models[]?] | unique | join(", ") | if . == "" then "n/a" else . end)",
-  "- Local model \($meta.local_model // "n/a") (pinned in the plugin snapshots; every footer matched); server \($meta.server_pin); LM Studio CLI \($meta.lms_version)",
+  "- Local model \($meta.local_model // "n/a") (pinned in the plugin snapshots; \([$runs[] | .call_footers[]?] | length | if . == 0 then "no footer recorded" else "all \(.) footers matched" end)); server \($meta.server_pin); LM Studio CLI \($meta.lms_version)",
   "- Every session: `claude -p --output-format stream-json --setting-sources project --no-session-persistence`, default model\(if $meta.model != "" then " pinned to " + $meta.model else "" end), a constant empty cwd outside `$HOME`, claude.ai connectors off (`ENABLE_CLAUDEAI_MCP_SERVERS=false`). Plugin on adds `--plugin-dir` (a snapshot of the repo; the ~2k, ~5k and ~10k files use a copy whose skill floor reads 1k instead of 10k).",
   "",
-  "**Metrics.** T = input + cache_creation + cache_read + output, summed over the result event's `modelUsage`. A job's cost is its run's T minus the median control of its configuration (`Reply with the single word OK.`, \($ctl_reps) per configuration, after one discarded warm-up). Savings = 1 − Σ job on / Σ job off over the main files. A delegation failure (no-call, call-error, no-server) stays in at its actual tokens and is not usable. Any other failed, missing or usage-less run leaves its metric incomplete, and an incomplete metric cannot pass. Fixed cost = T(control on) − T(control off); break-even = ceil(fixed / mean(job off − job on)). Context growth = the largest single-call input side (input + cache_read + cache_creation) in the run minus the control's: the file tokens that entered the main context. USD, turns, timing and context growth are reported, not gated. SLOW: a local call over 60 s, or a timeout.",
+  "**Metrics.** T = input + cache_creation + cache_read + output, summed over the result event's `modelUsage`. A job's cost is its run's T minus the median control of its configuration (`Reply with the single word OK.`, \($ctl_reps) per configuration, after one discarded warm-up). Savings = 1 − Σ job on / Σ job off over the main files. A plugin-on job's delegation failure (no-call, call-error) stays in at its actual tokens and is not usable. Any other run that is not positively measured (all four usage counters, a clean trace, the plugin tool present exactly when on, an ok status) leaves its metric incomplete, and an incomplete metric cannot pass. Fixed cost = T(control on) − T(control off); break-even = ceil(fixed / mean(job off − job on)). Context growth = the largest single-call input side (input + cache_read + cache_creation) in the run minus the control's: the file tokens that entered the main context. USD, turns, timing and context growth are reported, not gated. SLOW: a local call over 60 s, a timeout, or a plugin-on session over 60 s with no footer; \"unknown\" when a time is missing.",
   "",
   "## Definition of done", "",
   table(["Metric", "Baseline (plugin off)", "Delegated (plugin on)", "Target", "Result"]),
@@ -145,11 +160,12 @@ else
   ($M[] | [.id, .type, .task, bucket, jcell("off"), jcell("on"), (.savings | pct), (.savings_usd | pct), .off.growth, .on.growth, .off.turns, .on.turns,
            (.off.status | status_cell), (.on.status | status_cell), (.on.ttft_s | sec),
            (if .on.local_s != null then (.on.local_s | sec) elif .on.e2e_s != null then "\(.on.e2e_s | sec) (session)" else "n/a" end),
-           (.off.e2e_s | sec), (.on.e2e_s | sec), (if .off.slow or .on.slow then "SLOW" else "" end),
+           (.off.e2e_s | sec), (.on.e2e_s | sec), slowcell,
            (.off.usable | ucell), (.on.usable | ucell),
            ([(if .on.r1.also_read then "on: also opened the file" else empty end),
              (("off", "on") as $c | select(.[$c].r1.usage_match == false) | "\($c): usage differs from modelUsage"),
              (("off", "on") as $c | .[$c].r1.denials // [] | select(length > 0) | "\($c) denied: \(unique | join(" "))"),
+             (("off", "on") as $c | .[$c].r1.plugin_denials // [] | select(length > 0) | "\($c) PLUGIN denied: \(unique | join(" "))"),
              (("off", "on") as $c | .[$c].usable.why // empty | select(startswith("mechanical")) | "\($c) \(.)")] | join("; "))] | row),
   "",
   "## Per-field breakdown (raw run totals)", "",
@@ -162,6 +178,6 @@ else
   table(["id", "size", "job off", "job on", "savings T", "ok reps off", "ok reps on", "TTFT s", "local s", "e2e off s", "e2e on s", "slow", "usable off", "usable on"]),
   ($F | sort_by(.chars)[] | [.id, bucket, jcell("off"), jcell("on"), (.savings | pct), "\(.off.ok_reps)/\(.off.want)", "\(.on.ok_reps)/\(.on.want)",
      (.on.ttft_s | sec), (if .on.local_s != null then (.on.local_s | sec) elif .on.e2e_s != null then "\(.on.e2e_s | sec) (session)" else "n/a" end),
-     (.off.e2e_s | sec), (.on.e2e_s | sec), (if .off.slow or .on.slow then "SLOW" else "" end),
+     (.off.e2e_s | sec), (.on.e2e_s | sec), slowcell,
      (.off.usable | ucell), (.on.usable | ucell)] | row)
 end

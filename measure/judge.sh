@@ -73,9 +73,9 @@ for f in "$RUN_DIR"/facts/f*-1.json; do
   path=$(manifest "$id" 8); task=$(manifest "$id" 4)
   [ -n "$path" ] || die "$id is not in the run's manifest"
   # Grade only the measured text: run.sh's hash-verified copy in files/<id>, never the live file, which may have
-  # changed or vanished since. A job that has no copy (it failed corpus-changed) is marked and never graded.
+  # changed or vanished since. An answer with no matching copy is marked ok:null (incomplete) and never graded.
   if [ "$(sha256_of "$RUN_DIR/files/$id")" != "$(manifest "$id" 7)" ]; then
-    echo '{"ok":false,"reason":"corpus-changed","extra_text":false}' > "$RUN_DIR/judge/$aid.mech.json"
+    echo '{"ok":null,"reason":"no graded copy","extra_text":false}' > "$RUN_DIR/judge/$aid.mech.json"   # incomplete, not "no"
     continue
   fi
   jq '.answer // ""' "$f" | jq -c -L "$MDIR" --arg task "$task" --rawfile file "$RUN_DIR/files/$id" --argjson labels "$labels" \

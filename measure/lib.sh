@@ -2,10 +2,10 @@
 # Shared helpers for run.sh, judge.sh and selftest.sh (sourced; MDIR must be set). Each is small enough to test
 # offline, which is why run.sh's file-integrity and output-path rules live here rather than inline.
 
-# task_field <task> <key> [path]: a tasks.json field with <LABELS> and <P> filled in
+# task_field <task> <key> [path]: a tasks.json field with <LABELS> and <P> filled in; fails when the field is missing
 task_field() {
-  jq -r --arg t "$1" --arg k "$2" --arg p "${3:-}" \
-    '(.labels | join(", ")) as $l | .tasks[$t][$k] | gsub("<LABELS>"; $l) | gsub("<P>"; $p)' "$MDIR/tasks.json"
+  jq -er --arg t "$1" --arg k "$2" --arg p "${3:-}" \
+    '(.labels | join(", ")) as $l | .tasks[$t][$k] | strings | gsub("<LABELS>"; $l) | gsub("<P>"; $p)' "$MDIR/tasks.json"
 }
 # manifest_field <manifest> <id> <field-number>: id slot type task chars mtime sha256 path = fields 1..8
 manifest_field() { awk -F'\t' -v id="$2" -v f="$3" '$1 == id {print $f}' "$1"; }
@@ -17,13 +17,14 @@ TIMEOUT=$(command -v timeout || command -v gtimeout) || TIMEOUT=""
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
 
 # trace_facts <scratch-prefix> <trace> <name> <cfg> <kind> <id> <rep> <path> <rc> <wall-s>: trace.jq's facts for one
-# run plus its identity, on stdout. A stage that fails gives status facts-error naming the stage, never "unknown".
+# run plus its identity, on stdout. A stage that fails gives status facts-error naming the stage, never "unknown";
+# a line that is not JSON reaches trace.jq as "__bad__", which fails the run unless it is the last line.
 trace_facts() {
   local base="$1" stage="" ident
   ident=$(jq -nc --arg run "$3" --arg cfg "$4" --arg kind "$5" --arg id "$6" --argjson rep "$7" --argjson wall_s "${10}" \
     '{run: $run, cfg: $cfg, kind: $kind, id: $id, rep: $rep, wall_s: $wall_s}' 2>/dev/null) \
     || ident=$(jq -nc --arg run "$3" --arg cfg "$4" --arg kind "$5" --arg id "$6" '{run: $run, cfg: $cfg, kind: $kind, id: $id}')
-  jq -cR 'fromjson? // empty' "$2" > "$base.events" 2> "$base.log" || stage="parse the trace"
+  jq -cR 'fromjson? // "__bad__"' "$2" > "$base.events" 2> "$base.log" || stage="parse"
   [ -n "$stage" ] || jq -s -L "$MDIR" --arg path "$8" --arg cfg "$4" --arg kind "$5" --argjson rc "$9" --arg ft "$FILE_TOOL" \
     -f "$MDIR/trace.jq" "$base.events" > "$base.trace" 2>> "$base.log" || stage="trace.jq"
   [ -n "$stage" ] || jq -c --argjson i "$ident" '. + $i' "$base.trace" 2>> "$base.log" || stage="merge"
@@ -38,11 +39,13 @@ trace_facts() {
 # $HOME/.claude/CLAUDE.md as an ancestor's project memory). With a path (a resumed run), recreates that same dir so
 # the session prefix stays identical; without, makes a new one. Prints the resolved path; fails under $HOME.
 work_dir() {
-  local d
-  if [ -n "${1:-}" ]; then mkdir -p "$1" && d=$(cd "$1" && pwd -P) || return 1
-  else d=$(mktemp -d "${TMPDIR:-/tmp}/local-llm-measure.XXXXXX") && d=$(cd "$d" && pwd -P) || return 1; fi
-  case "$d/" in "$HOME/"*) return 1 ;; esac
-  printf '%s\n' "$d"
+  local d parent home
+  home=$(cd "$HOME" 2>/dev/null && pwd -P) || home="$HOME"
+  if [ -n "${1:-}" ]; then d="$1"; parent=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || return 1
+  else parent=$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P) || return 1; fi
+  case "$parent/" in "$home/"*|"$HOME/"*) return 1 ;; esac   # refused before anything is created under $HOME
+  if [ -n "${1:-}" ]; then mkdir -p "$d" || return 1; else d=$(mktemp -d "$parent/local-llm-measure.XXXXXX") || return 1; fi
+  (cd "$d" && pwd -P)
 }
 
 # results_path <run-dir> <repo>: where a run's table goes. Only a full run writes the committed docs/results.md;
@@ -52,17 +55,18 @@ results_path() {
 }
 
 # snapshot_ok <run-dir> <id>: before a job, keep a private copy of the file in files/<id> (first job only, kept only
-# when its sha256 matches the frozen manifest), and succeed only when the copy exists and the live file still matches.
-# The quality pass grades the copy; a failure here means the job is corpus-changed.
+# when its sha256 matches the frozen manifest). Returns 0 when the copy exists and the live file still matches,
+# 1 when the file changed since the freeze (corpus-changed), 2 when the copy could not be made (snapshot-failed).
+# The quality pass grades the copy.
 snapshot_ok() {
   local m="$1/corpus.tsv" snap="$1/files/$2" path want
   path=$(manifest_field "$m" "$2" 8); want=$(manifest_field "$m" "$2" 7)
-  [ -n "$want" ] || return 1
+  [ -n "$want" ] || return 2
   if [ ! -f "$snap" ]; then
-    cp "$path" "$snap.new" 2>/dev/null && [ "$(sha256_of "$snap.new")" = "$want" ] && mv "$snap.new" "$snap"
-    rm -f "$snap.new"
+    cp "$path" "$snap.new" 2>/dev/null || { rm -f "$snap.new"; [ -e "$path" ] && return 2; return 1; }
+    if [ "$(sha256_of "$snap.new")" = "$want" ]; then mv "$snap.new" "$snap" || return 2; else rm -f "$snap.new"; return 1; fi
   fi
-  [ -f "$snap" ] && [ "$(sha256_of "$path")" = "$want" ]
+  [ "$(sha256_of "$path")" = "$want" ] || return 1
 }
 # live_unchanged <run-dir> <id>: after a session, the live file still matches the manifest (a change undone before
 # the session ended goes unseen; that is the limit)
