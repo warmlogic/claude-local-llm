@@ -51,7 +51,7 @@ export async function getContextCap({
     if (!Array.isArray(list)) return fallback('no metadata');
     const loaded = list.filter((m) => m?.state === 'loaded' && m.type !== 'embeddings' && (!model || m.id === model));
     if (!loaded.length) return model
-      ? fallback('pinned model not loaded', 'pinned model not loaded') : fallback('no metadata');
+      ? fallback('pinned model not loaded', 'pinned model not loaded') : fallback('no chat model loaded');
     if (loaded.some((m) => !Number.isSafeInteger(m.loaded_context_length) || m.loaded_context_length <= 0)) return fallback('invalid context');
     return budget(loaded.reduce((min, m) => Math.min(min, m.loaded_context_length), Infinity), 'loaded');
   } catch (e) {

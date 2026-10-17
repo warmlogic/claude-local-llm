@@ -93,7 +93,7 @@ test('unavailable or malformed metadata falls back; tiny context has no usable r
   const endpoint = await serve((q, r) => r.end(JSON.stringify(payload)));
   for (const data of [undefined, [], [model('a', 0)], [model('a', '65536')], [model('a', 12.5)], [model('a', 65536, 'not-loaded')]]) {
     payload = { data };
-    const reason = data?.some((m) => m.state === 'loaded') ? 'invalid context' : 'no metadata';
+    const reason = data === undefined ? 'no metadata' : data.some((m) => m.state === 'loaded') ? 'invalid context' : 'no chat model loaded';
     assert.deepEqual(await getContextCap({ endpoint }), assumed(reason));
   }
   payload = { data: [model('a', 2048)] };
