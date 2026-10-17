@@ -1,0 +1,8 @@
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"local-llm:delegate-local"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","content":"Launching skill"}]}}
+{"type":"assistant","message":{"id":"m24","content":[{"type":"tool_use","id":"d1","name":"mcp__plugin_local-llm_local-llm__code_task_files","input":{"paths":["/work/app-20k.log"],"task":"summarize"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","content":"Error: LM Studio endpoint error 404: No models loaded. Please load a model in the developer page.","is_error":true}]}}
+{"type":"assistant","message":{"id":"m25","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/work/app-20k.log"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"1\tINFO a"}]}}
+{"type":"assistant","message":{"id":"m26","content":[{"type":"text","text":"Summary."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Summary.","permission_denials":[]}
