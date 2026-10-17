@@ -26,17 +26,36 @@ const ERROR_CODES = new Set([
 ]);
 const CODE_HINTS = {
   context_length_exceeded: "the files are too large for the model's context; send smaller files",
+  model_not_found: 'check the model plugin option, or leave it empty',
   no_models_loaded: 'No models loaded in LM Studio; load one, then retry',
 };
 
-// The allowlisted code an error body carries, if any. The message is matched, never repeated.
+const structuredCode = (err) => {
+  for (const c of [err?.code, err?.type]) if (typeof c === 'string' && ERROR_CODES.has(c)) return c;
+  return null;
+};
+// LM Studio (0.4, Splash engine) wraps an engine error as a string with this exact prefix and the
+// engine's JSON after it, e.g. a context overflow:
+//   {"error":"Engine protocol predict request returned 400: {\"error\":{\"message\":\"prompt exceeds
+//   the context window\",\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\"}}"}
+// and reports nothing loaded as a string starting "No models loaded.".
+const LMSTUDIO_ENGINE_ERROR = /^Engine protocol predict request returned \d{3}: (\{[^]*\})$/;
+
+// The allowlisted code an error body carries, if any, from structured fields only: the top-level
+// error's code or type, or the same fields of LM Studio's wrapped engine error, matched by its
+// anchored prefix. Free message text is never matched, since it can echo the prompt, and so the files.
 export function upstreamCode(json) {
   const err = json?.error;
-  for (const c of [err?.code, err?.type]) if (typeof c === 'string' && ERROR_CODES.has(c)) return c;
-  const msg = typeof err === 'string' ? err : typeof err?.message === 'string' ? err.message : '';
-  if (/no models loaded/i.test(msg)) return 'no_models_loaded';
-  if (/context[ _-]?length|context window|too many tokens/i.test(msg)) return 'context_length_exceeded';
-  return null;
+  const code = structuredCode(err);
+  if (code || typeof err !== 'string') return code;
+  if (err.startsWith('No models loaded.')) return 'no_models_loaded';
+  const wrapped = LMSTUDIO_ENGINE_ERROR.exec(err);
+  if (!wrapped) return null;
+  try {
+    return structuredCode(JSON.parse(wrapped[1])?.error);
+  } catch {
+    return null;
+  }
 }
 
 const diagnostic = (status, code) =>
@@ -122,7 +141,10 @@ export async function pickModel(cfg, signal) {
     v0 = await get('/api/v0/models');
   } catch (e) {
     if (e.status !== 404) throw e;
-    const v1 = await get('/v1/models');
+    const v1 = await get('/v1/models').catch((e1) => {
+      if (e1.status === 404) throw new Error('no model list at the endpoint (404); endpoint_url should be the server root, without /v1');
+      throw e1;
+    });
     if (!Array.isArray(v1?.data)) throw new Error('unexpected response from /v1/models');
     const chat = v1.data.filter((m) => typeof m?.id === 'string' && !isEmbedding(m));
     if (chat.length === 1) return chat[0].id;

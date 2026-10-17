@@ -17,7 +17,9 @@ import { isAbsolute, sep } from 'node:path';
 export const MAX_FILE_BYTES = 1024 * 1024; // the same 1 MB cap houtini runs with
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const UTF8 = new TextDecoder('utf-8', { fatal: true }); // throws where a lenient decode would insert U+FFFD
-const overLimit = (bytes) => new Error(`file is ${(bytes / 1048576).toFixed(1)} MB, over the 1 MB limit`);
+// Sizes near the cap print in bytes, where "1.0 MB" would hide that the file is over it.
+export const formatSize = (bytes) => (bytes < 1.1 * 1048576 ? `${bytes} bytes` : `${(bytes / 1048576).toFixed(1)} MB`);
+const overLimit = (bytes) => new Error(`file is ${formatSize(bytes)}, over the 1 MB limit (${MAX_FILE_BYTES} bytes)`);
 
 export function parseRoots(raw) {
   const roots = (raw ?? '').split(',').filter(Boolean);
