@@ -86,7 +86,10 @@ check "mech: not JSON" '[false,"not a JSON object"]' "$(mech extraction 'here is
 # --- lib.sh rules that run.sh relies on ----------------------------------------------------------------------
 L="$TMP/lib"; mkdir -p "$L/files"
 rp() { echo "$1" > "$L/meta.json"; case "$(results_path "$L" /repo)" in /repo/docs/results.md) echo docs ;; "$L/results.md") echo run ;; *) echo other ;; esac; }
-check "results_path: a full run writes docs/results.md" 'docs' "$(rp '{"partial":false,"allow_short":false}')"
+check "results_path: a full run stays in the run dir by default" 'run' "$(rp '{"partial":false,"allow_short":false}')"
+check "results_path: a full run with MEASURE_PUBLISH=1 writes docs/results.md" 'docs' "$(MEASURE_PUBLISH=1 rp '{"partial":false,"allow_short":false}')"
+check "results_path: MEASURE_PUBLISH=1 never publishes a partial run" 'run' "$(MEASURE_PUBLISH=1 rp '{"partial":true,"allow_short":false}')"
+check "results_path: MEASURE_PUBLISH=1 never publishes a short-corpus run" 'run' "$(MEASURE_PUBLISH=1 rp '{"partial":false,"allow_short":true}')"
 check "results_path: a partial run stays in the run dir" 'run' "$(rp '{"partial":true,"allow_short":false}')"
 check "results_path: a short-corpus run stays in the run dir" 'run' "$(rp '{"partial":false,"allow_short":true}')"
 cp "$DOC" "$TMP/live.md"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The measurement: bash measure/run.sh
 #   preflight, corpus (frozen manifest, or a fresh pick), warm-ups, no-file controls, jobs, the judge pass and the
-#   report. Writes docs/results.md and prints the private run dir. Every session is a real `claude -p` run.
+#   report. Writes <run-dir>/results.md (docs/results.md too with MEASURE_PUBLISH=1 on a full run) and prints the private run dir. Every session is a real `claude -p` run.
 # bash measure/run.sh --resume <run-dir>: continue a run that stopped; every run whose facts/<name>.json exists is
 #   kept as is (delete one to redo it), and the judge keeps its stored verdicts.
 # bash measure/run.sh --report <run-dir>: re-render a stored run (mechanical checks, operator verdicts, tables);

@@ -60,10 +60,10 @@ copy_plugin() {
   for part in "${parts[@]}"; do cp -R "$1/$part" "$2/" || return 1; done
 }
 
-# results_path <run-dir> <repo>: where a run's table goes. Only a full run writes the committed docs/results.md;
-# a partial run (MEASURE_ONLY) or a run with a short corpus (MEASURE_ALLOW_SHORT) keeps it in the run dir.
+# results_path <run-dir> <repo>: where a run's table goes. A run's table stays in its run dir; only a full run
+# (not MEASURE_ONLY, not MEASURE_ALLOW_SHORT) with MEASURE_PUBLISH=1 writes the committed docs/results.md.
 results_path() {
-  if jq -e '.partial or .allow_short' "$1/meta.json" >/dev/null 2>&1; then echo "$1/results.md"; else echo "$2/docs/results.md"; fi
+  if [ "${MEASURE_PUBLISH:-}" = 1 ] && jq -e '(.partial or .allow_short) | not' "$1/meta.json" >/dev/null 2>&1; then echo "$2/docs/results.md"; else echo "$1/results.md"; fi
 }
 
 # snapshot_ok <run-dir> <id>: before a job, keep a private copy of the file in files/<id> (first job only, kept only

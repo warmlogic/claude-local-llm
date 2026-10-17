@@ -1,6 +1,6 @@
 # Measured savings
 
-Single-file delegation through the MCP tool saves about 50% of Claude cost on files near 50k characters and costs the same or more on files of 10k to 25k characters. The break-even sits between those sizes. The cause is fixed orchestration overhead: about 6 Claude turns (skill load, size check, ToolSearch, the call, a spot check) against 1 to 2 for a direct read. Wall time is 2 to 5 times higher; the local model itself takes about 4 s (median).
+Single-file delegation through the MCP tool saves about 50% of Claude cost on files near 50k characters and costs the same or more on files of 20k to 25k characters; below 20k is unmeasured. The break-even sits between 25k and 50k. The cause is fixed orchestration overhead: about 6 Claude turns (skill load, size check, ToolSearch, the call, a spot check) against 1 to 2 for a direct read. Wall time is 2 to 5 times higher; the local model itself takes about 4 s (median).
 
 ## A. Paired runs on the frozen real corpus
 
@@ -24,7 +24,7 @@ The first full measurement, before the size-hint fix, delegated 1 of 23 plugin-o
 
 ## B. Files near the cap
 
-Ad hoc, 2026-10-17, main at fdc1b75: three real documents of 48k to 54k characters, "Summarize <path> in 5 bullets", 2 reps each.
+An ad-hoc check that `measure/run.sh` does not reproduce: no control subtraction and not the frozen corpus. 2026-10-17, main at fdc1b75: three real documents of 48k to 54k characters, "Summarize <path> in 5 bullets", 2 reps each.
 
 | | Cold read, plugin off | Delegated |
 | --- | --- | --- |
