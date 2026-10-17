@@ -288,7 +288,7 @@ if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-loca
    | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
   ok "approval hook allows the plugin's own skill"
 else bad "approval hook allows the plugin's own skill"; fi
-for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_local-verify__verify_claims; do
+for t in mcp__plugin_local-llm_local-llm__code_task_files; do
   if hook_out "{\"tool_name\":\"$t\",\"tool_input\":{}}" \
      | jq -e '.hookSpecificOutput.permissionDecision == "allow" and .hookSpecificOutput.hookEventName == "PreToolUse"' >/dev/null; then
     ok "approval hook allows the plugin's read-only tool $t"
@@ -303,7 +303,7 @@ for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}
              '{"tool_name":"mcp__plugin_local-llm_local-llm__embed","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_local-llm_local-llm__code_task_files2","tool_input":{}}' \
-             '{"tool_name":"mcp__plugin_local-llm_local-verify__other","tool_input":{}}' \
+             '{"tool_name":"mcp__plugin_local-llm_local-verify__verify_claims","tool_input":{}}' \
              '{"tool_name":"mcp__plugin_other_local-llm__code_task_files","tool_input":{}}' \
              '{"tool_name":"Skill","tool_input":{}}' 'not json' ''; do
   if [ -z "$(hook_out "$input")" ]; then ok "approval hook stays silent for: ${input:-<empty>}"
@@ -313,8 +313,8 @@ if jq -e '.hooks.PreToolUse | any((.matcher | split("|") | index("Skill") != nul
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"
 else bad "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"; fi
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$REPO/hooks/hooks.json" 2>/dev/null)
-if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
-  ok "PreToolUse matcher covers exactly the skill and the two read-only tools"
+if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files" ]; then
+  ok "PreToolUse matcher covers exactly the skill and the read-only file tool"
 else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------
@@ -326,14 +326,14 @@ head -c 9999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/z
 for n in 1 2 3 4; do head -c 11000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
 hint_json() { jq -nc --arg p "$1" --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:$p}'; }
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
-if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 characters; the delegate-local skill applies"))' >/dev/null <<<"$h"; then
+if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 12,000 bytes; if the job is a bounded read-only text task (summarize, classify, extract), the delegate-local skill applies."))' >/dev/null <<<"$h"; then
   ok "size hint: emits for a big absolute path"
 else bad "size hint: emits for a big absolute path ($h)"; fi
 h=$(hint_out "$(hint_json "Classify big.txt please.")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
 else bad "size hint: relative path ($h)"; fi
 h=$(hint_out "$(hint_json "Summarize \"$SHD/a dir/big file.txt\"")")
-if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000")' >/dev/null <<<"$h"; then ok "size hint: handles a quoted path with spaces"
+if jq -e '.hookSpecificOutput.additionalContext | contains("a dir/big file.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: handles a quoted path with spaces"
 else bad "size hint: quoted path with spaces ($h)"; fi
 for p in "Summarize $SHD/small.txt" "Summarize $SHD/just-under.txt" "Summarize $SHD/missing.txt" "Summarize $SHD" "Summarize $SHD/a dir" "Say hello" ""; do
   if [ -z "$(hint_out "$(hint_json "$p")")" ]; then ok "size hint: silent for: ${p:-<empty prompt>}"
@@ -346,6 +346,20 @@ done
 h=$(hint_out "$(hint_json "Compare $SHD/many1.txt $SHD/many2.txt $SHD/many3.txt $SHD/many4.txt")")
 if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' ')" = 3 ]; then ok "size hint: caps the hint at 3 files"
 else bad "size hint: caps the hint at 3 files ($h)"; fi
+many_words=$(awk 'BEGIN{for(i=0;i<130000;i++) printf "w "}')
+h=$(hint_out "$(hint_json "$many_words $SHD/big.txt")"); rc=$?
+if [ "$rc" -eq 0 ] && jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: 130k short words do not crash it, and the path after them still gets the hint"
+else bad "size hint: 130k short words (rc=$rc, ${h:0:100})"; fi
+filler=$(awk 'BEGIN{for(i=0;i<400;i++) printf "word%d ", i}')
+h=$(hint_out "$(hint_json "$filler $SHD/big.txt")")
+if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: a path after 400 filler words gets the hint"
+else bad "size hint: path after 400 filler words (${h:0:100})"; fi
+h=$(printf '%s' "$(hint_json "Classify ~/big.txt")" | HOME="$SHD" node "$SH")
+if jq -e '.hookSpecificOutput.additionalContext | contains("/big.txt is about 12,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: expands ~/ against HOME"
+else bad "size hint: ~/ path (${h:0:100})"; fi
+h=$(hint_out "$(hint_json "Compare \"$SHD/big.txt\" with $SHD/big.txt and big.txt")")
+if [ "$(jq -r '.hookSpecificOutput.additionalContext' <<<"$h" | wc -l | tr -d ' ')" = 1 ]; then ok "size hint: one file named quoted and bare gets one line"
+else bad "size hint: dedupe (${h:0:200})"; fi
 long_prompt="Summarize $SHD/big.txt $(head -c 200000 /dev/zero | tr '\0' 'x')"
 t0=$SECONDS
 for _ in 1 2 3 4 5; do hint_out "$(hint_json "$long_prompt")" >/dev/null; done
