@@ -168,10 +168,12 @@ test('skill scales spot-checks to stakes while retaining verification safeguards
   assert.match(verify, /footer is present and says `N file\(s\) read` for all the paths/);
   assert.match(verify, /Reject an empty answer, any flag in the table, or an `Error:` result/);
   assert.match(verify, /For extraction ask for JSON and parse it; reject malformed output/);
-  assert.match(verify, /For a plain summary or classification of prose, no spot-check is needed/);
-  assert.match(verify, /When a specific fact, number or name in the answer matters to the user's question, use one targeted Grep for a specific pattern \(a few lines\)/);
+  assert.match(verify, /No spot-check when no single fact in the answer is load-bearing/);
+  assert.match(verify, /When a value, number, name or quoted line matters to the user's question \(extractions, drafts that quote the file\), use one targeted Grep for it \(a few lines\)/);
   assert.match(verify, /never read a successfully delegated file in full by any means/);
-  assert.match(verify, /quality flag or partial read, reject the answer and read the file yourself/);
+  assert.match(verify, /Flags and partial reads: see When it fails/);
+  const fails = skill.split('## When it fails\n')[1];
+  assert.match(fails, /Input-specific\*\* \(too big, path not allowed, a quality flag, a partial `x\/y file\(s\) read`\): do that one job yourself/);
   assert.match(verify, /When the local model produced the answer, say so in a few words/);
 });
 test('hook follows a larger loaded context', async () => {

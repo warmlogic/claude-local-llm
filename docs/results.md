@@ -41,7 +41,8 @@ The plan's gate (per-job Claude cost at least 50% lower) is met only for files n
 ## Implications
 
 - Raise the skill's lower bound to about 30k characters and derive the upper bound from the loaded model's context (task local-llm-8al.4).
-- Many-file jobs go through `batch/run.mjs`: one start and one index read, instead of 6 turns per file.
+- Fewer turns per delegation (pairing the skill and schema loads, reusing the hinted size, and spot-checking in proportion to stakes) cut the median from 7 to 5 Claude turns per delegated job, and the mean Claude cost per job from $0.056 to $0.032 (-42%; median $0.041 to $0.026). Measured on the delegation harness cases a, a2, g and h (35k fixtures, 20 delegated runs each side, 2026-10-17).
+- Many-file jobs go through `batch/run.mjs`: one start and one index read, instead of about 5 turns per file.
 
 ## Quality
 
