@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "reference": {"type": "array", "items": {"type": "string"}},
+    "invented": {"type": "array", "items": {"type": "string"}},
+    "missed": {"type": "array", "items": {"type": "string"}},
+    "usable": {"type": "boolean"},
+    "reason": {"type": "string", "maxLength": 300}
+  },
+  "required": ["reference", "invented", "missed", "usable", "reason"],
+  "additionalProperties": false
+}

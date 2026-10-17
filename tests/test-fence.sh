@@ -424,6 +424,12 @@ if ! grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z_]+)?[[:space:]]+"' "$SCRIP
 else bad "commented-out scorer assertion: $(grep -nE '^[[:space:]]*#[[:space:]]*expect(_[a-z_]+)?[[:space:]]+"' "$SCRIPT_DIR/test-delegation.sh" | head -2)"; fi
 if [ "$(jq 'length' "$SCRIPT_DIR/fixtures/deleg/judge-labels.json" 2>/dev/null)" = 24 ]; then ok "judge self-check has its 24 labeled messages"
 else bad "judge-labels.json does not hold 24 items"; fi
+ms=$(bash "$REPO/measure/selftest.sh" 2>&1); ms_rc=$?
+ms_calls=$(grep -cE '^check "' "$REPO/measure/selftest.sh")
+ms_total=$(sed -n 's/^measure selftest total: \([0-9]*\), failed: 0$/\1/p' <<<"$ms")
+if [ "$ms_rc" -eq 0 ] && [ -n "$ms_total" ] && [ "$ms_total" -eq "$ms_calls" ] && ! grep -q 'measure selftest FAIL' <<<"$ms"; then
+  ok "measurement harness passes its offline self-test ($ms_total of $ms_calls assertions)"
+else bad "measurement harness self-test (rc=$ms_rc, total=${ms_total:-none}, check calls=$ms_calls): $(grep 'measure selftest FAIL' <<<"$ms" | head -3 | tr '\n' ';')"; fi
 allowed=$(sed -n 's/^allowed-tools: //p' "$skill")
 missing=""
 for t in $allowed; do grep -qF "\`$t\`" "$skill" || missing="$missing $t"; done
