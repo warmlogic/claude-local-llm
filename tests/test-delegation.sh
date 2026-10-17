@@ -78,7 +78,7 @@ summarize() {
         | {id: .tool_use_id, is_error: (.is_error // false), text: (.content | txt), pos: $k}] as $res
     | [$uses[] | . as $u | . + {res: (first($res[] | select(.id == $u.id)) // null)}] as $J
     | [$J[] | select(.name == $ft)] as $D
-    | [$D[] | select((.input | tostring) | contains($base))] as $Dt
+    | [$D[] | select((.input.paths // []) | any(split("/") | last == $base))] as $Dt
     | ([$Dt[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))))] | min_by(.res.pos)) as $first
     | ($first.res.pos // -1) as $ff
     | ([$J[] | select(.name != $ft) | (.res.text // "")] | join("\n")) as $seen
@@ -197,6 +197,7 @@ selftest() {
   expect "a: head -5 is a quarter of the file" fail a a-head5 app-20k.log
   expect "a: the delegation itself failed" fail a a-failed-delegate app-20k.log
   expect "a: the target call failed and a call on another file succeeded" fail a a-other-file-ok app-20k.log
+  expect "a: only the task text names the target, the path is another file" fail a a-task-only app-20k.log
   expect "b: Read of the small file, no delegation" pass b b-ok app-2k.log
   expect "b: Bash cat of the small file" pass b b-bash-cat app-2k.log
   expect "b: the 2k file was delegated" fail b b-delegates app-2k.log
