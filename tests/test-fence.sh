@@ -330,20 +330,84 @@ for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_
 done
 # Whole-command approval, not prefix approval. Keep every allow/reject visible for mutation checks.
 batch_cmd() {
-  local label="$1" decision="$2" command="$3" background="${4:-false}" output
-  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" '{tool_name:"Bash",tool_input:{command:$c,run_in_background:$b}}')")
+  local label="$1" decision="$2" command="$3" background="${4:-false}" cwd="${5:-$PWD}" output
+  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')")
   if { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
      || { [ "$decision" = reject ] && [ -z "$output" ]; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label"; fi
 }
 # Use physical paths: the shell test REPO may contain a trailing /.. .
 BROOT=$(cd "$REPO" && pwd -P)
-batch_cmd raw allow "node $BROOT/batch/run.mjs --number --job-json '{}' /tmp/a /tmp/b"
-batch_cmd quoted allow "node \"$BROOT/batch/run.mjs\" --job-json '{\"prompt\":\"a; | > < && || \$(literal) \`literal\`\"}' '/tmp/a b'" true
-batch_cmd single-quotes allow "node '$BROOT/batch/run.mjs' --job /tmp/job.json /tmp/*.txt &"
-batch_cmd flatten allow "node \"$BROOT/batch/flatten-transcripts.mjs\" /tmp/out /tmp/session.jsonl" true
-batch_cmd apostrophe allow "node '$BROOT/batch/run.mjs' --job-json 'it'\\''s literal' /tmp/a"
+# All paths exist: the hook must realpath inputs and explicit output directories.
+HOOK_TMP=$(cd "$TMP" && pwd -P)
+mkdir -p "$HOOK_TMP/allowed" "$HOOK_TMP/allowed-evil" "$HOOK_TMP/out" "$HOME_TMP/outside" "$HOOK_TMP/home/.claude/projects"
+printf 'input\n' > "$HOOK_TMP/allowed/a.txt"
+printf 'input\n' > "$HOOK_TMP/allowed/a b.txt"
+printf 'literal glob\n' > "$HOOK_TMP/allowed/*.txt"
+printf 'outside\n' > "$HOOK_TMP/allowed-evil/out.txt"
+printf '{}\n' > "$HOOK_TMP/home/.claude/projects/session.jsonl"
+ln -s "$HOOK_TMP/allowed-evil/out.txt" "$HOOK_TMP/allowed/link.txt"
+ln -s "$HOME_TMP/outside" "$HOOK_TMP/out-link"
+mkdir -p "$HOOK_TMP/allowed-evil/nested" "$HOOK_TMP/out/nested" "$HOOK_TMP/out/outside"
+ln -s "$HOOK_TMP/allowed-evil/nested" "$HOOK_TMP/allowed/dirlink"
+printf 'inside decoy\n' > "$HOOK_TMP/allowed/out.txt"
+ln -s "$HOOK_TMP/out/nested" "$HOME_TMP/link"
+# Isolate the hook options from the caller; restore them after the batch assertions.
+SAVED_ALLOWED_DIRS=${CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS-}
+HAD_ALLOWED_DIRS=${CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS+x}
+export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
+RUN="node '$BROOT/batch/run.mjs'"
+FLATTEN="node '$BROOT/batch/flatten-transcripts.mjs'"
+INPUT="$HOOK_TMP/allowed/a.txt"
+batch_cmd raw allow "$RUN --number --job-json '{}' '$INPUT'"
+batch_cmd quoted allow "$RUN --job-json '{\"prompt\":\"a; | > < && || \$(literal) \`literal\`\"}' '$HOOK_TMP/allowed/a b.txt'" true
+batch_cmd single-quotes allow "$RUN --job-json '{}' '$INPUT' &"
+batch_cmd flatten allow "$FLATTEN '$HOOK_TMP/out' '$INPUT'" true
+batch_cmd apostrophe allow "$RUN --job-json 'it'\\''s literal' '$INPUT'"
+batch_cmd tmp-out allow "$RUN --out '$HOOK_TMP/out' --job-json '{}' '$INPUT'"
+batch_cmd relative-input allow "$RUN --job-json '{}' a.txt" false "$HOOK_TMP/allowed"
+if [ "$(uname -s)" = Darwin ]; then
+  batch_cmd private-tmp-out allow "$RUN --out /private/tmp --job-json '{}' '$INPUT'"
+fi
+batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
+batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
+batch_cmd mixed-inputs reject "$RUN --job-json '{}' '$INPUT' '$HOOK_TMP/allowed-evil/out.txt'"
+batch_cmd symlink-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed/link.txt'"
+batch_cmd symlink-parent-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed/dirlink/../out.txt'"
+batch_cmd job-file reject "$RUN --job /etc/x '$INPUT'"
+batch_cmd outside-out reject "$RUN --out '$HOME/.ssh' --job-json '{}' '$INPUT'"
+batch_cmd existing-outside-out reject "$RUN --out '$HOME_TMP/outside' --job-json '{}' '$INPUT'"
+batch_cmd symlink-out-dir reject "$RUN --out '$HOOK_TMP/out-link' --job-json '{}' '$INPUT'"
+batch_cmd normalized-out-escape reject "$RUN --out '$HOME_TMP/link/../outside' --job-json '{}' '$INPUT'"
+batch_cmd unknown-flag reject "$RUN --job-json '{}' --surprise '$INPUT'"
+batch_cmd missing-value reject "$RUN --out --job-json '{}' '$INPUT'"
+batch_cmd repeated-out reject "$RUN --out '$HOOK_TMP/out' --out '$HOOK_TMP/out' --job-json '{}' '$INPUT'"
+batch_cmd nonexistent-out reject "$RUN --out '$HOOK_TMP/missing-out' --job-json '{}' '$INPUT'"
+batch_cmd missing-job reject "$RUN '$INPUT'"
+batch_cmd unknown-short-flag reject "$RUN --job-json '{}' -x '$INPUT'"
+batch_cmd missing-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed/missing'"
+batch_cmd unquoted-glob reject "$RUN --job-json '{}' $HOOK_TMP/allowed/*.txt"
+batch_cmd brace-expansion reject "$RUN --job-json '{}' $HOOK_TMP/{allowed,allowed-evil}/a.txt"
+batch_cmd flatten-outside-input reject "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/allowed-evil/out.txt'"
+batch_cmd flatten-symlink-input reject "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/allowed/link.txt'"
+batch_cmd flatten-outside-out reject "$FLATTEN '$HOME_TMP/outside' '$INPUT'"
+batch_cmd flatten-unknown-flag reject "$FLATTEN '$HOOK_TMP/out' --number '$INPUT'"
+# Transcripts live outside the default allowed folders; only the flattener gets this extra root.
+HOME="$HOOK_TMP/home" batch_cmd transcripts allow "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
+HOME="$HOOK_TMP/home" batch_cmd run-transcripts reject "$RUN --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_cmd unresolvable-roots reject "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_cmd empty-roots reject "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='/' batch_cmd slash-root reject "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=" $HOOK_TMP/allowed" batch_cmd padded-root reject "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='relative' batch_cmd relative-root reject "$RUN --job-json '{}' '$INPUT'"
+HOME="$HOOK_TMP/home" CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='~/../allowed' batch_cmd home-root allow "$RUN --job-json '{}' '$INPUT'"
+# Manifest defaults must work without a saved option; no dependency on the real HOME tree.
+mkdir -p "$HOOK_TMP/home/github"
+printf 'input\n' > "$HOOK_TMP/home/github/default.txt"
+unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
+HOME="$HOOK_TMP/home" batch_cmd manifest-default allow "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
+export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
 for suffix in '; rm -rf ~' ' | sh' ' && true' ' || true' ' > /tmp/out' ' < /tmp/in' ' $(id)' ' `id`' $'\ntrue' ' &&' ' # comment' ' & true'; do
-  batch_cmd "operator $(printf %q "$suffix")" reject "node $BROOT/batch/run.mjs$suffix"
+  batch_cmd "operator $(printf %q "$suffix")" reject "$RUN --job-json '{}' '$INPUT'$suffix"
 done
 batch_cmd foreign reject 'node /tmp/batch/run.mjs'
 batch_cmd traversal reject "node $BROOT/../x.mjs"
@@ -356,11 +420,13 @@ batch_cmd unclosed reject "node '$BROOT/batch/run.mjs"
 # A script with the right lexical path but resolving outside the copied plugin is not approved.
 HOOK_TMP=$(cd "$TMP" && pwd -P)
 mkdir -p "$HOOK_TMP/hook-plugin/scripts" "$HOOK_TMP/hook-plugin/batch"
-cp "$HOOK" "$HOOK_TMP/hook-plugin/scripts/approve-own-tools.mjs"
+cp "$HOOK" "$BROOT/scripts/resolve-roots.mjs" "$HOOK_TMP/hook-plugin/scripts/"
+cp -R "$BROOT/.claude-plugin" "$HOOK_TMP/hook-plugin/"
 ln -s "$BROOT/batch/run.mjs" "$HOOK_TMP/hook-plugin/batch/run.mjs"
 ORIGINAL_HOOK="$HOOK"; HOOK="$HOOK_TMP/hook-plugin/scripts/approve-own-tools.mjs"
-batch_cmd symlink-out reject "node $HOOK_TMP/hook-plugin/batch/run.mjs"
+batch_cmd symlink-out reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'"
 HOOK="$ORIGINAL_HOOK"
+if [ "$HAD_ALLOWED_DIRS" = x ]; then export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$SAVED_ALLOWED_DIRS"; else unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; fi
 if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:batch-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then ok "approval hook allows batch-local skill"; else bad "approval hook allows batch-local skill"; fi
 if [ "$(wc -l < "$BROOT/skills/batch-local/SKILL.md")" -lt 60 ] && jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Bash") != null' "$BROOT/hooks/hooks.json" >/dev/null; then ok "batch skill under 60 lines and Bash hook wired"; else bad "batch skill bounds/hook matcher"; fi
 for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
