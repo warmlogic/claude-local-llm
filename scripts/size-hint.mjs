@@ -59,6 +59,14 @@ for (const m of prompt.matchAll(CANDIDATE)) {
 if (files.length > 0) {
   // The plugin's endpoint_url and model options reach hooks as CLAUDE_PLUGIN_OPTION_* (once set), not via .mcp.json's env.
   const env = process.env;
+  const configured = env.CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS
+    ?? JSON.parse(readFileSync(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).userConfig.delegate_tasks.default;
+  const kinds = [...new Set(configured.split(',').map((kind) => kind.trim()).filter(Boolean))];
+  const known = new Set(['classify', 'extract', 'summarize', 'draft']);
+  const unknown = kinds.filter((kind) => !known.has(kind));
+  if (unknown.length) console.error(`local-llm: ignoring unknown delegate_tasks kinds: ${JSON.stringify(unknown)}`);
+  const tasks = kinds.filter((kind) => known.has(kind));
+  const taskList = tasks.length < 2 ? tasks[0] : `${tasks.slice(0, -1).join(', ')} or ${tasks.at(-1)}`;
   const { contextTokens, capChars, source, reason } = await getContextCap({
     endpoint: env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL || env.LOCAL_LLM_ENDPOINT_URL || undefined,
     model: env.CLAUDE_PLUGIN_OPTION_MODEL ?? env.LOCAL_LLM_MODEL ?? undefined,
@@ -70,12 +78,14 @@ if (files.length > 0) {
   const lines = files.map(({ path, size }) => {
     const prefix = `local-llm: ${path} is about ${number(size)} bytes (a char proxy).`;
     if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices, or use batch/run.mjs for many-window jobs.`;
-    return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message; these calls are independent. Do this before reading the file, including the user's own project files. Use the stated size; do not run \`wc -c\` again.`;
-  });
+    if (!tasks.length) return null;
+    return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only ${taskList} task, invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too. Send the Skill call and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message (they are independent), and use the stated size instead of running \`wc -c\` again.`;
+  }).filter(Boolean);
   const fitting = files.filter((f) => f.size <= capChars);
-  if (fitting.length > 1 && fitting.reduce((sum, f) => sum + f.size, 0) > capChars) {
+  if (tasks.length && fitting.length > 1 && fitting.reduce((sum, f) => sum + f.size, 0) > capChars) {
     lines.push('local-llm: The files that fit exceed the loaded context together; if the job is delegated, make one call per file.');
   }
+  if (!lines.length) process.exit(0);
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: lines.join('\n') },
   }));

@@ -38,6 +38,10 @@ A warm-cache repeat with the plugin off cost $0.015 against $0.023 to $0.033 del
 
 The plan's gate (per-job Claude cost at least 50% lower) is met only for files near 50k characters. It is not met as a general claim.
 
+## C. Unprompted single-file delegation, re-measured (2026-10-17, run 20261017-213110)
+
+With the size hint restored and classify, extract and summarize enabled, all 10 main-file on-runs delegated. Delegated answers were judged usable 4 of 10, against 8 of 10 when Claude read the file itself: classification 3 of 4, extraction 1 of 3, summaries 0 of 3. Delegated runs cost 3.4% more than direct reads, at a median of 6 Claude turns against 2. A run before that, on the #13 hint wording, had delegated only 4 of 10 and judged 1 of 10 delegated answers usable. So unprompted single-file delegation is off by default (`delegate_tasks` is empty), and the batch runner is the path that pays.
+
 ## Implications
 
 - Raise the skill's lower bound to about 30k characters and derive the upper bound from the loaded model's context (task local-llm-8al.4).

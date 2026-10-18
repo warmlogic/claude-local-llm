@@ -24,6 +24,12 @@
       "type": "string",
       "title": "Model id",
       "description": "Model id to use. Leave empty to use whichever model LM Studio has loaded."
+    },
+    "delegate_tasks": {
+      "type": "string",
+      "title": "Delegated task kinds",
+      "description": "Default off: on real files, delegated answers were usable 4/10 vs 8/10 when Claude read them, and cost 3% more. Opt in with a comma-separated value such as classify or classify,extract. Known read-only kinds: classify, extract, summarize, draft; enable only kinds measured as reliable on your local model.",
+      "default": ""
     }
   }
 }

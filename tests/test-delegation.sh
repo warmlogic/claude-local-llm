@@ -7,14 +7,15 @@
 # (test-fence.sh runs the first on every commit.)
 #
 # Each case runs DELEG_RUNS times (default 5) in a headless session with the plugin loaded via --plugin-dir
-# and no --allowedTools, then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
+# and no --allowedTools. run_claude exports CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS=classify,extract unless already set
+# (an explicit empty value is preserved), then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
 # DELEG_RUNS). Cases a, a2, b, g, h and j need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
-#   a  35k-char file, "summarize <path>": code_task_files succeeds on it, unprompted, and little of the file
+#   a  35k-char file, "classify <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
 #   a2 a 35k-char prose document with a neutral name (notes-0412.md) and "Classify this document: <path>": as a, with
 #      no size, tool or log hint in the file name or prompt (real files are not named app-20k.log)
-#   g  "Use the local model to summarize <path>" on the same document: as a, and no plugin permission denial (asking
+#   g  "Use the local model to classify <path>" on the same document: as a, and no plugin permission denial (asking
 #      plainly must not hit a prompt for the plugin's own tool)
 #   b  2k-char file: no code_task_files call, and Claude reads the file (exposure >= 0.5)
 #   c  endpoint down: the tool fails with "fetch failed", is not called again, and Claude reads the file itself
@@ -24,7 +25,7 @@
 #      Claude reads B, makes no code_task_files call, and no assistant text block mentions the outage.
 #   h  a real-looking project: a git-initialized acme-billing/ with README.md, src/ and a 35k-char
 #      docs/architecture-decisions.md under the temp root (no tests/, .tmp or plugin name in the path), the session cwd
-#      in it, allowed_dirs pointed at it, and "Summarize <path> in 5 bullets.": as a. Real files carry real names and
+#      in it, allowed_dirs pointed at it, and "Classify <path> in 5 bullets.": as a. Real files carry real names and
 #      sit in projects; the prompt that works at a neutral path must also work here
 #   j  the same doc with a judgment prompt ("Is the decision in <path> the right call? Argue it."): NOT delegated,
 #      Claude reads the file itself (as b). The guard against an instruction so strong it hands judgment to the local model
@@ -215,6 +216,19 @@ turn_mentions() {
   if [ "$errs" -gt 0 ]; then echo "$n/$total ($errs judge errors: ${first_err:0:80})"; else echo "$n/$total"; fi
 }
 
+# run_claude <plugin-dir> <prompt> <trace-file> [resume-session-id]: returns claude's (timeout's) exit code.
+# Case e needs a resumable session, so it passes an id (turn 2) or sets KEEP_SESSION=1 (turn 1); the other
+# cases do not persist theirs.
+run_claude() {
+  local args=(-p "$2" --plugin-dir "$1" --output-format stream-json --verbose)
+  if [ -n "${4:-}" ]; then args+=(--resume "$4"); elif [ "${KEEP_SESSION:-}" != 1 ]; then args+=(--no-session-persistence); fi
+  [ -z "$SOURCES" ] || args+=(--setting-sources "$SOURCES")
+  [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
+  [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
+  [ -n "${RUN_CWD:-}" ] || args+=(--add-dir "$FIX")   # the project cases (h, j) run inside their target: an added dir would show the repo path
+  (cd "${RUN_CWD:-$WORK}" && CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract}" "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
+}
+
 # --- offline scorer self-test ------------------------------------------------------------------------
 # Every assertion is one expect, expect_e, expect_f or expect_error call; test-fence.sh checks that the printed total
 # equals the number of such lines in this file and that none failed. An assertion also fails (it never silently
@@ -245,6 +259,22 @@ selftest() {
   expect_f() { local got=error; if summ "$3" app-20k.log; then got=fail; jq -e '.plugin_denied | length == 0' >/dev/null <<<"$s" && got=pass; fi; verdict "$1" "$2" "$got"; }
   # expect_error <label> <fixture>: a missing or garbage fixture must surface as an error, never as a pass
   expect_error() { local got=error; summ "$2" app-20k.log 2>/dev/null && got=summarized; verdict "$1" error "$got"; }
+
+  # Exercise the real launcher without claude or timeout: the stub prints only its received option.
+  expect_config() {
+    local WORK FIX TIMEOUT=stub_claude got=error
+    WORK=$(mktemp -d) || { verdict "$1" "$2" error; return; }
+    FIX=$WORK
+    stub_claude() { printf '%s' "${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-unset}"; }
+    if (unset CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS
+        if [ "$3" != unset ]; then export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="$3"; fi
+        run_claude "$REPO" prompt "$WORK/trace"); then got=$(cat "$WORK/trace"); fi
+    verdict "$1" "$2" "$got"
+    rm -rf "$WORK"
+  }
+  expect_config "launcher opts in when no saved option is exported" "classify,extract" unset
+  expect_config "launcher preserves an explicit option" "extract" extract
+  expect_config "launcher preserves an explicitly empty option" "" ""
 
   expect "a: delegated, one-line Grep spot-check" pass a a-ok app-20k.log
   expect "a: the local model's answer quotes the whole file" fail a a-echo app-20k.log
@@ -473,19 +503,6 @@ lm_up=0; lm_models=0
 lm_models=$(curl -sf -m 3 "$ENDPOINT/v1/models" 2>/dev/null | jq '.data | length' 2>/dev/null) || lm_models=0
 [ "${lm_models:-0}" -gt 0 ] 2>/dev/null && lm_up=1 || lm_models=0
 
-# run_claude <plugin-dir> <prompt> <trace-file> [resume-session-id]: returns claude's (timeout's) exit code.
-# Case e needs a resumable session, so it passes an id (turn 2) or sets KEEP_SESSION=1 (turn 1); the other
-# cases do not persist theirs.
-run_claude() {
-  local args=(-p "$2" --plugin-dir "$1" --output-format stream-json --verbose)
-  if [ -n "${4:-}" ]; then args+=(--resume "$4"); elif [ "${KEEP_SESSION:-}" != 1 ]; then args+=(--no-session-persistence); fi
-  [ -z "$SOURCES" ] || args+=(--setting-sources "$SOURCES")
-  [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
-  [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
-  [ -n "${RUN_CWD:-}" ] || args+=(--add-dir "$FIX")   # the project cases (h, j) run inside their target: an added dir would show the repo path
-  (cd "${RUN_CWD:-$WORK}" && "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
-}
-
 # --- plugins for each case ---------------------------------------------------------------------------
 copy_plugin "$PLUGINS/real" "$ENDPOINT"
 copy_plugin "$PLUGINS/project" "$ENDPOINT" "$PROJ"
@@ -503,13 +520,13 @@ plugin_for() { case "$1" in a|a2|b|g) echo real ;; h|j) echo project ;; c|e) ech
 target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
 prompt_for() {
   case "$1" in
-    b) echo "Summarize $FIX/app-2k.log in five bullet points." ;;
-    e) echo "Summarize $FIX/app-35k.log in three bullet points." ;;
-    h) echo "Summarize $DOC in 5 bullets." ;;
+    b) echo "Classify $FIX/app-2k.log in five bullet points." ;;
+    e) echo "Classify $FIX/app-35k.log in three bullet points." ;;
+    h) echo "Classify $DOC in 5 bullets." ;;
     j) echo "Is the decision in $DOC the right call? Argue it." ;;
     a2) echo "Classify this document: $FIX/notes-0412.md" ;;
-    g) echo "Use the local model to summarize $FIX/notes-0412.md" ;;
-    *) echo "Summarize $FIX/app-35k.log in five bullet points." ;;
+    g) echo "Use the local model to classify $FIX/notes-0412.md" ;;
+    *) echo "Classify $FIX/app-35k.log in five bullet points." ;;
   esac
 }
 THRESHOLD=$(( (RUNS * 4 + 4) / 5 ))
@@ -553,7 +570,7 @@ for c in $CASES; do
           stop="FAIL (no session id in turn 1; turn 2 not run)"
           : > "$trace2"; echo "no session id in $(basename "$trace"); turn 2 not run" > "$trace2.err"
         else
-          run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-35k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
+          run_claude "$PLUGINS/$(plugin_for e)" "Now classify $FIX/app-35k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
           s2=$(summarize "$trace2" "$FIX/app-35k-b.log")
         fi
       fi
