@@ -170,7 +170,7 @@ const main = async () => {
   writeFileSync(indexPath, `RUNNING since ${started.toISOString()} (pid ${process.pid}) — not complete\n`, { flag: 'wx' });
   const removeLane = registerLane({ label: process.env.LOCAL_LLM_MODEL || model || 'local', task: process.env.CATALYST_TASK });
   process.on('exit', removeLane);
-  for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => { removeLane(); process.kill(process.pid, sig); }); // still dies by the signal, so a calling shell loop aborts on Ctrl-C
+  for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => { removeLane(); process.kill(process.pid, sig); setImmediate(() => process.exit(sig === 'SIGINT' ? 130 : 143)); }); // still dies by the signal, so a calling shell loop aborts on Ctrl-C
   const outputs = new Map(['rows.jsonl', 'dropped.jsonl', 'failures.jsonl'].map((n) => [n, openSync(path(n), 'wx')]));
   const emit = (n, o) => appendFileSync(outputs.get(n), JSON.stringify(o) + '\n');
 

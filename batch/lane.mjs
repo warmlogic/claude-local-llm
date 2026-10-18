@@ -1,5 +1,5 @@
 // Shows a running batch as a lane in Catalyst's band: ~/catalyst/band/lanes/local-<pid>.json while it runs.
-// Harmless without Catalyst, and fail-open: no step here may change the run's output or exit status.
+// Silent without Catalyst; if the write fails with Catalyst present, one stderr line says so. Fail-open: nothing here changes the run's results or exit status.
 import { writeFileSync, renameSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -23,12 +23,11 @@ const gitCommonDir = () => {
 
 // Returns an idempotent, synchronous remove(); a no-op when registering failed.
 export const registerLane = ({ label, task = null }) => {
+  try { if (!statSync(join(homedir(), 'catalyst')).isDirectory()) return () => {}; } catch { return () => {}; } // no Catalyst, no trace: never create ~/catalyst itself
+  const dir = join(homedir(), 'catalyst', 'band', 'lanes');
   let file = null;
   let tmp = null;
   try {
-    const root = join(homedir(), 'catalyst');
-    if (!statSync(root).isDirectory()) return () => {}; // no Catalyst, no trace: never create ~/catalyst itself
-    const dir = join(root, 'band', 'lanes');
     mkdirSync(dir, { recursive: true });
     const target = join(dir, `local-${process.pid}.json`);
     tmp = `${target}.tmp`;
@@ -36,7 +35,8 @@ export const registerLane = ({ label, task = null }) => {
     writeFileSync(tmp, JSON.stringify(lane) + '\n');
     renameSync(tmp, target);
     file = target;
-  } catch { // the band is optional; a missing lane is diagnosable with `catalyst lanes`
+  } catch (e) { // Catalyst is installed but the write failed: say so once, and run on
+    console.error(`local-llm: could not write a lane file in ${dir} (${e.code ?? e.name}); running without a band lane`);
     if (tmp) { try { rmSync(tmp, { force: true }); } catch { /* the reader prunes dead pids */ } }
   }
   return () => { if (file) { try { rmSync(file, { force: true }); } catch { /* the reader prunes dead pids */ } } };
