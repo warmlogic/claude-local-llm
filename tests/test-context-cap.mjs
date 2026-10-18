@@ -139,8 +139,9 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   assert.equal(lines.length, 4);
   for (const line of lines.slice(0, 2)) {
     assert.match(line, /invoke the local-llm:delegate-local skill/);
-    assert.match(line, /Skill tool and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message; these calls are independent/);
-    assert.match(line, /Use the stated size; do not run `wc -c` again/);
+    assert.match(line, /invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself/);
+    assert.match(line, /Send the Skill call and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message \(they are independent\)/);
+    assert.match(line, /use the stated size instead of running `wc -c` again/);
     assert.match(line, /bytes \(a char proxy\)/);
     assert.match(line, /32,768 tokens, about 45,875 chars; loaded/);
   }
