@@ -30,7 +30,7 @@ Cases (a case passes at 4 of 5):
 - **c**: endpoint down: the tool fails with `fetch failed`, is not called again, and Claude reads the file itself (exposure at least 0.5).
 - **d**: endpoint up with no model loaded (`fake-endpoint.mjs no-model`): the same, with `No models loaded`.
 - **e**: one session, two turns (`--resume`), endpoint down. Turn 1 is as c and its final reply must tell the user about the outage with a cause and a way to retry; in turn 2 Claude reads the second file, makes no `code_task_files` call, and no assistant text block mentions the outage.
-- **k** (opt-in): 12 generated logs of about 6k chars each; “Find every ERROR line's cause across the logs in <dir>”. A Bash call starts this plugin's `batch/run.mjs`, Claude reads the returned `index.md`, and total corpus exposure is at most 0.10.
+- **k** (opt-in): 60 generated support tickets of about 4k chars each (~240k total), with customer messages and agent replies; classify each customer's sentiment and product area, then count each class. Deliberately not greppable: speaker, quoted opinions and the sequence of events determine the classification, so keyword extraction cannot replace per-ticket interpretation at this scale. A Bash call starts this plugin's `batch/run.mjs`, Claude reads the returned `index.md`, and total corpus exposure is at most 0.10.
 - **l** (opt-in): one 35k log and a single-file extraction prompt; no batch runner launch.
 - **f**: no `permission_denials` entry names the skill call or a plugin tool in any inspectable trace, including the batch Bash command in k/l. Other denials print as "other denials (not plugin)" and do not gate: with default permissions Claude's own compound shell commands can still prompt, as in any session.
 

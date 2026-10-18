@@ -29,7 +29,8 @@
 #      sit in projects; the prompt that works at a neutral path must also work here
 #   j  the same doc with a judgment prompt ("Is the decision in <path> the right call? Argue it."): NOT delegated,
 #      Claude reads the file itself (as b). The guard against an instruction so strong it hands judgment to the local model
-#   k  opt-in: 12 logs of ~6k chars; own batch runner, then index Read, corpus exposure <= 0.10
+#   k  opt-in: 60 support tickets of ~4k chars; contextual sentiment/area classification (not greppable);
+#      own batch runner, then index Read, corpus exposure <= 0.10
 #   l  opt-in: one ~35k log, extraction; no batch runner launch
 #   f  no permission prompt for the plugin: no permission_denials entry for the Skill call or the plugin's tools in
 #      any inspectable trace (including k/l batch Bash) (other denials, i.e. Claude's own compound Bash, are printed, not gated)
@@ -359,13 +360,44 @@ selftest() {
   expect_e "e: turn 2 rereads only the first file" fail e1-ok e2-reread-a
   expect_e "e: the judge has no verdict for a text (infrastructure error)" error e1-ok e2-unjudged
   expect_e "e: turn 2 summary says a log server is down" pass e1-ok e2-server-summary
-  expect "k: runner and index with low corpus exposure" pass k k-ok bulk
-  expect "k: no runner" fail k k-no-run bulk
-  expect "k: no index read" fail k k-no-index bulk
-  expect "k: full corpus read" fail k k-exposed bulk
-  expect "k: other plugin path" fail k k-foreign bulk
-  expect "k: index path not returned by a tool" fail k k-wrong-index bulk
-  expect "k: batch permission denial" fail k k-denied bulk
+  # Exercise the real corpus generator without starting a Claude session or contacting a model.
+  expect_tickets() {
+    local dir got=fail
+    dir=$(mktemp -d) || { verdict "$1" pass error; return; }
+    if node "$SCRIPT_DIR/gen-support-tickets.mjs" "$dir" && node --input-type=module - "$dir" <<'NODE'
+import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+const files = readdirSync(process.argv[2]);
+assert.equal(files.length, 60);
+const markers = new Set();
+let total = 0;
+for (const file of files) {
+  const text = readFileSync(join(process.argv[2], file), 'utf8');
+  assert.match(file, /^ticket-\d{3}\.txt$/);
+  assert.ok(text.length >= 3800 && text.length <= 4200);
+  assert.ok(text.endsWith('\n') && text.includes('Customer message:') && text.includes('Agent reply:'));
+  for (const line of text.trimEnd().split('\n')) {
+    const match = /^(K\d{3}-\d{3}) .+ (eol=KEND\d{3}-\d{3})$/.exec(line);
+    assert.ok(match, 'whole line with two exposure markers');
+    for (const marker of match.slice(1)) { assert.ok(!markers.has(marker)); markers.add(marker); }
+  }
+  total += text.length;
+}
+assert.ok(total >= 228000 && total <= 252000);
+NODE
+    then got=pass; fi
+    rm -rf "$dir"
+    verdict "$1" pass "$got"
+  }
+  expect_tickets "k: 60 conversations total about 240k chars, with unique whole-line markers"
+  expect "k: runner and index with low corpus exposure" pass k k-ok tickets
+  expect "k: no runner" fail k k-no-run tickets
+  expect "k: no index read" fail k k-no-index tickets
+  expect "k: full corpus read" fail k k-exposed tickets
+  expect "k: other plugin path" fail k k-foreign tickets
+  expect "k: index path not returned by a tool" fail k k-wrong-index tickets
+  expect "k: batch permission denial" fail k k-denied tickets
   expect "l: single-file extraction stays off batch" pass l l-ok app-20k.log
   expect "l: single-file batch launch" fail l l-batch app-20k.log
   expect_error "a missing fixture is an error" does-not-exist
@@ -419,7 +451,7 @@ judge_check() {
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required${2:+; $2}"; }
 if [ "${DELEG_PRINT_FLAGS:-}" = 1 ]; then need jq; skill_flags; exit $?; fi
 if [ "${DELEG_SELFTEST:-}" = 1 ] || [ "${1:-}" = "--self-test" ]; then
-  need jq; DELEG_JUDGE=stub selftest; exit $?
+  need jq; need node; DELEG_JUDGE=stub selftest; exit $?
 fi
 if [ "${DELEG_JUDGE_CHECK:-}" = 1 ]; then
   need claude; need jq; need shasum
@@ -491,8 +523,7 @@ gen_adr() {
     }
     printf "%s", s}'
 }
-mkdir -p "$FIX/logs"
-for n in $(seq 1 12); do gen_log 6000 "2026-04-$(printf %02d "$n")T10" > "$FIX/logs/service-$n.log"; done
+node "$SCRIPT_DIR/gen-support-tickets.mjs" "$FIX/tickets" || die "generating support tickets"
 gen_log 35000 > "$FIX/app-35k.log"
 gen_log 2000 > "$FIX/app-2k.log"
 gen_log 35000 2026-03-05T14 > "$FIX/app-35k-b.log"
@@ -550,10 +581,10 @@ case " $CASES " in *" d "*)
 esac
 
 plugin_for() { case "$1" in a|a2|b|g|k|l) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
-target_for() { case "$1" in k) echo "$FIX/logs" ;; b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
+target_for() { case "$1" in k) echo "$FIX/tickets" ;; b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
 prompt_for() {
   case "$1" in
-    k) echo "Find every ERROR line's cause across the logs in $FIX/logs." ;;
+    k) echo "For each support ticket in $FIX/tickets, classify the customer's overall sentiment (positive, neutral, negative) and the product area it concerns (billing, account access, reporting, mobile sync, notifications). Interpret the customer's own experience, distinguishing it from quoted comments and the agent's reply. Then list counts per sentiment and per product area." ;;
     l) echo "Extract every ERROR line and its stated cause from $FIX/app-35k.log." ;;
     b) echo "Classify $FIX/app-2k.log in five bullet points." ;;
     e) echo "Classify $FIX/app-35k.log in three bullet points." ;;
