@@ -371,9 +371,20 @@ head -c 29999 /dev/zero | tr '\0' 'a' > "$SHD/just-under.txt"; head -c 300 /dev/
 for n in 1 2 3 4; do head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; done
 # the prompt goes through stdin: a 260 KB value would exceed a single argument's limit on some systems
 hint_json() { printf '%s' "$1" | jq -Rsc --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:.}'; }
+# Unsaved options use the manifest's empty default; no instruction for an ordinary big file.
+h=$(hint_out "$(hint_json "$SHD/big.txt")")
+if [ -z "$h" ]; then ok "size hint: default is silent for a 35k file"
+else bad "size hint: default emitted an instruction ($h)"; fi
+head -c 45876 /dev/zero | tr '\0' 'a' > "$SHD/over-cap.txt"
+h=$(hint_out "$(hint_json "$SHD/big.txt $SHD/over-cap.txt")")
+if [ -n "$h" ] && jq -e '.hookSpecificOutput.additionalContext | (contains("over-cap.txt") and contains("too big for the loaded model") and (contains("invoke") | not) and (contains("big.txt") | not))' >/dev/null <<<"$h"; then
+  ok "size hint: default retains only the too-big note"
+else bad "size hint: default lost the too-big note ($h)"; fi
+# Path parsing and metadata tests below deliberately opt in.
+export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS=classify,extract
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
 if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 35,000 bytes (a char proxy). Context cap: 32,768 tokens, about 45,875 chars; loaded. If this turn\u0027s job on it is a read-only classify or extract task, invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too. Send the Skill call and ToolSearch query \"select:mcp__plugin_local-llm_local-llm__code_task_files\" in the same assistant message (they are independent), and use the stated size instead of running `wc -c` again."))' >/dev/null <<<"$h"; then
-  ok "size hint: emits for a big absolute path"
+  ok "size hint: classify,extract opt-in emits for a big absolute path"
 else bad "size hint: emits for a big absolute path ($h)"; fi
 h=$(CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="classify,extract,summarize" hint_out "$(hint_json "$SHD/big.txt")")
 if [ -n "$h" ] && jq -e '.hookSpecificOutput.additionalContext | contains("read-only classify, extract or summarize task, invoke")' >/dev/null <<<"$h"; then

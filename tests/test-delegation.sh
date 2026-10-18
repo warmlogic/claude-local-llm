@@ -7,7 +7,8 @@
 # (test-fence.sh runs the first on every commit.)
 #
 # Each case runs DELEG_RUNS times (default 5) in a headless session with the plugin loaded via --plugin-dir
-# and no --allowedTools, then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
+# and no --allowedTools. run_claude exports CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS=classify,extract unless already set
+# (an explicit empty value is preserved), then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
 # DELEG_RUNS). Cases a, a2, b, g, h and j need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
 #   a  35k-char file, "classify <path>": code_task_files succeeds on it, unprompted, and little of the file
@@ -215,6 +216,19 @@ turn_mentions() {
   if [ "$errs" -gt 0 ]; then echo "$n/$total ($errs judge errors: ${first_err:0:80})"; else echo "$n/$total"; fi
 }
 
+# run_claude <plugin-dir> <prompt> <trace-file> [resume-session-id]: returns claude's (timeout's) exit code.
+# Case e needs a resumable session, so it passes an id (turn 2) or sets KEEP_SESSION=1 (turn 1); the other
+# cases do not persist theirs.
+run_claude() {
+  local args=(-p "$2" --plugin-dir "$1" --output-format stream-json --verbose)
+  if [ -n "${4:-}" ]; then args+=(--resume "$4"); elif [ "${KEEP_SESSION:-}" != 1 ]; then args+=(--no-session-persistence); fi
+  [ -z "$SOURCES" ] || args+=(--setting-sources "$SOURCES")
+  [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
+  [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
+  [ -n "${RUN_CWD:-}" ] || args+=(--add-dir "$FIX")   # the project cases (h, j) run inside their target: an added dir would show the repo path
+  (cd "${RUN_CWD:-$WORK}" && CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract}" "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
+}
+
 # --- offline scorer self-test ------------------------------------------------------------------------
 # Every assertion is one expect, expect_e, expect_f or expect_error call; test-fence.sh checks that the printed total
 # equals the number of such lines in this file and that none failed. An assertion also fails (it never silently
@@ -245,6 +259,22 @@ selftest() {
   expect_f() { local got=error; if summ "$3" app-20k.log; then got=fail; jq -e '.plugin_denied | length == 0' >/dev/null <<<"$s" && got=pass; fi; verdict "$1" "$2" "$got"; }
   # expect_error <label> <fixture>: a missing or garbage fixture must surface as an error, never as a pass
   expect_error() { local got=error; summ "$2" app-20k.log 2>/dev/null && got=summarized; verdict "$1" error "$got"; }
+
+  # Exercise the real launcher without claude or timeout: the stub prints only its received option.
+  expect_config() {
+    local WORK FIX TIMEOUT=stub_claude got=error
+    WORK=$(mktemp -d) || { verdict "$1" "$2" error; return; }
+    FIX=$WORK
+    stub_claude() { printf '%s' "${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-unset}"; }
+    if (unset CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS
+        if [ "$3" != unset ]; then export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="$3"; fi
+        run_claude "$REPO" prompt "$WORK/trace"); then got=$(cat "$WORK/trace"); fi
+    verdict "$1" "$2" "$got"
+    rm -rf "$WORK"
+  }
+  expect_config "launcher opts in when no saved option is exported" "classify,extract" unset
+  expect_config "launcher preserves an explicit option" "extract" extract
+  expect_config "launcher preserves an explicitly empty option" "" ""
 
   expect "a: delegated, one-line Grep spot-check" pass a a-ok app-20k.log
   expect "a: the local model's answer quotes the whole file" fail a a-echo app-20k.log
@@ -472,19 +502,6 @@ dead_url() {
 lm_up=0; lm_models=0
 lm_models=$(curl -sf -m 3 "$ENDPOINT/v1/models" 2>/dev/null | jq '.data | length' 2>/dev/null) || lm_models=0
 [ "${lm_models:-0}" -gt 0 ] 2>/dev/null && lm_up=1 || lm_models=0
-
-# run_claude <plugin-dir> <prompt> <trace-file> [resume-session-id]: returns claude's (timeout's) exit code.
-# Case e needs a resumable session, so it passes an id (turn 2) or sets KEEP_SESSION=1 (turn 1); the other
-# cases do not persist theirs.
-run_claude() {
-  local args=(-p "$2" --plugin-dir "$1" --output-format stream-json --verbose)
-  if [ -n "${4:-}" ]; then args+=(--resume "$4"); elif [ "${KEEP_SESSION:-}" != 1 ]; then args+=(--no-session-persistence); fi
-  [ -z "$SOURCES" ] || args+=(--setting-sources "$SOURCES")
-  [ -z "${DELEG_MODEL:-}" ] || args+=(--model "$DELEG_MODEL")
-  [ -z "${DELEG_ALLOWED_TOOLS:-}" ] || args+=(--allowedTools "$DELEG_ALLOWED_TOOLS")
-  [ -n "${RUN_CWD:-}" ] || args+=(--add-dir "$FIX")   # the project cases (h, j) run inside their target: an added dir would show the repo path
-  (cd "${RUN_CWD:-$WORK}" && "$TIMEOUT" "$RUN_TIMEOUT_SEC" claude "${args[@]}" > "$3" 2> "$3.err" < /dev/null)
-}
 
 # --- plugins for each case ---------------------------------------------------------------------------
 copy_plugin "$PLUGINS/real" "$ENDPOINT"

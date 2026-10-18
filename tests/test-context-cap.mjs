@@ -66,7 +66,7 @@ const hintResult = async (endpoint, sizes, options = {}) => {
   return r;
 };
 const hintText = (r) => r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.additionalContext : '';
-const hint = async (endpoint, sizes, options) => hintText(await hintResult(endpoint, sizes, options));
+const optedHint = async (endpoint, sizes, options = { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract' }) => hintText(await hintResult(endpoint, sizes, options));
 
 test('context formula follows 32k and 64k loaded contexts', async () => {
   const a = await fake(32768), b = await fake(65536);
@@ -84,7 +84,7 @@ test('model selection uses the smallest loaded chat context unless pinned', asyn
   writeFileSync(join(tmp, 'pin.txt'), 'x'.repeat(35000));
   for (const pin of ['missing', 'idle']) {
     assert.deepEqual(await getContextCap({ endpoint, model: pin }), assumed('pinned model not loaded', 'pinned model not loaded'));
-    const h = await run('scripts/size-hint.mjs', [], { LOCAL_LLM_ENDPOINT_URL: endpoint, LOCAL_LLM_MODEL: pin }, JSON.stringify({ prompt: join(tmp, 'pin.txt') }));
+    const h = await run('scripts/size-hint.mjs', [], { LOCAL_LLM_ENDPOINT_URL: endpoint, LOCAL_LLM_MODEL: pin, CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract' }, JSON.stringify({ prompt: join(tmp, 'pin.txt') }));
     assert.match(h.stdout, /assumed 32k context \(model metadata unavailable: pinned model not loaded\)/);
   }
   // Exercise the helper's env defaults in a separate process.
@@ -104,7 +104,7 @@ test('unavailable or malformed metadata falls back; tiny context has no usable r
   const dead = await serve(() => {});
   await new Promise((r) => servers.at(-1).close(r));
   assert.deepEqual(await getContextCap({ endpoint: dead }), assumed('no metadata'));
-  assert.match(await hint(dead, [35000]), /assumed 32k context \(model metadata unavailable: no metadata\).*45,875 chars.*fallback/);
+  assert.match(await optedHint(dead, [35000]), /assumed 32k context \(model metadata unavailable: no metadata\).*45,875 chars.*fallback/);
 });
 test('loopback validation, redirect refusal and proxy bypass keep metadata local', async () => {
   let hits = 0;
@@ -126,18 +126,28 @@ test('stalled metadata times out and hook returns within its five-second budget'
   for (const bodyStall of [false, true]) {
     const endpoint = await serve((q, r) => { if (bodyStall) { r.writeHead(200); r.flushHeaders(); } });
     const start = Date.now();
-    assert.match(await hint(endpoint, [35000]), /assumed 32k context \(model metadata unavailable: timeout\).*45,875 chars.*fallback/);
+    assert.match(await optedHint(endpoint, [35000]), /assumed 32k context \(model metadata unavailable: timeout\).*45,875 chars.*fallback/);
     assert.ok(Date.now() - start < 2500, 'headers and body must both time out in about 1 s');
   }
 });
 test('hook is silent below 30k and makes no API request', async () => {
   const f = await fake(32768);
-  assert.equal(await hint(f.endpoint, [29999]), '');
+  assert.equal(await optedHint(f.endpoint, [29999]), '');
   assert.throws(() => readFileSync(f.log, 'utf8')); // fake log is created on its first request
+});
+test('default is silent for 35k files and retains only the above-cap note', async () => {
+  const f = await fake(32768);
+  assert.equal((await hintResult(f.endpoint, [35000])).stdout, '');
+  const r = await hintResult(f.endpoint, [35000, 35000, 45876]);
+  assert.equal(r.stderr, '');
+  const text = hintText(r);
+  assert.equal(text.split('\n').length, 1);
+  assert.match(text, /hint-2.txt.*too big for the loaded model's context.*45,875 chars.*Grep or Read the relevant slices, or use batch\/run.mjs/);
+  assert.doesNotMatch(text, /invoke|delegat|together/);
 });
 test('hook delegates inclusive bounds, warns above cap, and looks up once per prompt', async () => {
   const f = await fake(32768);
-  const h = await hint(f.endpoint, [30000, 45875, 45876]);
+  const h = await optedHint(f.endpoint, [30000, 45875, 45876]);
   const lines = h.split('\n');
   assert.equal(lines.length, 4);
   for (const line of lines.slice(0, 2)) {
@@ -154,10 +164,10 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   assert.equal(lines[3], 'local-llm: The files that fit exceed the loaded context together; if the job is delegated, make one call per file.');
   const requests = readFileSync(f.log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(requests.map((r) => r.url), ['/api/v0/models']);
-  assert.doesNotMatch(await hint(f.endpoint, [30000]), /together/);
-  assert.doesNotMatch(await hint(f.endpoint, [50000, 50000]), /together/); // oversized files never get a delegate-per-file line
+  assert.doesNotMatch(await optedHint(f.endpoint, [30000]), /together/);
+  assert.doesNotMatch(await optedHint(f.endpoint, [50000, 50000]), /together/); // oversized files never get a delegate-per-file line
   const large = await fake(65536);
-  assert.doesNotMatch(await hint(large.endpoint, [30000, 30000]), /files together/);
+  assert.doesNotMatch(await optedHint(large.endpoint, [30000, 30000]), /files together/);
 });
 test('unsaved task kinds come from the manifest default', async () => {
   const f = await fake(32768);
@@ -166,7 +176,7 @@ test('unsaved task kinds come from the manifest default', async () => {
   mkdirSync(join(copy, '.claude-plugin'));
   const manifest = JSON.parse(readFileSync(join(repo, '.claude-plugin/plugin.json'), 'utf8'));
   assert.equal(manifest.userConfig.delegate_tasks.type, 'string');
-  assert.equal(manifest.userConfig.delegate_tasks.default, 'classify,extract');
+  assert.equal(manifest.userConfig.delegate_tasks.default, '');
   manifest.userConfig.delegate_tasks.default = 'extract,draft';
   writeFileSync(join(copy, '.claude-plugin/plugin.json'), JSON.stringify(manifest));
   const file = join(tmp, 'manifest-default.txt');
@@ -179,8 +189,8 @@ test('unsaved task kinds come from the manifest default', async () => {
 test('hook delegates only configured known kinds, preserving their order', async () => {
   const f = await fake(32768);
   const option = (value) => ({ CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: value });
-  assert.match(await hint(f.endpoint, [35000], option('classify,extract,summarize')), /read-only classify, extract or summarize task, invoke/);
-  assert.match(await hint(f.endpoint, [35000], option('draft')), /read-only draft task, invoke/);
+  assert.match(await optedHint(f.endpoint, [35000], option('classify,extract,summarize')), /read-only classify, extract or summarize task, invoke/);
+  assert.match(await optedHint(f.endpoint, [35000], option('draft')), /read-only draft task, invoke/);
   const mixed = await hintResult(f.endpoint, [35000], option(' extract,unknown,classify,extract '));
   assert.match(hintText(mixed), /read-only extract or classify task, invoke/);
   assert.doesNotMatch(hintText(mixed), /unknown|summarize|draft/);
@@ -190,7 +200,7 @@ test('empty or unknown-only tasks disable instructions but keep oversized warnin
   const f = await fake(32768);
   for (const value of ['', 'unknown,other']) {
     const options = { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: value };
-    assert.equal(await hint(f.endpoint, [35000, 35000], options), '');
+    assert.equal(await optedHint(f.endpoint, [35000, 35000], options), '');
     const r = await hintResult(f.endpoint, [35000, 35000, 45876], options);
     assert.match(hintText(r), /too big for the loaded model's context/);
     assert.equal(hintText(r).split('\n').length, 1);
@@ -199,14 +209,14 @@ test('empty or unknown-only tasks disable instructions but keep oversized warnin
     else assert.equal(r.stderr, '');
   }
 });
-test('skill limits delegation to hinted kinds with a classify/extract default', () => {
+test('skill requires hinted kinds or an explicit local-model request', () => {
   const skill = readFileSync(join(repo, 'skills/delegate-local/SKILL.md'), 'utf8');
-  assert.match(skill, /Delegate only the task kinds named by the size hint/);
-  assert.match(skill, /Without a hint, delegate only classification and narrow extraction \(fields, items, labels from a file\)/);
-  assert.match(skill, /Open-ended summaries and drafts stay with you unless the hint names them/);
-  assert.match(skill.split('\n')[2], /classification and narrow extraction by default/);
+  assert.match(skill, /Delegate unprompted only for the task kinds named by the size hint/);
+  assert.match(skill, /With no hint naming kinds, delegate only when the user explicitly asks for the local model/);
+  assert.match(skill.split('\n')[2], /with no hint naming kinds, use it only when the user explicitly asks for the local model/);
+  assert.match(skill, /Many files, or a mining job.*`batch\/run.mjs`/);
 });
-test('delegation harness prompts exercise classify and extract under the default', () => {
+test('delegation harness prompts exercise classify and extract with opt-in', () => {
   const harness = readFileSync(join(repo, 'tests/test-delegation.sh'), 'utf8');
   const prompts = harness.split('prompt_for() {')[1].split('THRESHOLD=')[0];
   for (const expected of [
@@ -244,7 +254,7 @@ test('skill scales spot-checks to stakes while retaining verification safeguards
 });
 test('hook follows a larger loaded context', async () => {
   const f = await fake(65536);
-  assert.match(await hint(f.endpoint, [90000]), /98,304 chars; loaded.*invoke/);
+  assert.match(await optedHint(f.endpoint, [90000]), /98,304 chars; loaded.*invoke/);
 });
 test('batch defaults follow context and index reports the source; explicit cap wins', async () => {
   const input = join(tmp, 'batch.txt');

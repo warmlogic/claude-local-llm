@@ -2,14 +2,16 @@
 
 Offload file-heavy, low-stakes text jobs from Claude Code to a model running locally in LM Studio.
 
-When you ask Claude to classify or narrowly extract fields, items or labels from a big log or document (from about 30k characters through the loaded model's context cap; about 45k without a size hint), the plugin's skill sends the file path to a local model instead of reading it into Claude's context. The `delegate_tasks` option controls which read-only task kinds the size hint names for unprompted delegation; its default is `classify,extract`. Open-ended summaries and drafts stay with Claude unless the hint names them. The local model reads the file and returns a short answer, so the bulk of the file stays out of Claude's context; only the answer, and any lines Claude spot-checks, reach it. This is compute pushdown: the cheap, bulk work runs on your Mac, and Claude keeps its context and tokens for judgment. The local model is weaker than Claude, so Claude treats its answer as a draft and checks it in proportion to what depends on it.
+Unprompted single-file delegation is off by default (`delegate_tasks` is empty). On real files with today's local model, delegated answers were usable 4/10 vs 8/10 when Claude read the file itself, and cost 3% more. Claude reads the file itself unless you explicitly ask, for example, "use the local model to classify …", or opt in to task kinds such as `classify,extract` in the plugin configuration.
+
+When enabled, the size hint names eligible task kinds for files from about 30k characters through the loaded model's context cap (about 45k without a size hint). The local model reads the file and returns text; only its answer and any lines Claude spot-checks enter Claude's context. Claude treats the answer as a draft and checks it in proportion to what depends on it. Above-cap warnings remain active with delegation off. Many-file and mining jobs use `batch/run.mjs`.
 
 Status:
 
 - ✅ Implemented: the MCP server (houtini-lm, pinned) behind a fenced launcher, the `delegate-local` skill, the permission hook, and the tests.
 - ✅ Implemented: a second server, local-verify, with one tool, `verify_claims`: the local model votes on whether short claims are supported by a file, without the file entering Claude's context. Its answer is a hint, never verification, and the skill does not use it yet.
 - ✅ Implemented: a repeatable measurement harness (`bash measure/run.sh`; see AGENTS.md, "Measuring") for Claude cost, tokens and answer quality on real files.
-- ✅ Implemented: the measured result, in `docs/results.md`. Delegation saves about 50% of Claude cost near 50k characters and costs the same or more on 20k to 25k characters (below 20k is unmeasured), so the skill delegates only from about 30k characters up to a cap set by the loaded model's context.
+- ✅ Implemented: real-file cost and quality measurements (`docs/results.md`). The latest result motivates keeping unprompted single-file delegation off by default.
 - ✅ Implemented: a permanent install from the clone as a marketplace (section 4), or per session with `--plugin-dir`.
 
 ## Prerequisites
@@ -99,14 +101,14 @@ claude plugin install local-llm@warmlogic-local-llm
 
 It then loads in every session, under the id `local-llm@warmlogic-local-llm`. A local-path marketplace installs whatever the clone has checked out, so keep the clone on `main`. The configure commands below use the per-session id `local-llm@inline`. For the permanent install, run them without `--plugin-dir` and with the installed id, e.g. `claude plugin configure local-llm@warmlogic-local-llm`. The plugin is unversioned, so every merge to `main` is a release. Pull the clone, then run `claude plugin marketplace update warmlogic-local-llm` and `claude plugin update local-llm@warmlogic-local-llm`, and restart or `/reload-plugins`. To remove it: `claude plugin uninstall local-llm@warmlogic-local-llm`, then `claude plugin marketplace remove warmlogic-local-llm`.
 
-The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.json`):
+The plugin has five options (declared as `userConfig` in `.claude-plugin/plugin.json`):
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `allowed_dirs` | `$HOME/github`, `$HOME/catalyst` | The folders the local model may read. Nothing outside them is readable *by the local model*. Folder names must not contain `,` or `:`. A folder that does not exist on your machine (`$HOME/catalyst` for most people) is skipped with a warning. |
 | `endpoint_url` | `http://127.0.0.1:1234` | The LM Studio server. Must be loopback. |
 | `model` | empty | A model id to request. Empty means whichever model LM Studio has loaded. |
-| `delegate_tasks` | `classify,extract` | Comma-separated read-only task kinds to delegate unprompted: `classify`, `extract`, `summarize`, `draft`. Add `summarize` only for a local model whose summaries have been measured as reliable. Unknown kinds are ignored with a stderr note; empty or all-unknown disables delegation instructions while keeping oversized-file warnings. |
+| `delegate_tasks` | empty (off) | Comma-separated read-only task kinds to delegate unprompted: `classify`, `extract`, `summarize`, `draft`. Add `summarize` only for a local model whose summaries have been measured as reliable. Unknown kinds are ignored with a stderr note; empty or all-unknown disables delegation instructions while keeping oversized-file warnings. |
 
 With `--plugin-dir` the plugin's id is `local-llm@inline`. If you have never set the options, the defaults apply. Set `allowed_dirs` to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of `allowed_dirs` (the default covers all of `$HOME/github` and `$HOME/catalyst`, so narrow it if either holds something private). To see the options and which are unset:
 
@@ -121,7 +123,14 @@ printf '%s\n' '{"allowed_dirs": "$HOME/logs,$HOME/github"}' |
   claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@inline --values-stdin
 ```
 
-This writes `pluginConfigs["local-llm@inline"].options` in `~/.claude/settings.json`. Restart Claude Code to apply it. The same command works for `endpoint_url`, `model` and `delegate_tasks`. For example, save `{"delegate_tasks":"classify,extract,summarize"}` after measuring reliable summaries from your loaded model. Without a size hint, the skill defaults to classification and narrow extraction.
+This writes `pluginConfigs["local-llm@inline"].options` in `~/.claude/settings.json`. Restart Claude Code to apply it. The same command works for `endpoint_url`, `model` and `delegate_tasks`. To opt in to unprompted classification and extraction:
+
+```bash
+printf '%s\n' '{"delegate_tasks":"classify,extract"}' |
+  claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@inline --values-stdin
+```
+
+Save `{"delegate_tasks":""}` to turn it off again. Existing saved options take precedence over the new default. With no hint naming task kinds, the skill delegates only when you explicitly ask for the local model. Add `summarize` only after measuring reliable summaries from your loaded model.
 
 ## 5. Permissions: nothing to configure
 
@@ -129,7 +138,7 @@ The plugin ships what it needs, so you do not add an allow rule.
 
 - A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) allows exactly three things, by exact name: a `Skill` call for `local-llm:delegate-local`, and the read-only tools `mcp__plugin_local-llm_local-llm__code_task_files` and `mcp__plugin_local-llm_local-verify__verify_claims`. That is why a plain "use the local model to classify ..." needs no prompt either. Every other tool, including the server's other tools (`chat`, `discover`, ...), is left to Claude Code's normal permission flow. A deny rule on the tool itself still wins over the hook: denying `mcp__plugin_local-llm_local-llm__code_task_files` removes the tool, and Claude reads the file itself. A `Read(...)` deny rule on a folder does not stop the plugin's tools; `allowed_dirs` does.
 - The skill's `allowed-tools` line covers `code_task_files` for the turn that loads the skill.
-- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) stats files named in your prompt, using bytes as a char proxy. From 30,000 bytes through the loaded context cap it instructs Claude to invoke the skill for exactly the known kinds configured in `delegate_tasks` (by default, "a read-only classify or extract task"); above the cap it says to Grep or Read relevant slices, or use `batch/run.mjs` for many-window jobs. Files that together exceed the cap get one call per file. Below 30,000 it is silent. It reads no file contents and queries loopback context metadata at most once per eligible prompt, with a 1-second timeout and a 32k-token fallback.
+- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) stats files named in your prompt, using bytes as a char proxy. From 30,000 bytes through the loaded context cap it instructs Claude to invoke the skill for exactly the known kinds configured in `delegate_tasks` (default empty: no delegation instruction); above the cap it says to Grep or Read relevant slices, or use `batch/run.mjs` for many-window jobs. Files that together exceed the cap get one call per file. Below 30,000 it is silent. It reads no file contents and queries loopback context metadata at most once per eligible prompt, with a 1-second timeout and a 32k-token fallback.
 - The skill sends Claude to the Read and Grep tools for the rest, because compound shell commands can still prompt in any session.
 
 ## Privacy and security
@@ -161,7 +170,7 @@ Success looks like this:
 - The result contains a footer such as `Model: qwen3.6-35b-a3b-splash | 13226→130 tokens | TTFT: 4355ms, 148.7 tok/s, 5.2s | unknown · 1 file(s) read`.
 - Claude's reply says the local model produced the classification.
 
-Optional: to see whether Claude delegates unprompted, repeat with "Classify $PWD/smoke.log by log type." That depends on the model's judgment, so it is probabilistic; a miss is not a setup failure. Clean up when you are done: `rm -r "$HOME/github/local-llm-smoke"`.
+Optional: after opting in with `delegate_tasks=classify,extract`, to see whether Claude delegates unprompted, repeat with "Classify $PWD/smoke.log by log type." That depends on the model's judgment, so it is probabilistic; a miss is not a setup failure. Clean up when you are done: `rm -r "$HOME/github/local-llm-smoke"`.
 
 ## Troubleshooting
 
@@ -212,7 +221,7 @@ LM Studio is not serving, or no model is loaded. `Invalid model identifier ... j
 
 ### Claude never delegates
 
-The skill applies to the task kinds named by the hint (classification and narrow extraction by default), from about 30k characters through the loaded context cap. Check `delegate_tasks` if a task kind is missing; summaries and drafts need an explicit kind in the hint. Smaller files are cheaper to read directly: measured break-even is near 25k, with about 50% savings near 50k. Inputs above the cap should be split or read directly. Ask for the skill by name ("use the delegate-local skill to classify ...") to test an eligible file.
+This is the default: `delegate_tasks` is empty because real-file delegation produced fewer usable answers (4/10 vs 8/10) and cost 3% more. Ask explicitly ("use the local model to classify …") to test your setup, or save `{"delegate_tasks":"classify,extract"}` to opt in. Unprompted delegation then applies only to the kinds named by the size hint, from about 30k characters through the loaded context cap. Inputs above the cap should be split or read directly; many-file and mining jobs use `batch/run.mjs`.
 
 ## Swapping the server
 

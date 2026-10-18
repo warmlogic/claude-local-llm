@@ -1,12 +1,12 @@
 ---
 name: delegate-local
-description: Offload a bounded text job on a large file or log (about 30k characters up to the loaded context cap; about 45k without a size hint) to the local model instead of reading it yourself. Use it unprompted only for the task kinds named by the size hint; without a hint, use classification and narrow extraction by default, including on the user's own project files and docs. Not for small files, decisions, edits, or anything secret.
+description: Offload a bounded text job on a large file or log (about 30k characters up to the loaded context cap; about 45k without a size hint) to the local model instead of reading it yourself. Use it unprompted only for the task kinds named by the size hint; with no hint naming kinds, use it only when the user explicitly asks for the local model, including on their own project files and docs. Not for small files, decisions, edits, or anything secret.
 allowed-tools: mcp__plugin_local-llm_local-llm__code_task_files
 ---
 
 # Delegate big text jobs to the local model
 
-A model in LM Studio reads the file and returns text; you never load the file into your own context. It is cheaper than reading it yourself and weaker than you, so treat its answer as a draft and check it in proportion to what depends on it.
+A model in LM Studio reads the file and returns text; you never load the file into your own context. Unprompted single-file delegation is off by default: real-file answers were usable 4/10 vs 8/10 when you read them, and cost 3% more. Treat its answer as a draft and check it in proportion to what depends on it.
 
 ## Names (the only place the server's specifics live)
 
@@ -27,9 +27,9 @@ Swapping the server edits this table and the `allowed-tools` line above, nothing
 
 ## When to delegate
 
-Delegate only the task kinds named by the size hint. Without a hint, delegate only classification and narrow extraction (fields, items, labels from a file). Open-ended summaries and drafts stay with you unless the hint names them.
+Delegate unprompted only for the task kinds named by the size hint (the operator opts in with `delegate_tasks`, e.g. `classify,extract`). With no hint naming kinds, delegate only when the user explicitly asks for the local model ("use the local model to …").
 
-A bounded eligible text job over one or a few files totaling about 30k characters up to the cap stated by the size hint, which follows the loaded model's context. With a size hint, use its stated size; do not run `wc -c`. Without a hint, get the size without reading the file: `wc -c <file>` (sum for several; bytes are a char proxy), and assume a cap of about 45k. Below 30k, reading it yourself is cheaper: measured break-even is near 25k, with about 50% savings near 50k. The cap reserves prompt and answer room using 1.6 chars/token. Numeric data (about 1.0 chars/token) can still overflow; `context_length_exceeded` fails loudly, and you read the file yourself.
+A bounded eligible text job over one or a few files totaling about 30k characters up to the cap stated by the size hint, which follows the loaded model's context. With a size hint, use its stated size; do not run `wc -c`. Without a hint, get the size without reading the file: `wc -c <file>` (sum for several; bytes are a char proxy), and assume a cap of about 45k. Below 30k, read it yourself. The cap reserves prompt and answer room using 1.6 chars/token. Numeric data (about 1.0 chars/token) can still overflow; `context_length_exceeded` fails loudly, and you read the file yourself.
 
 ## When not to
 
