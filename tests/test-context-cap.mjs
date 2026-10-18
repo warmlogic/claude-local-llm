@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, cpSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getContextCap, capForContext, MIN_DELEGATE_CHARS } from '../scripts/context-cap.mjs';
 import { PROXY_VARS } from '../scripts/loopback.mjs';
@@ -18,6 +18,7 @@ const servers = [];
 after(() => { children.forEach((p) => p.kill()); servers.forEach((s) => s.closeAllConnections()); servers.forEach((s) => s.close()); rmSync(tmp, { recursive: true, force: true }); });
 delete process.env.LOCAL_LLM_MODEL; // helper calls are independent of the operator's model pin
 const env = { ...process.env, LOCAL_LLM_MODEL: '' };
+delete env.CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS; // default tests must use the manifest
 for (const k of PROXY_VARS) delete env[k];
 const run = (script, args = [], extraEnv = {}, input = '') => new Promise((resolve, reject) => {
   const p = spawn(process.execPath, [join(repo, script), ...args], { env: { ...env, ...extraEnv } });
@@ -56,14 +57,16 @@ async function serve(handler) {
 const model = (id, tokens, state = 'loaded', type = 'llm') => ({ id, loaded_context_length: tokens, state, type });
 const fallback = { contextTokens: 32768, capChars: 45875, source: 'fallback' };
 const assumed = (reason, source = 'fallback') => ({ ...fallback, source, reason });
-const hint = async (endpoint, sizes) => {
+const hintResult = async (endpoint, sizes, options = {}) => {
   const paths = sizes.map((size, i) => {
     const p = join(tmp, `hint-${i}.txt`); writeFileSync(p, 'x'.repeat(size)); return p;
   });
-  const r = await run('scripts/size-hint.mjs', [], { LOCAL_LLM_ENDPOINT_URL: endpoint }, JSON.stringify({ prompt: paths.join(' ') }));
+  const r = await run('scripts/size-hint.mjs', [], { LOCAL_LLM_ENDPOINT_URL: endpoint, ...options }, JSON.stringify({ prompt: paths.join(' ') }));
   assert.equal(r.code, 0, r.stderr);
-  return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.additionalContext : '';
+  return r;
 };
+const hintText = (r) => r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.additionalContext : '';
+const hint = async (endpoint, sizes, options) => hintText(await hintResult(endpoint, sizes, options));
 
 test('context formula follows 32k and 64k loaded contexts', async () => {
   const a = await fake(32768), b = await fake(65536);
@@ -138,7 +141,8 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   const lines = h.split('\n');
   assert.equal(lines.length, 4);
   for (const line of lines.slice(0, 2)) {
-    assert.match(line, /invoke the local-llm:delegate-local skill/);
+    assert.match(line, /read-only classify or extract task, invoke/);
+    assert.doesNotMatch(line, /summarize|draft/);
     assert.match(line, /invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself/);
     assert.match(line, /Send the Skill call and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message \(they are independent\)/);
     assert.match(line, /use the stated size instead of running `wc -c` again/);
@@ -154,6 +158,67 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
   assert.doesNotMatch(await hint(f.endpoint, [50000, 50000]), /together/); // oversized files never get a delegate-per-file line
   const large = await fake(65536);
   assert.doesNotMatch(await hint(large.endpoint, [30000, 30000]), /files together/);
+});
+test('unsaved task kinds come from the manifest default', async () => {
+  const f = await fake(32768);
+  const copy = join(tmp, 'plugin-copy');
+  cpSync(join(repo, 'scripts'), join(copy, 'scripts'), { recursive: true });
+  mkdirSync(join(copy, '.claude-plugin'));
+  const manifest = JSON.parse(readFileSync(join(repo, '.claude-plugin/plugin.json'), 'utf8'));
+  assert.equal(manifest.userConfig.delegate_tasks.type, 'string');
+  assert.equal(manifest.userConfig.delegate_tasks.default, 'classify,extract');
+  manifest.userConfig.delegate_tasks.default = 'extract,draft';
+  writeFileSync(join(copy, '.claude-plugin/plugin.json'), JSON.stringify(manifest));
+  const file = join(tmp, 'manifest-default.txt');
+  writeFileSync(file, 'x'.repeat(35000));
+  const r = await run(relative(repo, join(copy, 'scripts/size-hint.mjs')), [], { LOCAL_LLM_ENDPOINT_URL: f.endpoint }, JSON.stringify({ prompt: file }));
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(hintText(r), /read-only extract or draft task, invoke/);
+  assert.doesNotMatch(hintText(r), /classify|summarize/);
+});
+test('hook delegates only configured known kinds, preserving their order', async () => {
+  const f = await fake(32768);
+  const option = (value) => ({ CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: value });
+  assert.match(await hint(f.endpoint, [35000], option('classify,extract,summarize')), /read-only classify, extract or summarize task, invoke/);
+  assert.match(await hint(f.endpoint, [35000], option('draft')), /read-only draft task, invoke/);
+  const mixed = await hintResult(f.endpoint, [35000], option(' extract,unknown,classify,extract '));
+  assert.match(hintText(mixed), /read-only extract or classify task, invoke/);
+  assert.doesNotMatch(hintText(mixed), /unknown|summarize|draft/);
+  assert.match(mixed.stderr, /ignoring unknown delegate_tasks kinds:.*unknown/);
+});
+test('empty or unknown-only tasks disable instructions but keep oversized warnings', async () => {
+  const f = await fake(32768);
+  for (const value of ['', 'unknown,other']) {
+    const options = { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: value };
+    assert.equal(await hint(f.endpoint, [35000, 35000], options), '');
+    const r = await hintResult(f.endpoint, [35000, 35000, 45876], options);
+    assert.match(hintText(r), /too big for the loaded model's context/);
+    assert.equal(hintText(r).split('\n').length, 1);
+    assert.doesNotMatch(hintText(r), /invoke|delegat|together/);
+    if (value) assert.match(r.stderr, /ignoring unknown delegate_tasks kinds:.*unknown.*other/);
+    else assert.equal(r.stderr, '');
+  }
+});
+test('skill limits delegation to hinted kinds with a classify/extract default', () => {
+  const skill = readFileSync(join(repo, 'skills/delegate-local/SKILL.md'), 'utf8');
+  assert.match(skill, /Delegate only the task kinds named by the size hint/);
+  assert.match(skill, /Without a hint, delegate only classification and narrow extraction \(fields, items, labels from a file\)/);
+  assert.match(skill, /Open-ended summaries and drafts stay with you unless the hint names them/);
+  assert.match(skill.split('\n')[2], /classification and narrow extraction by default/);
+});
+test('delegation harness prompts exercise classify and extract under the default', () => {
+  const harness = readFileSync(join(repo, 'tests/test-delegation.sh'), 'utf8');
+  const prompts = harness.split('prompt_for() {')[1].split('THRESHOLD=')[0];
+  for (const expected of [
+    'b) echo "Classify $FIX/app-2k.log in five bullet points."',
+    'e) echo "Classify $FIX/app-35k.log in three bullet points."',
+    'h) echo "Classify $DOC in 5 bullets."',
+    'a2) echo "Classify this document: $FIX/notes-0412.md"',
+    'g) echo "Use the local model to classify $FIX/notes-0412.md"',
+    '*) echo "Classify $FIX/app-35k.log in five bullet points."',
+  ]) assert.ok(prompts.includes(expected), expected);
+  assert.ok(harness.includes('"Now classify $FIX/app-35k-b.log in three bullet points."'));
+  assert.doesNotMatch(prompts, /summarize/i);
 });
 test('skill reuses hinted sizes and pairs independent skill and schema loads', () => {
   const skill = readFileSync(join(repo, 'skills/delegate-local/SKILL.md'), 'utf8');

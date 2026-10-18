@@ -10,11 +10,11 @@
 # and no --allowedTools, then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
 # DELEG_RUNS). Cases a, a2, b, g, h and j need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
-#   a  35k-char file, "summarize <path>": code_task_files succeeds on it, unprompted, and little of the file
+#   a  35k-char file, "classify <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
 #   a2 a 35k-char prose document with a neutral name (notes-0412.md) and "Classify this document: <path>": as a, with
 #      no size, tool or log hint in the file name or prompt (real files are not named app-20k.log)
-#   g  "Use the local model to summarize <path>" on the same document: as a, and no plugin permission denial (asking
+#   g  "Use the local model to classify <path>" on the same document: as a, and no plugin permission denial (asking
 #      plainly must not hit a prompt for the plugin's own tool)
 #   b  2k-char file: no code_task_files call, and Claude reads the file (exposure >= 0.5)
 #   c  endpoint down: the tool fails with "fetch failed", is not called again, and Claude reads the file itself
@@ -24,7 +24,7 @@
 #      Claude reads B, makes no code_task_files call, and no assistant text block mentions the outage.
 #   h  a real-looking project: a git-initialized acme-billing/ with README.md, src/ and a 35k-char
 #      docs/architecture-decisions.md under the temp root (no tests/, .tmp or plugin name in the path), the session cwd
-#      in it, allowed_dirs pointed at it, and "Summarize <path> in 5 bullets.": as a. Real files carry real names and
+#      in it, allowed_dirs pointed at it, and "Classify <path> in 5 bullets.": as a. Real files carry real names and
 #      sit in projects; the prompt that works at a neutral path must also work here
 #   j  the same doc with a judgment prompt ("Is the decision in <path> the right call? Argue it."): NOT delegated,
 #      Claude reads the file itself (as b). The guard against an instruction so strong it hands judgment to the local model
@@ -503,13 +503,13 @@ plugin_for() { case "$1" in a|a2|b|g) echo real ;; h|j) echo project ;; c|e) ech
 target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
 prompt_for() {
   case "$1" in
-    b) echo "Summarize $FIX/app-2k.log in five bullet points." ;;
-    e) echo "Summarize $FIX/app-35k.log in three bullet points." ;;
-    h) echo "Summarize $DOC in 5 bullets." ;;
+    b) echo "Classify $FIX/app-2k.log in five bullet points." ;;
+    e) echo "Classify $FIX/app-35k.log in three bullet points." ;;
+    h) echo "Classify $DOC in 5 bullets." ;;
     j) echo "Is the decision in $DOC the right call? Argue it." ;;
     a2) echo "Classify this document: $FIX/notes-0412.md" ;;
-    g) echo "Use the local model to summarize $FIX/notes-0412.md" ;;
-    *) echo "Summarize $FIX/app-35k.log in five bullet points." ;;
+    g) echo "Use the local model to classify $FIX/notes-0412.md" ;;
+    *) echo "Classify $FIX/app-35k.log in five bullet points." ;;
   esac
 }
 THRESHOLD=$(( (RUNS * 4 + 4) / 5 ))
@@ -553,7 +553,7 @@ for c in $CASES; do
           stop="FAIL (no session id in turn 1; turn 2 not run)"
           : > "$trace2"; echo "no session id in $(basename "$trace"); turn 2 not run" > "$trace2.err"
         else
-          run_claude "$PLUGINS/$(plugin_for e)" "Now summarize $FIX/app-35k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
+          run_claude "$PLUGINS/$(plugin_for e)" "Now classify $FIX/app-35k-b.log in three bullet points." "$trace2" "$sid"; rc2=$?
           s2=$(summarize "$trace2" "$FIX/app-35k-b.log")
         fi
       fi

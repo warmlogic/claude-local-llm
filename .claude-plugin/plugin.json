@@ -24,6 +24,12 @@
       "type": "string",
       "title": "Model id",
       "description": "Model id to use. Leave empty to use whichever model LM Studio has loaded."
+    },
+    "delegate_tasks": {
+      "type": "string",
+      "title": "Delegated task kinds",
+      "description": "Comma-separated list of read-only task kinds Claude delegates unprompted (known kinds: classify, extract, summarize, draft). Add summarize for a local model whose summaries have been measured as reliable.",
+      "default": "classify,extract"
     }
   }
 }

@@ -358,6 +358,7 @@ else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------
 SH="$REPO/scripts/size-hint.mjs"
+unset CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS # test the manifest default unless a case overrides it
 node "$SCRIPT_DIR/fake-endpoint.mjs" "$TMP/context.port" "$TMP/context.log" context 32768 &
 CONTEXT_PID=$!
 for _ in $(seq 1 50); do [ -s "$TMP/context.port" ] && break; sleep 0.1; done
@@ -371,9 +372,23 @@ for n in 1 2 3 4; do head -c 35000 /dev/zero | tr '\0' 'a' > "$SHD/many$n.txt"; 
 # the prompt goes through stdin: a 260 KB value would exceed a single argument's limit on some systems
 hint_json() { printf '%s' "$1" | jq -Rsc --arg c "$SHD" '{hook_event_name:"UserPromptSubmit",cwd:$c,prompt:.}'; }
 h=$(hint_out "$(hint_json "Classify this document: $SHD/big.txt")")
-if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 35,000 bytes (a char proxy). Context cap: 32,768 tokens, about 45,875 chars; loaded. If this turn\u0027s job on it is a read-only text task (summarize, classify, extract), invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too. Send the Skill call and ToolSearch query \"select:mcp__plugin_local-llm_local-llm__code_task_files\" in the same assistant message (they are independent), and use the stated size instead of running `wc -c` again."))' >/dev/null <<<"$h"; then
+if jq -e --arg p "$SHD/big.txt" '.hookSpecificOutput.hookEventName == "UserPromptSubmit" and (.hookSpecificOutput.additionalContext | startswith("local-llm: " + $p + " is about 35,000 bytes (a char proxy). Context cap: 32,768 tokens, about 45,875 chars; loaded. If this turn\u0027s job on it is a read-only classify or extract task, invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user\u0027s own project files too. Send the Skill call and ToolSearch query \"select:mcp__plugin_local-llm_local-llm__code_task_files\" in the same assistant message (they are independent), and use the stated size instead of running `wc -c` again."))' >/dev/null <<<"$h"; then
   ok "size hint: emits for a big absolute path"
 else bad "size hint: emits for a big absolute path ($h)"; fi
+h=$(CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="classify,extract,summarize" hint_out "$(hint_json "$SHD/big.txt")")
+if [ -n "$h" ] && jq -e '.hookSpecificOutput.additionalContext | contains("read-only classify, extract or summarize task, invoke")' >/dev/null <<<"$h"; then
+  ok "size hint: delegate_tasks can enable measured summaries"
+else bad "size hint: delegate_tasks summary override ($h)"; fi
+head -c 45876 /dev/zero | tr '\0' 'a' > "$SHD/over-cap.txt"
+for tasks in "" "unknown"; do
+  h=$(CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="$tasks" hint_out "$(hint_json "$SHD/big.txt $SHD/over-cap.txt")" 2>"$TMP/task-kinds.err")
+  if [ -n "$h" ] && jq -e '.hookSpecificOutput.additionalContext | (contains("over-cap.txt") and contains("too big for the loaded model") and (contains("invoke") | not) and (contains("big.txt") | not))' >/dev/null <<<"$h"; then
+    ok "size hint: empty or unknown task kinds keep only the too-big note ($tasks)"
+  else bad "size hint: disabled task kinds ($tasks): $h"; fi
+  h=$(CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="$tasks" hint_out "$(hint_json "$SHD/big.txt")" 2>"$TMP/task-kinds.err")
+  if [ -z "$h" ]; then ok "size hint: disabled task kinds emit no fitting-file instruction ($tasks)"
+  else bad "size hint: disabled task kinds still emit: $h"; fi
+done
 h=$(hint_out "$(hint_json "Classify big.txt please.")")
 if jq -e '.hookSpecificOutput.additionalContext | contains("big.txt is about 35,000 bytes")' >/dev/null <<<"$h"; then ok "size hint: resolves a relative path against the input cwd"
 else bad "size hint: relative path ($h)"; fi
