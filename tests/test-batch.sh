@@ -462,14 +462,14 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 const lanes = `${process.env.HOME}/catalyst/band/lanes`;
 const out = [];
-for (const sig of ["SIGINT", "SIGTERM"]) {
-  const c = spawn(process.execPath, [process.env.RUN, "--job", process.env.JOBF, "--out", `${process.env.HOME}/o-${sig}`, process.env.INPUT], { env: { ...process.env, LOCAL_LLM_ENDPOINT_URL: process.env.EP }, stdio: "ignore" });
+for (const [n, sig, twice] of [[0, "SIGINT"], [1, "SIGTERM"], [2, "SIGTERM", true]]) {
+  const c = spawn(process.execPath, [process.env.RUN, "--job", process.env.JOBF, "--out", `${process.env.HOME}/o-${n}`, process.env.INPUT], { env: { ...process.env, LOCAL_LLM_ENDPOINT_URL: process.env.EP }, stdio: "ignore" });
   const done = new Promise((r) => c.on("exit", (code, signal) => r(signal ?? `code${code}`)));
   for (let i = 0; i < 100 && !existsSync(`${lanes}/local-${c.pid}.json`); i++) await new Promise((r) => setTimeout(r, 100));
-  c.kill(sig); out.push(await done);
+  c.kill(sig); if (twice) c.kill(sig); out.push(await done); if (twice) out.push(existsSync(`${lanes}/local-${c.pid}.json`) ? "leaked" : "clean");
 }
 console.log(out.join(" "));')
-if [ "$sigs" = "SIGINT SIGTERM" ]; then ok "SIGINT and SIGTERM end the runner by the signal itself (WIFSIGNALED), not by an exit code"
+if [ "$sigs" = "SIGINT SIGTERM SIGTERM clean" ]; then ok "SIGINT and SIGTERM end the runner by the signal itself (WIFSIGNALED), not an exit code; the same signal twice back to back still leaves no lane file"
 else bad "death by signal: $sigs"; fi
 rm -rf "$HOME/catalyst"
 
