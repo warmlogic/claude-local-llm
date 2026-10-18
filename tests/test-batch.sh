@@ -210,6 +210,41 @@ if [ "$(count "$f")" -eq 5 ] && [ "$(sed -n 1p "$f")" = "$(printf 'L1\tuser\ttex
    && [ "$(sed -n 5p "$f" | cut -f4)" = "${long:0:2000}…" ]; then ok "flatten: ids, roles and kinds; thinking, empty and non-message entries skipped; newlines folded; blocks cut at 2000 chars"
 else bad "flatten output: $(cut -c1-80 "$f")"; fi
 
+# Integrated transcripts must produce exactly the same windows and rows as the manual CLI pipeline.
+start_fake transcripts batch
+job quote-in-line 2200
+run_batch "$EP" "$TMP/out-flat" "$TMP/flat/s.txt"
+flat_rc=$RC
+request_texts "$LOG" > "$TMP/flat-requests"
+: > "$LOG"
+LOCAL_LLM_ENDPOINT_URL="$EP" node "$RUN" --job "$TMP/job.json" --out "$TMP/out-transcripts" --transcripts "$TMP/s.jsonl" > "$TMP/transcript.stdout" 2> "$TMP/transcript.stderr"; RC=$?
+request_texts "$LOG" > "$TMP/transcript-requests"
+if [ "$flat_rc" -eq 0 ] && [ "$RC" -eq 0 ] && [ -s "$TMP/out-flat/rows.jsonl" ] \
+   && cmp -s "$TMP/flat-requests" "$TMP/transcript-requests" \
+   && diff -u <(jq -c 'del(.file)' "$TMP/out-flat/rows.jsonl") <(jq -c 'del(.file)' "$TMP/out-transcripts/rows.jsonl") \
+   && jq -e -s 'all(.[]; .file == "s.jsonl")' "$TMP/out-transcripts/rows.jsonl" >/dev/null; then ok "--transcripts matches flatten-then-run windows and rows, retaining the session filename"
+else bad "integrated transcripts: rc=$flat_rc/$RC $(head -c 300 "$TMP/transcript.stderr")"; fi
+if grep -q '^s.jsonl: 5 flattened lines, 1 unparseable skipped$' "$TMP/transcript.stderr" \
+   && grep -q '^Transcript flattening: 5 lines, 1 unparseable skipped (blocks cut at 2000 chars).$' "$TMP/out-transcripts/index.md"; then ok "--transcripts reports flattened and unparseable skipped counts on stderr and in index.md"
+else bad "transcript counts: $(head -12 "$TMP/out-transcripts/index.md")"; fi
+run_batch "$EP" "$TMP/out-mode-conflict" --number --transcripts "$TMP/s.jsonl"
+if [ "$RC" -eq 2 ] && grep -q 'mutually exclusive' "$TMP/run.out" && [ ! -e "$TMP/out-mode-conflict" ]; then ok "--number and --transcripts cannot be combined"
+else bad "conflicting input modes: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
+
+# Exclusive output creation refuses an existing file or symlink instead of following it.
+for name in index.md rows.jsonl dropped.jsonl failures.jsonl index.md.tmp; do
+  dest="$TMP/exclusive-$name"
+  mkdir -p "$dest"
+  printf 'sentinel\n' > "$TMP/sentinel"
+  ln -s "$TMP/sentinel" "$dest/$name"
+  run_batch "$EP" "$dest" --transcripts "$TMP/s.jsonl"
+  # The running index is replaced deliberately; all other output names must be exclusively created.
+  if [ "$name" = index.md ]; then
+    if [ "$RC" -eq 0 ] && [ ! -L "$dest/$name" ] && [ "$(cat "$TMP/sentinel")" = sentinel ]; then ok "output index replaces a stale symlink without following it"; else bad "stale index followed"; fi
+  elif [ "$RC" -eq 2 ] && [ "$(cat "$TMP/sentinel")" = sentinel ]; then ok "exclusive output creation: $name refuses an existing symlink"
+  else bad "exclusive output creation: $name rc=$RC sentinel=$(head -c 80 "$TMP/sentinel")"; fi
+done
+
 # --- direct-run guards: proxy, distinct basenames, paths with spaces -------------------
 : > "$LOG"
 start_fake px batch
@@ -298,7 +333,7 @@ validate schema-declares-file '.row_schema.properties.file = {type:"string"}'
 validate schema-declares-reason '.row_schema.properties.reason = {type:"string"}'
 printf 'just a plain line\nanother plain line\n' > "$TMP/plain.txt"
 run_batch "$EP" "$TMP/out-plain" "$TMP/plain.txt"
-if [ "$RC" -eq 2 ] && grep -q 'not numbered input; run batch/flatten-transcripts.mjs' "$TMP/run.out" && [ ! -e "$TMP/out-plain" ]; then ok "quote-in-line on unnumbered input exits 2 and says to flatten first"
+if [ "$RC" -eq 2 ] && grep -q 'not numbered input; use --number for raw text or --transcripts for sessions' "$TMP/run.out" && [ ! -e "$TMP/out-plain" ]; then ok "quote-in-line on unnumbered input exits 2 and explains the input modes"
 else bad "unnumbered input: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
 { head -2 "$TMP/m.txt"; echo 'an unnumbered line after numbered ones'; } > "$TMP/mixed.txt"
 run_batch "$EP" "$TMP/out-mixed" "$TMP/mixed.txt"

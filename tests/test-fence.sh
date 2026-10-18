@@ -337,7 +337,7 @@ batch_cmd() {
 }
 # Use physical paths: the shell test REPO may contain a trailing /.. .
 BROOT=$(cd "$REPO" && pwd -P)
-# All paths exist: the hook must realpath inputs and explicit output directories.
+# All paths exist: rejections must test the boundary, not missing files.
 HOOK_TMP=$(cd "$TMP" && pwd -P)
 mkdir -p "$HOOK_TMP/allowed" "$HOOK_TMP/allowed-evil" "$HOOK_TMP/out" "$HOME_TMP/outside" "$HOOK_TMP/home/.claude/projects"
 printf 'input\n' > "$HOOK_TMP/allowed/a.txt"
@@ -361,7 +361,7 @@ INPUT="$HOOK_TMP/allowed/a.txt"
 batch_cmd raw allow "$RUN --number --job-json '{}' '$INPUT'"
 batch_cmd quoted allow "$RUN --job-json '{\"prompt\":\"a; | > < && || \$(literal) \`literal\`\"}' '$HOOK_TMP/allowed/a b.txt'" true
 batch_cmd single-quotes allow "$RUN --job-json '{}' '$INPUT' &"
-batch_cmd flatten allow "$FLATTEN '$HOOK_TMP/out' '$INPUT'" true
+batch_cmd flatten reject "$FLATTEN '$HOOK_TMP/out' '$INPUT'" true
 batch_cmd apostrophe allow "$RUN --job-json 'it'\\''s literal' '$INPUT'"
 batch_cmd tmp-out reject "$RUN --out '$HOOK_TMP/out' --job-json '{}' '$INPUT'"
 batch_cmd relative-input allow "$RUN --job-json '{}' a.txt" false "$HOOK_TMP/allowed"
@@ -371,12 +371,7 @@ fi
 batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
 mkdir -p /tmp/local-llm-batch/hooktest && printf 'L1\tx\n' > /tmp/local-llm-batch/hooktest/staged.txt
-batch_cmd staged-input allow "$RUN --job-json '{}' '/tmp/local-llm-batch/hooktest/staged.txt'"
-# a staging dir that is a symlink is not trusted (it would widen the read boundary)
-SL="$HOOK_TMP/sl-target"; mkdir -p "$SL"; printf 'L1\tx\n' > "$SL/f.txt"
-ln -s "$SL" "$HOOK_TMP/sl-link"
-st=$(printf '{}' | node --input-type=module -e "const m = await import('$REPO/scripts/approve-own-tools.mjs'); console.log(JSON.stringify([m.trustedStaging('$HOOK_TMP/sl-link').length, m.trustedStaging('$SL').length]))" 2>/dev/null)
-if [ "$st" = "[0,1]" ]; then ok "batch hook: a symlinked staging dir is not trusted, a real one is"; else bad "batch hook: staging trust ($st)"; fi
+batch_cmd staged-input reject "$RUN --job-json '{}' '/tmp/local-llm-batch/hooktest/staged.txt'"
 printf 'L1\tx\n' > "$HOOK_TMP/out.txt"
 batch_cmd tmp-not-staged reject "$RUN --job-json '{}' '$HOOK_TMP/out.txt'"
 batch_cmd mixed-inputs reject "$RUN --job-json '{}' '$INPUT' '$HOOK_TMP/allowed-evil/out.txt'"
@@ -400,9 +395,16 @@ batch_cmd flatten-outside-input reject "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/allo
 batch_cmd flatten-symlink-input reject "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/allowed/link.txt'"
 batch_cmd flatten-outside-out reject "$FLATTEN '$HOME_TMP/outside' '$INPUT'"
 batch_cmd flatten-unknown-flag reject "$FLATTEN '$HOOK_TMP/out' --number '$INPUT'"
-# Transcripts live outside the default allowed folders; only the flattener gets this extra root.
-HOME="$HOOK_TMP/home" batch_cmd transcripts allow "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
+# Only --transcripts enables the extra session root; use a temporary HOME.
+HOME="$HOOK_TMP/home" batch_cmd transcripts allow "$RUN --transcripts --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
 HOME="$HOOK_TMP/home" batch_cmd run-transcripts reject "$RUN --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
+HOME="$HOOK_TMP/home" batch_cmd number-transcripts reject "$RUN --number --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
+batch_cmd transcripts-allowed allow "$RUN --transcripts --job-json '{}' '$INPUT'"
+batch_cmd conflicting-modes reject "$RUN --number --transcripts --job-json '{}' '$INPUT'"
+HOME="$HOOK_TMP/home" batch_cmd transcripts-outside reject "$RUN --transcripts --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
+ln -s "$HOOK_TMP/allowed-evil/out.txt" "$HOOK_TMP/home/.claude/projects/link.jsonl"
+HOME="$HOOK_TMP/home" batch_cmd transcripts-symlink reject "$RUN --transcripts --job-json '{}' '$HOOK_TMP/home/.claude/projects/link.jsonl'"
+
 CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_cmd unresolvable-roots reject "$RUN --job-json '{}' '$INPUT'"
 CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_cmd empty-roots reject "$RUN --job-json '{}' '$INPUT'"
 CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='/' batch_cmd slash-root reject "$RUN --job-json '{}' '$INPUT'"

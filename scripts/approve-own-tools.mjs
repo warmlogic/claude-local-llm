@@ -1,23 +1,13 @@
-// Only these two scripts, invoked as a whole Bash command, may bypass normal approval.
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+// Only the batch runner, invoked as a whole Bash command, may bypass normal approval.
+import { readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
-export const STAGING_DIR = '/tmp/local-llm-batch';
-// The staging dir is trusted only as a real directory owned by this user: a planted symlink, or a dir someone else
-// made, would otherwise widen the read boundary. Returns [] or [its realpath].
-export const trustedStaging = (dir) => {
-  try {
-    const st = lstatSync(dir);
-    return st.isDirectory() && !st.isSymbolicLink() && st.uid === process.getuid() ? [realpathSync.native(dir)] : [];
-  } catch { return []; }
-};
-
-const batchArgsAllowed = (script, args, cwd) => {
+const batchArgsAllowed = (args, cwd) => {
   const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
     ?? JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')).userConfig.allowed_dirs.default.join(',');
   const roots = execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
@@ -25,21 +15,16 @@ const batchArgsAllowed = (script, args, cwd) => {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
   }).trim().split(',').filter(Boolean);
   if (!roots.length) return false;
-  const temps = [realpathSync.native(tmpdir())];
-  if (process.platform === 'darwin' && realpathSync.native('/tmp') === '/private/tmp') temps.push('/private/tmp');
   // Preserve symlink/.. ordering: resolve() before realpath could approve a different file.
   const real = (path) => realpathSync.native(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
-  const isTmp = (path) => within(real(path), temps);
-  if (script === `${root}/batch/flatten-transcripts.mjs`) {
-    if (args.length < 2 || args.some((arg) => arg.startsWith('-')) || !isTmp(args[0])) return false;
-    // Claude Code transcripts live outside allowed_dirs, under $HOME/.claude/projects.
-    try { roots.push(realpathSync.native(join(homedir(), '.claude/projects'))); } catch { /* no transcripts */ }
-    return args.slice(1).every((path) => within(real(path), roots));
-  }
   const files = [], options = new Set();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--number') continue;
+    if (arg === '--number' || arg === '--transcripts') {
+      if (options.has(arg)) return false;
+      options.add(arg);
+      continue;
+    }
     if (arg === '--job-json') {
       if (options.has(arg) || !args[i + 1] || args[i + 1].startsWith('--')) return false;
       options.add(arg);
@@ -47,10 +32,12 @@ const batchArgsAllowed = (script, args, cwd) => {
     } else if (arg.startsWith('-')) return false; // --job and --out too: an approved run writes only to a fresh private tmp dir.
     else files.push(arg);
   }
-  // The one tmp location inputs may come from: where the skill stages flattened or copied outside data. Not all of
-  // tmp, so arbitrary tmp files still go through the normal permission flow.
-  const staging = trustedStaging(STAGING_DIR);
-  return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), [...roots, ...staging]));
+  if (options.has('--number') && options.has('--transcripts')) return false;
+  if (options.has('--transcripts')) {
+    // Claude Code session transcripts also live outside allowed_dirs, under $HOME/.claude/projects.
+    try { roots.push(realpathSync.native(join(homedir(), '.claude/projects'))); } catch { /* no transcripts */ }
+  }
+  return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), roots));
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
 // No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.
@@ -79,8 +66,8 @@ export const ownBatchCommand = (command, cwd = process.cwd()) => {
   push();
   if (words[0] !== 'node' || words.length < 2) return false;
   const script = words[1];
-  if (!['run.mjs', 'flatten-transcripts.mjs'].some((name) => script === `${root}/batch/${name}`)) return false;
-  try { return realpathSync(script) === script && batchArgsAllowed(script, words.slice(2), cwd); } catch { return false; }
+  if (script !== `${root}/batch/run.mjs`) return false;
+  try { return realpathSync(script) === script && batchArgsAllowed(words.slice(2), cwd); } catch { return false; }
 };
 
 const SKILLS = new Set(['local-llm:delegate-local', 'local-llm:batch-local']);

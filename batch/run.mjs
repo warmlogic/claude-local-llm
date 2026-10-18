@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-// Usage: node run.mjs (--job <job.json> | --job-json <json>) [--number] [--out <dir>] <input files...>
+// Usage: node run.mjs (--job <job.json> | --job-json <json>) [--number | --transcripts] [--out <dir>] <input files...>
 // Runs one extraction prompt over many text files on the local model (LM Studio, loopback only), window by
 // window, and writes rows.jsonl, dropped.jsonl, failures.jsonl and a short index.md. See AGENTS.md "Batch runner".
 // job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars"?,
 // "reasoning_effort"?, "min_rows_per_window"? (positive integer)}. index.md is the one file Claude reads, so it
 // never claims more than happened: a stub says RUNNING until the final index replaces it, and its header
 // says how many windows were answered.
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, openSync, closeSync, mkdirSync, mkdtempSync, renameSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopback.mjs';
 import { getContextCap, capForContext } from '../scripts/context-cap.mjs';
+import { flatten } from './flatten-transcripts.mjs';
 import { upstreamCode } from '../server/endpoint.mjs';
 
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -115,11 +116,12 @@ const parseArgs = (args) => {
       if (opt[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('--')) usage(`missing or repeated --${key}`);
       opt[key] = args[++i];
     }
-    else if (args[i] === '--number') opt.number = true;
+    else if (args[i] === '--number' || args[i] === '--transcripts') opt[args[i].slice(2)] = true;
     else if (args[i].startsWith('--')) usage(`unknown option: ${args[i]}`);
     else files.push(args[i]);
   }
-  if ((Boolean(opt.job) === Boolean(opt['job-json'])) || files.length === 0) usage('usage: run.mjs (--job <job.json> | --job-json <json>) [--number] [--out <dir>] <input files...>');
+  if ((Boolean(opt.job) === Boolean(opt['job-json'])) || files.length === 0) usage('usage: run.mjs (--job <job.json> | --job-json <json>) [--number | --transcripts] [--out <dir>] <input files...>');
+  if (opt.number && opt.transcripts) usage('--number and --transcripts are mutually exclusive');
   opt.out = opt.out ? resolve(opt.out) : mkdtempSync(join(tmpdir(), 'local-llm-batch-'));
   return { opt, files };
 };
@@ -152,11 +154,11 @@ const main = async () => {
   if (!isLoopbackEndpoint(endpoint)) usage(loopbackError(endpoint));
   const { job, cap, check, capSource } = await loadJob(opt, endpoint);
 
-  if (check === 'quote-in-line' && !opt.number) { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
+  if (check === 'quote-in-line' && !opt.number && !opt.transcripts) { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
     for (const f of files) {
       let t;
       try { t = readFileSync(f, 'utf8'); } catch { continue; } // reported as unreadable_input when its turn comes
-      if (t.split('\n').some((l) => l.length && !/^L\d+\t/.test(l))) usage(`${f}: not numbered input; run batch/flatten-transcripts.mjs (or use --number) first`);
+      if (t.split('\n').some((l) => l.length && !/^L\d+\t/.test(l))) usage(`${f}: not numbered input; use --number for raw text or --transcripts for sessions`);
     }
   }
 
@@ -164,12 +166,12 @@ const main = async () => {
   const path = (n) => `${opt.out}/${n}`;
   const started = new Date();
   indexPath = path('index.md');
-  writeFileSync(indexPath, `RUNNING since ${started.toISOString()} (pid ${process.pid}) — not complete\n`);
-  for (const n of ['rows.jsonl', 'dropped.jsonl', 'failures.jsonl']) writeFileSync(path(n), '');
-  const emit = (n, o) => appendFileSync(path(n), JSON.stringify(o) + '\n');
+  writeFileSync(indexPath, `RUNNING since ${started.toISOString()} (pid ${process.pid}) — not complete\n`, { flag: 'wx' });
+  const outputs = new Map(['rows.jsonl', 'dropped.jsonl', 'failures.jsonl'].map((n) => [n, openSync(path(n), 'wx')]));
+  const emit = (n, o) => appendFileSync(outputs.get(n), JSON.stringify(o) + '\n');
 
   const schema = { type: 'object', properties: { rows: { type: 'array', items: job.row_schema } }, required: ['rows'] };
-  const stats = { windows: 0, answered: 0, noRows: 0, noRowIds: [], kept: 0, dropped: 0, reached: 0, tokens: { prompt: 0, completion: 0 }, failures: {}, kinds: {}, perFile: [] };
+  const stats = { transcriptLines: 0, unparseable: 0, windows: 0, answered: 0, noRows: 0, noRowIds: [], kept: 0, dropped: 0, reached: 0, tokens: { prompt: 0, completion: 0 }, failures: {}, kinds: {}, perFile: [] };
   let last = null;
   let windowFailure = null;
   const fail = (type, f, w, detail) => {
@@ -186,6 +188,12 @@ const main = async () => {
     stats.perFile.push(fs); stats.reached++;
     let text;
     try { text = readFileSync(file, 'utf8'); } catch (e) { fail('unreadable_input', name, 0, e.code ?? e.name); continue; }
+    if (opt.transcripts) {
+      const { lines, unparseable } = flatten(text);
+      stats.transcriptLines += lines.length; stats.unparseable += unparseable;
+      console.error(`${name}: ${lines.length} flattened lines, ${unparseable} unparseable skipped`);
+      text = lines.join('\n');
+    }
     const { windows, overCap } = makeWindows(text.split(/\r?\n/).map((l, i) => opt.number && l.length ? `L${i + 1}\t${l}` : l).filter((l) => l.length), cap);
     for (const l of overCap) fail('line_over_cap', name, 0, `${l.split('\t')[0].slice(0, 20)} (${l.length} chars)`);
     if (!windows.length && !overCap.length) fail('empty_input', name, 0, 'no lines');
@@ -253,6 +261,7 @@ const main = async () => {
     `Kept per kind: ${list(stats.kinds)}.`,
     `Failures: ${list(stats.failures)}.`,
     ...(stats.noRows ? [`Returned no rows: ${stats.noRows} (includes all rows dropped by check); ${stats.noRowIds.join(', ')}.`] : []),
+    ...(opt.transcripts ? [`Transcript flattening: ${stats.transcriptLines} lines, ${stats.unparseable} unparseable skipped (blocks cut at 2000 chars).`] : []),
     `Tokens: ${stats.tokens.prompt} prompt, ${stats.tokens.completion} completion.`,
   ];
   const index = [
@@ -262,7 +271,8 @@ const main = async () => {
     ...(stats.perFile.length > shown.length ? [`| (${stats.perFile.length - shown.length} more files) | | | |`] : []),
     '', 'Detail: rows.jsonl, dropped.jsonl (with reason), failures.jsonl in this directory.',
   ];
-  writeFileSync(`${indexPath}.tmp`, index.join('\n') + '\n');
+  writeFileSync(`${indexPath}.tmp`, index.join('\n') + '\n', { flag: 'wx' });
+  for (const fd of outputs.values()) closeSync(fd);
   renameSync(`${indexPath}.tmp`, indexPath);
   console.log(summary.join('\n'));
   console.log(indexPath); // stable last stdout line, including failed/aborted runs with an index
@@ -272,7 +282,7 @@ const main = async () => {
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((e) => {
     console.error(`run.mjs: ${e instanceof UsageError ? e.message : `crashed: ${e.stack ?? e}`}`);
-    if (!(e instanceof UsageError) && indexPath) { try { writeFileSync(indexPath, `**FAILED**: run.mjs crashed (${e.name}); results are incomplete.\n`); } catch { /* the stderr message stands */ } }
+    if (!(e instanceof UsageError) && indexPath) { try { writeFileSync(`${indexPath}.crash`, `**FAILED**: run.mjs crashed (${e.name}); results are incomplete.\n`, { flag: 'wx' }); renameSync(`${indexPath}.crash`, indexPath); } catch { /* the stderr message stands */ } }
     process.exit(2);
   });
 }
