@@ -370,6 +370,10 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
+mkdir -p /tmp/local-llm-batch/hooktest && printf 'L1\tx\n' > /tmp/local-llm-batch/hooktest/staged.txt
+batch_cmd staged-input allow "$RUN --job-json '{}' '/tmp/local-llm-batch/hooktest/staged.txt'"
+printf 'L1\tx\n' > "$HOOK_TMP/out.txt"
+batch_cmd tmp-not-staged reject "$RUN --job-json '{}' '$HOOK_TMP/out.txt'"
 batch_cmd mixed-inputs reject "$RUN --job-json '{}' '$INPUT' '$HOOK_TMP/allowed-evil/out.txt'"
 batch_cmd symlink-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed/link.txt'"
 batch_cmd symlink-parent-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed/dirlink/../out.txt'"

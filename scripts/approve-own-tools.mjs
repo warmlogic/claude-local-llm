@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
+export const STAGING_DIR = '/tmp/local-llm-batch';
 
 const batchArgsAllowed = (script, args, cwd) => {
   const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
@@ -40,7 +41,11 @@ const batchArgsAllowed = (script, args, cwd) => {
     } else if (arg.startsWith('-')) return false; // Includes --job: only inline jobs may bypass approval.
     else files.push(arg);
   }
-  return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), roots));
+  // The one tmp location inputs may come from: where the skill stages flattened or copied outside data. Not all of
+  // tmp, so arbitrary tmp files still go through the normal permission flow.
+  const staging = [];
+  try { staging.push(realpathSync.native(STAGING_DIR)); } catch { /* nothing staged yet */ }
+  return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), [...roots, ...staging]));
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
 // No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.
