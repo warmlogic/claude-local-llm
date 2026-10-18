@@ -142,7 +142,7 @@ test('default is silent for 35k files and retains only the above-cap note', asyn
   assert.equal(r.stderr, '');
   const text = hintText(r);
   assert.equal(text.split('\n').length, 1);
-  assert.match(text, /hint-2.txt.*too big for the loaded model's context.*45,875 chars.*Grep or Read the relevant slices, or use batch\/run.mjs/);
+  assert.match(text, /hint-2.txt.*too big for the loaded model's context.*45,875 chars.*Grep or Read the relevant slices.*Only when the user explicitly requests a local batch over multiple files, use batch\/run.mjs/);
   assert.doesNotMatch(text, /invoke|delegat|together/);
 });
 test('hook delegates inclusive bounds, warns above cap, and looks up once per prompt', async () => {
@@ -159,7 +159,7 @@ test('hook delegates inclusive bounds, warns above cap, and looks up once per pr
     assert.match(line, /bytes \(a char proxy\)/);
     assert.match(line, /32,768 tokens, about 45,875 chars; loaded/);
   }
-  assert.match(lines[2], /too big for the loaded model's context.*32,768 tokens, about 45,875 chars.*Grep or Read the relevant slices, or use batch\/run.mjs for many-window jobs/);
+  assert.match(lines[2], /too big for the loaded model's context.*32,768 tokens, about 45,875 chars.*Grep or Read the relevant slices.*Only when the user explicitly requests a local batch over multiple files, use batch\/run.mjs/);
   assert.doesNotMatch(lines[2], /invoke/);
   assert.equal(lines[3], 'local-llm: The files that fit exceed the loaded context together; if the job is delegated, make one call per file.');
   const requests = readFileSync(f.log, 'utf8').trim().split('\n').map(JSON.parse);
@@ -214,7 +214,7 @@ test('skill requires hinted kinds or an explicit local-model request', () => {
   assert.match(skill, /Delegate unprompted only for the task kinds named by the size hint/);
   assert.match(skill, /With no hint naming kinds, delegate only when the user explicitly asks for the local model/);
   assert.match(skill.split('\n')[2], /with no hint naming kinds, use it only when the user explicitly asks for the local model/);
-  assert.match(skill, /bulk checkable.*invoke `local-llm:batch-local`/);
+  assert.match(skill, /bulk checkable.*invoke `local-llm:batch-local` only when the user explicitly asks/);
 });
 test('delegation harness prompts exercise classify and extract with opt-in', () => {
   const harness = readFileSync(join(repo, 'tests/test-delegation.sh'), 'utf8');

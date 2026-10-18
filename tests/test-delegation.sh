@@ -9,7 +9,7 @@
 # Each case runs DELEG_RUNS times (default 5) in a headless session with the plugin loaded via --plugin-dir
 # and no --allowedTools. run_claude exports CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS=classify,extract unless already set
 # (an explicit empty value is preserved), then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
-# DELEG_RUNS). Cases a, a2, b, g, h, j, k and l need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
+# DELEG_RUNS). Cases a, a2, b, g, h, j and l need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
 #   a  35k-char file, "classify <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
@@ -29,11 +29,9 @@
 #      sit in projects; the prompt that works at a neutral path must also work here
 #   j  the same doc with a judgment prompt ("Is the decision in <path> the right call? Argue it."): NOT delegated,
 #      Claude reads the file itself (as b). The guard against an instruction so strong it hands judgment to the local model
-#   k  opt-in: 60 support tickets of ~4k chars; contextual sentiment/area classification (not greppable);
-#      own batch runner, then index Read, corpus exposure <= 0.10
-#   l  opt-in: one ~35k log, extraction; no batch runner launch
+#   l  one ~35k log, extraction; no batch runner launch
 #   f  no permission prompt for the plugin: no permission_denials entry for the Skill call or the plugin's tools in
-#      any inspectable trace (including k/l batch Bash) (other denials, i.e. Claude's own compound Bash, are printed, not gated)
+#      any inspectable trace (including batch Bash) (other denials, i.e. Claude's own compound Bash, are printed, not gated)
 # A trace that does not parse or has no result event is "unknown" and fails its case, as does a non-zero claude exit.
 #
 # Exposure answers "did the file's content reach Claude's context?" without enumerating read commands: every line
@@ -51,7 +49,7 @@
 # headless or subagent user. Whether a text mentions the outage is judged by one cheap model call (haiku, no tools),
 # not by patterns over English; DELEG_JUDGE_CHECK=1 scores the judge against labeled messages.
 #
-# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g h j")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
+# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g h j l")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
 # default a new mktemp dir that is kept)  DELEG_ALLOWED_TOOLS (passed to --allowedTools; setting it voids the
 # no-prompt result, since it grants the permissions under test)  DELEG_JUDGE (stub = canned verdicts from
 # tests/fixtures/deleg/judge.json)  DELEG_SETTING_SOURCES (default "project": the user's settings, allow rules,
@@ -64,7 +62,7 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 FX="$SCRIPT_DIR/fixtures/deleg"
 RUNS="${DELEG_RUNS:-5}"
 case "$RUNS" in ''|*[!0-9]*|0|0[0-9]*) echo "FAIL: DELEG_RUNS must be an integer >= 1, got '$RUNS'" >&2; exit 1 ;; esac
-CASES="${DELEG_CASES:-a a2 b c d e g h j}"
+CASES="${DELEG_CASES:-a a2 b c d e g h j l}"
 SOURCES="${DELEG_SETTING_SOURCES-project}"
 RUN_TIMEOUT_SEC=300
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
@@ -131,7 +129,6 @@ summarize() {
         | .value.message.content[]? | select(.type == "tool_result")
         | {id: .tool_use_id, is_error: (.is_error // false), text: (.content | txt), pos: $k}] as $res
     | [$uses[] | . as $u | . + {res: (first($res[] | select(.id == $u.id)) // null)}] as $J
-    | [$J[] | select(batch_command)] as $B
     | [$J[] | select(.name == "Bash" and ((.input.command // "") | startswith("node ") and contains("/batch/run.mjs")))] as $anyBatch
     | [$J[] | select(.name == $ft)] as $D
     | [$D[] | select(names_target)] as $Dt
@@ -153,12 +150,6 @@ summarize() {
         delegate_calls: ($D | length),
         late_delegate_calls: (if $ff < 0 then 0 else [$D[] | select(.pos > $ff and .mid != $first.mid)] | length end),
         batch_calls: ($anyBatch | length),
-        own_batch_calls: ($B | length),
-        batch_index_read: ([$J[] | select(.name == "Read" and .res != null and (.res.is_error | not))
-          | . as $read | (.input.file_path // "") as $path
-          | select($path | endswith("/index.md"))
-          | select(any($B[]; .pos < $read.pos))
-          | select(any($res[]; .pos < $read.pos and (.text | contains($path))))] | length > 0),
         delegated: ($Dt | length > 0),
         delegate_ok: ([$Dt[] | select(.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not) and footer_ok)] | length > 0),
         saw_fetch_failed: ([$Dt[] | select(.res != null and (.res.text | contains("fetch failed")))] | length > 0),
@@ -201,8 +192,6 @@ check_a2() { check_a "$1"; }
 check_g() { check_a "$1" && jq -e '.plugin_denied | length == 0' >/dev/null <<<"$1"; }
 # h: as a, on a real-looking project doc
 check_h() { check_a "$1"; }
-check_k() { jq -e --argjson max "$EXPOSURE_MAX" '.ok and (.is_error | not) and .answer_chars > 0
-  and .own_batch_calls > 0 and .batch_index_read and .exposure <= $max and (.plugin_denied | length == 0)' >/dev/null <<<"$1"; }
 check_l() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .batch_calls == 0' >/dev/null <<<"$1"; }
 check_b() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
 # j: a judgment job on a big doc is not delegated: as b, Claude reads the file itself
@@ -360,44 +349,6 @@ selftest() {
   expect_e "e: turn 2 rereads only the first file" fail e1-ok e2-reread-a
   expect_e "e: the judge has no verdict for a text (infrastructure error)" error e1-ok e2-unjudged
   expect_e "e: turn 2 summary says a log server is down" pass e1-ok e2-server-summary
-  # Exercise the real corpus generator without starting a Claude session or contacting a model.
-  expect_tickets() {
-    local dir got=fail
-    dir=$(mktemp -d) || { verdict "$1" pass error; return; }
-    if node "$SCRIPT_DIR/gen-support-tickets.mjs" "$dir" && node --input-type=module - "$dir" <<'NODE'
-import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-const files = readdirSync(process.argv[2]);
-assert.equal(files.length, 60);
-const markers = new Set();
-let total = 0;
-for (const file of files) {
-  const text = readFileSync(join(process.argv[2], file), 'utf8');
-  assert.match(file, /^ticket-\d{3}\.txt$/);
-  assert.ok(text.length >= 3800 && text.length <= 4200);
-  assert.ok(text.endsWith('\n') && text.includes('Customer message:') && text.includes('Agent reply:'));
-  for (const line of text.trimEnd().split('\n')) {
-    const match = /^(K\d{3}-\d{3}) .+ (eol=KEND\d{3}-\d{3})$/.exec(line);
-    assert.ok(match, 'whole line with two exposure markers');
-    for (const marker of match.slice(1)) { assert.ok(!markers.has(marker)); markers.add(marker); }
-  }
-  total += text.length;
-}
-assert.ok(total >= 228000 && total <= 252000);
-NODE
-    then got=pass; fi
-    rm -rf "$dir"
-    verdict "$1" pass "$got"
-  }
-  expect_tickets "k: 60 conversations total about 240k chars, with unique whole-line markers"
-  expect "k: runner and index with low corpus exposure" pass k k-ok tickets
-  expect "k: no runner" fail k k-no-run tickets
-  expect "k: no index read" fail k k-no-index tickets
-  expect "k: full corpus read" fail k k-exposed tickets
-  expect "k: other plugin path" fail k k-foreign tickets
-  expect "k: index path not returned by a tool" fail k k-wrong-index tickets
-  expect "k: batch permission denial" fail k k-denied tickets
   expect "l: single-file extraction stays off batch" pass l l-ok app-20k.log
   expect "l: single-file batch launch" fail l l-batch app-20k.log
   expect_error "a missing fixture is an error" does-not-exist
@@ -523,7 +474,6 @@ gen_adr() {
     }
     printf "%s", s}'
 }
-node "$SCRIPT_DIR/gen-support-tickets.mjs" "$FIX/tickets" || die "generating support tickets"
 gen_log 35000 > "$FIX/app-35k.log"
 gen_log 2000 > "$FIX/app-2k.log"
 gen_log 35000 2026-03-05T14 > "$FIX/app-35k-b.log"
@@ -580,11 +530,10 @@ case " $CASES " in *" d "*)
   copy_plugin "$PLUGINS/nomodel" "http://127.0.0.1:$(cat "$PLUGINS/port")" ;;
 esac
 
-plugin_for() { case "$1" in a|a2|b|g|k|l) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
-target_for() { case "$1" in k) echo "$FIX/tickets" ;; b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
+plugin_for() { case "$1" in a|a2|b|g|l) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
+target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
 prompt_for() {
   case "$1" in
-    k) echo "For each support ticket in $FIX/tickets, classify the customer's overall sentiment (positive, neutral, negative) and the product area it concerns (billing, account access, reporting, mobile sync, notifications). Interpret the customer's own experience, distinguishing it from quoted comments and the agent's reply. Then list counts per sentiment and per product area." ;;
     l) echo "Extract every ERROR line and its stated cause from $FIX/app-35k.log." ;;
     b) echo "Classify $FIX/app-2k.log in five bullet points." ;;
     e) echo "Classify $FIX/app-35k.log in three bullet points." ;;
@@ -618,7 +567,7 @@ report_run() {
 }
 for c in $CASES; do
   if [ -z "$(plugin_for "$c")" ]; then echo "unknown case: $c"; overall=1; continue; fi
-  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ] || [ "$c" = h ] || [ "$c" = j ] || [ "$c" = k ] || [ "$c" = l ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
+  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ] || [ "$c" = h ] || [ "$c" = j ] || [ "$c" = l ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
   passes=0
   for n in $(seq 1 "$RUNS"); do
     trace="$OUT/$c-$n.jsonl"
@@ -659,7 +608,7 @@ for c in $CASES; do
     elif [ "$rc" -ne 0 ]; then verdict="FAIL (claude exited $rc)"
     elif "check_$c" "$s"; then passes=$((passes+1)); verdict=pass
     else verdict=FAIL; fi
-    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, late_delegate_calls, saw_fetch_failed, saw_no_model, batch_calls, batch_index_read, delegated, exposure, denied, answer_chars}' <<<"$s" 2>/dev/null)"
+    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, late_delegate_calls, saw_fetch_failed, saw_no_model, batch_calls, delegated, exposure, denied, answer_chars}' <<<"$s" 2>/dev/null)"
     report_run "$rc" "$trace" "$verdict"
   done
   if [ "$passes" -ge "$THRESHOLD" ]; then echo "case $c: $passes/$RUNS PASS"; else echo "case $c: $passes/$RUNS FAIL"; overall=1; fi

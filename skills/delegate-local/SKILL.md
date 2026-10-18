@@ -33,7 +33,7 @@ A bounded eligible text job over one or a few files totaling about 30k character
 
 ## When not to
 
-Small inputs. Decisions, judgment, security review, multi-file edits, or anything needing your tools. Secrets, credentials, or files outside the allowed folders. Jobs where a wrong answer is costly and you cannot spot-check it. Input over the size hint's cap (about 45k characters without a hint): Grep or Read the relevant slices. For several files that together exceed the cap, delegate one call per file. For bulk checkable extraction, classification or mining (roughly 5+ files or 150k+ characters across multiple files), invoke `local-llm:batch-local`; it runs the batch job in the background and reads its index. Never use batch for a single-file job.
+Small inputs. Decisions, judgment, security review, multi-file edits, or anything needing your tools. Secrets, credentials, or files outside the allowed folders. Jobs where a wrong answer is costly and you cannot spot-check it. Input over the size hint's cap (about 45k characters without a hint): Grep or Read the relevant slices. For several files that together exceed the cap, delegate one call per file. For bulk checkable extraction, classification or mining across multiple files, invoke `local-llm:batch-local` only when the user explicitly asks for the local model or a batch/local run; it runs in the background and reads its index. Never use batch unprompted or for a single-file job.
 
 ## How to call
 

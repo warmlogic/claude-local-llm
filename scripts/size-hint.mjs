@@ -77,7 +77,7 @@ if (files.length > 0) {
     : `assumed 32k context (model metadata unavailable: ${reason}); about ${number(capChars)} chars; ${source}`;
   const lines = files.map(({ path, size }) => {
     const prefix = `local-llm: ${path} is about ${number(size)} bytes (a char proxy).`;
-    if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices, or use batch/run.mjs for many-window jobs.`;
+    if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices. Only when the user explicitly requests a local batch over multiple files, use batch/run.mjs.`;
     if (!tasks.length) return null;
     return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only ${taskList} task, invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too. Send the Skill call and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message (they are independent), and use the stated size instead of running \`wc -c\` again.`;
   }).filter(Boolean);

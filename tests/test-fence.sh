@@ -449,7 +449,7 @@ batch_cmd symlink-out reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-jso
 HOOK="$ORIGINAL_HOOK"
 if [ "$HAD_ALLOWED_DIRS" = x ]; then export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$SAVED_ALLOWED_DIRS"; else unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; fi
 if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:batch-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then ok "approval hook allows batch-local skill"; else bad "approval hook allows batch-local skill"; fi
-if [ "$(wc -l < "$BROOT/skills/batch-local/SKILL.md")" -lt 60 ] && jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Bash") != null' "$BROOT/hooks/hooks.json" >/dev/null; then ok "batch skill under 60 lines and Bash hook wired"; else bad "batch skill bounds/hook matcher"; fi
+if [ "$(wc -l < "$BROOT/skills/batch-local/SKILL.md")" -le 50 ] && jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Bash") != null' "$BROOT/hooks/hooks.json" >/dev/null; then ok "batch skill at most 50 lines and Bash hook wired"; else bad "batch skill bounds/hook matcher"; fi
 for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local2"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"delegate-local"}}' \
