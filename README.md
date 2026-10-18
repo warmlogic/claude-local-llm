@@ -4,7 +4,22 @@ Offload file-heavy, low-stakes text jobs from Claude Code to a model running loc
 
 Unprompted single-file delegation is off by default (`delegate_tasks` is empty). On real files with today's local model, delegated answers were usable 4/10 vs 8/10 when Claude read the file itself, and cost 3% more. Claude reads the file itself unless you explicitly ask, for example, "use the local model to classify …", or opt in to task kinds such as `classify,extract` in the plugin configuration.
 
-When enabled, the size hint names eligible task kinds for files from about 30k characters through the loaded model's context cap (about 45k without a size hint). The local model reads the file and returns text; only its answer and any lines Claude spot-checks enter Claude's context. Claude treats the answer as a draft and checks it in proportion to what depends on it. Above-cap warnings remain active with delegation off. Many-file and mining jobs use `batch/run.mjs`.
+When enabled, the size hint names eligible task kinds for files from about 30k characters through the loaded model's context cap (about 45k without a size hint). The local model reads the file and returns text; only its answer and any lines Claude spot-checks enter Claude's context. Claude treats the answer as a draft and checks it in proportion to what depends on it. Above-cap warnings remain active with delegation off. Batch classification, extraction and mining across many files use `batch-local` only when you explicitly request the local model or a batch/local run. Single-file jobs never start batch.
+
+## When to use it
+
+- **An explicit single-file job:** “Use the local model to extract ERROR messages from /path/to/app.log.” Use files from 30k characters through the loaded context cap, with output you can check.
+- **A deliberate batch over many files or transcripts:** “Use the local model to classify these 200 tickets in /path/to/tickets.” Or: “Run a local batch over these transcripts to mine corrections with quotes.” Choose classification, narrow extraction or mining with evidence; [batch measurements](docs/results.md#d-unprompted-batch-routing) explain why this requires an explicit request.
+- **Measured opt-in delegation:** once your model measures well, set `delegate_tasks` to kinds such as `classify,extract`, then ask “Classify /path/to/large-document.md by topic.” [The current model's results](docs/results.md#c-unprompted-single-file-delegation-re-measured-2026-10-17-run-20261017-213110) keep this off by default.
+
+Don't use it for:
+
+- **Open-ended summaries or drafts:** summaries were usable 0/3; drafts have no measured quality result. Prefer checkable tasks ([results C](docs/results.md#c-unprompted-single-file-delegation-re-measured-2026-10-17-run-20261017-213110)).
+- **Judgment or synthesis:** quotes establish evidence location, not sound conclusions; re-checking the corpus erased the intended batch benefit ([results D](docs/results.md#d-unprompted-batch-routing)).
+- **Small files:** fixed orchestration overhead makes 20k–25k files cost the same or more; below 20k is unmeasured ([results](docs/results.md)).
+- **Anything secret:** answers, quotes and fallback reads can reach Claude; local inference does not make this a private channel (see [Privacy and security](#privacy-and-security)).
+
+Outside Claude, save a job JSON file ([example below](#bulk-jobs)), then run `node "/path/to/plugin/batch/run.mjs" --job "/tmp/job.json" --number "/path/a" "/path/b"`. Use `--transcripts` instead of `--number` for session JSONL.
 
 Status:
 
@@ -20,6 +35,30 @@ Status:
 - Node.js with `npx`. The plugin starts its server with `npx`.
 - [LM Studio](https://lmstudio.ai) and its `lms` command line tool.
 - Claude Code.
+
+## Bulk jobs
+
+Ask explicitly: “Run a local batch over the logs in /path/to/logs to extract ERROR lines and their stated causes with quotes.” Ordinary requests never trigger the batch skill. Automatic routing was measured at 14–17 Claude turns and $0.19–0.44 on 60 tickets; [results D](docs/results.md#d-unprompted-batch-routing) explains the decision.
+
+In an interactive session, Claude writes the job JSON to a scratch file with Write, lists inputs to expand globs into explicit paths, then starts the runner in the background with `--job <file>`. This avoids inline-JSON shell quoting. Claude reads the returned `index.md` and checks only rows the answer depends on, without re-reading the inputs.
+
+For the same job outside Claude, save this as `/tmp/local-job.json`:
+
+```json
+{"prompt":"Find every ERROR line and its stated cause. Cite line L<n> and quote verbatim (at least 12 characters or the whole line). Do not infer causes. Return no rows when none match.","check":"quote-in-line","max_window_chars":20000,"row_schema":{"type":"object","additionalProperties":false,"required":["line","quote","cause"],"properties":{"line":{"type":"string"},"quote":{"type":"string"},"cause":{"type":"string"}}}}
+```
+
+Then run (replace the plugin and input paths with yours):
+
+```bash
+node "/path/to/claude-local-llm/batch/run.mjs" --job "/tmp/local-job.json" --number "/path/log-a" "/path/log-b"
+```
+
+`--job-json '<job JSON>'` is the headless alternative, auto-approved by the plugin hook when the whole command and inputs pass its checks. `--job <file>` uses normal permissions. The two forms are mutually exclusive and validated identically. Omit `--out` to create a fresh private OS temporary directory; the last stdout line gives its absolute `index.md` path. Read the index for counts, no-row windows and failures.
+
+`--number` adds `L<n><TAB>` to raw lines in memory, preserving source line numbers for quote checks. For session JSONL, use `--transcripts` instead; it flattens in memory, cuts blocks at 2000 characters, and reports unparseable lines skipped. Interpretation-heavy jobs use about 20k-character windows. Quote checks establish where evidence occurs, not whether labels are correct or every fact was found.
+
+Batch uses Bash's filesystem access. Only pass intended inputs, and keep scratch jobs, transcripts and rows uncommitted. The runner uses `LOCAL_LLM_ENDPOINT_URL` and `LOCAL_LLM_MODEL` for non-default setups; plugin configuration does not reach Bash. The offline delegation self-test retains case l, which guards against single-file batch launches. Case l is in the default paid harness (55 sessions); no paid run is needed for the offline checks.
 
 ## 1. Set up LM Studio
 
@@ -136,9 +175,9 @@ Save `{"delegate_tasks":""}` to turn it off again. Existing saved options take p
 
 The plugin ships what it needs, so you do not add an allow rule.
 
-- A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) allows exactly three things, by exact name: a `Skill` call for `local-llm:delegate-local`, and the read-only tools `mcp__plugin_local-llm_local-llm__code_task_files` and `mcp__plugin_local-llm_local-verify__verify_claims`. That is why a plain "use the local model to classify ..." needs no prompt either. Every other tool, including the server's other tools (`chat`, `discover`, ...), is left to Claude Code's normal permission flow. A deny rule on the tool itself still wins over the hook: denying `mcp__plugin_local-llm_local-llm__code_task_files` removes the tool, and Claude reads the file itself. A `Read(...)` deny rule on a folder does not stop the plugin's tools; `allowed_dirs` does.
+- A `PreToolUse` hook (`hooks/hooks.json`, `scripts/approve-own-tools.mjs`) approves the exact skills `local-llm:delegate-local` and `local-llm:batch-local`, the read-only tools `mcp__plugin_local-llm_local-llm__code_task_files` and `mcp__plugin_local-llm_local-verify__verify_claims`, and whole Bash commands invoking `node "<resolved plugin root>/batch/run.mjs" <args>`. Approval requires `--job-json` and every input realpathed into `allowed_dirs`, with `--number` as the only optional flag. `--transcripts`, `--out`, `--job` and the manual flattener CLI get no automatic approval: they go through the normal permission prompt, since transcripts hold copies of files from past sessions. The hook also approves a Read of the runner's own `index.md`, `rows.jsonl`, `dropped.jsonl` or `failures.jsonl` when the file is in a `local-llm-batch-XXXXXX` dir that `mkdtemp` made directly under the OS tmpdir: mode 0700, owned by you, no symlinks or hardlinks. This assumes the hook and the Bash tool share one `TMPDIR`; where they differ (sandbox mode), the Read falls back to a prompt.
 - The skill's `allowed-tools` line covers `code_task_files` for the turn that loads the skill.
-- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) stats files named in your prompt, using bytes as a char proxy. From 30,000 bytes through the loaded context cap it instructs Claude to invoke the skill for exactly the known kinds configured in `delegate_tasks` (default empty: no delegation instruction); above the cap it says to Grep or Read relevant slices, or use `batch/run.mjs` for many-window jobs. Files that together exceed the cap get one call per file. Below 30,000 it is silent. It reads no file contents and queries loopback context metadata at most once per eligible prompt, with a 1-second timeout and a 32k-token fallback.
+- A `UserPromptSubmit` hook (`scripts/size-hint.mjs`) stats files named in your prompt, using bytes as a char proxy. From 30,000 bytes through the loaded context cap it instructs Claude to invoke the skill for exactly the known kinds configured in `delegate_tasks` (default empty: no delegation instruction); above the cap it says to Grep or Read relevant slices, or use `batch/run.mjs` when you explicitly request a local batch over multiple files. Files that together exceed the cap get one call per file. Below 30,000 it is silent. It reads no file contents and queries loopback context metadata at most once per eligible prompt, with a 1-second timeout and a 32k-token fallback.
 - The skill sends Claude to the Read and Grep tools for the rest, because compound shell commands can still prompt in any session.
 
 ## Privacy and security
@@ -221,7 +260,7 @@ LM Studio is not serving, or no model is loaded. `Invalid model identifier ... j
 
 ### Claude never delegates
 
-This is the default: `delegate_tasks` is empty because real-file delegation produced fewer usable answers (4/10 vs 8/10) and cost 3% more. Ask explicitly ("use the local model to classify …") to test your setup, or save `{"delegate_tasks":"classify,extract"}` to opt in. Unprompted delegation then applies only to the kinds named by the size hint, from about 30k characters through the loaded context cap. Inputs above the cap should be split or read directly; many-file and mining jobs use `batch/run.mjs`.
+This is the default: `delegate_tasks` is empty because real-file delegation produced fewer usable answers (4/10 vs 8/10) and cost 3% more. Ask explicitly ("use the local model to classify …") to test your setup, or save `{"delegate_tasks":"classify,extract"}` to opt in. Unprompted delegation then applies only to the kinds named by the size hint, from about 30k characters through the loaded context cap. Inputs above the cap should be split or read directly; many-file and mining jobs use `batch/run.mjs` only on an explicit local-model or batch/local request.
 
 ## Swapping the server
 

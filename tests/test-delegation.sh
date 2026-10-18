@@ -9,7 +9,7 @@
 # Each case runs DELEG_RUNS times (default 5) in a headless session with the plugin loaded via --plugin-dir
 # and no --allowedTools. run_claude exports CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS=classify,extract unless already set
 # (an explicit empty value is preserved), then the stream-json trace is scored with jq. A case PASSes at >= 4/5 (scaled to
-# DELEG_RUNS). Cases a, a2, b, g, h and j need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
+# DELEG_RUNS). Cases a, a2, b, g, h, j and l need LM Studio at 127.0.0.1:1234; c, d and e point a temp copy of the plugin at a
 # dead port or a fake endpoint and never touch LM Studio.
 #   a  35k-char file, "classify <path>": code_task_files succeeds on it, unprompted, and little of the file
 #      reaches Claude (exposure <= 0.10)
@@ -29,8 +29,9 @@
 #      sit in projects; the prompt that works at a neutral path must also work here
 #   j  the same doc with a judgment prompt ("Is the decision in <path> the right call? Argue it."): NOT delegated,
 #      Claude reads the file itself (as b). The guard against an instruction so strong it hands judgment to the local model
+#   l  one ~35k log, extraction; no batch runner launch
 #   f  no permission prompt for the plugin: no permission_denials entry for the Skill call or the plugin's tools in
-#      any inspectable trace of a-j (other denials, i.e. Claude's own compound Bash, are printed, not gated)
+#      any inspectable trace (including batch Bash) (other denials, i.e. Claude's own compound Bash, are printed, not gated)
 # A trace that does not parse or has no result event is "unknown" and fails its case, as does a non-zero claude exit.
 #
 # Exposure answers "did the file's content reach Claude's context?" without enumerating read commands: every line
@@ -48,7 +49,7 @@
 # headless or subagent user. Whether a text mentions the outage is judged by one cheap model call (haiku, no tools),
 # not by patterns over English; DELEG_JUDGE_CHECK=1 scores the judge against labeled messages.
 #
-# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g h j")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
+# Environment: DELEG_RUNS (5)  DELEG_CASES ("a a2 b c d e g h j l")  DELEG_MODEL (default model)  DELEG_OUT (trace dir,
 # default a new mktemp dir that is kept)  DELEG_ALLOWED_TOOLS (passed to --allowedTools; setting it voids the
 # no-prompt result, since it grants the permissions under test)  DELEG_JUDGE (stub = canned verdicts from
 # tests/fixtures/deleg/judge.json)  DELEG_SETTING_SOURCES (default "project": the user's settings, allow rules,
@@ -61,7 +62,7 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 FX="$SCRIPT_DIR/fixtures/deleg"
 RUNS="${DELEG_RUNS:-5}"
 case "$RUNS" in ''|*[!0-9]*|0|0[0-9]*) echo "FAIL: DELEG_RUNS must be an integer >= 1, got '$RUNS'" >&2; exit 1 ;; esac
-CASES="${DELEG_CASES:-a a2 b c d e g h j}"
+CASES="${DELEG_CASES:-a a2 b c d e g h j l}"
 SOURCES="${DELEG_SETTING_SOURCES-project}"
 RUN_TIMEOUT_SEC=300
 FILE_TOOL="mcp__plugin_local-llm_local-llm__code_task_files"
@@ -98,11 +99,13 @@ unknown_summary() { echo "summarize: $1" >&2; jq -nc --arg w "$1" '{ok:false,unk
 # A Bad call (houtini's argument errors) followed by a corrected call is the skill's sanctioned retry, so it never counts
 # as the first failure and the corrected call is not a late one.
 summarize() {
-  local trace="$1" file="$2" lines flags why
-  [ -f "$file" ] || { unknown_summary "missing fixture file $file"; return 0; }
-  lines=$(awk 'NF{printf "%s\t%s\n", $1, $NF}' "$file" | jq -R 'split("\t") | unique' | jq -sc .) && [ "$lines" != "[]" ] || { unknown_summary "no markers in $file"; return 0; }
+  local trace="$1" file="$2" lines flags why plugin="${3:-/plugin}"
+  local targets=() f
+  if [ -d "$file" ]; then for f in "$file"/*; do [ ! -f "$f" ] || targets+=("$f"); done; else targets=("$file"); fi
+  [ "${#targets[@]}" -gt 0 ] && [ -f "${targets[0]}" ] || { unknown_summary "missing fixture file $file"; return 0; }
+  lines=$(awk 'NF{printf "%s\t%s\n", $1, $NF}' "${targets[@]}" | jq -R 'split("\t") | unique' | jq -sc .) && [ "$lines" != "[]" ] || { unknown_summary "no markers in $file"; return 0; }
   flags=$(skill_flags 2>/dev/null) || { why=$(skill_flags 2>&1 >/dev/null | head -n 1); unknown_summary "$why"; return 0; }
-  jq -s --arg ft "$FILE_TOOL" --arg base "$(basename "$file")" --argjson lines "$lines" --argjson flags "$flags" '
+  jq -s --arg plugin "$plugin" --arg ft "$FILE_TOOL" --arg base "$(basename "$file")" --argjson lines "$lines" --argjson flags "$flags" '
     def txt: if type == "array" then map(.text // "") | join(" ") else (. // "" | tostring) end;
     def frac($blob): (([$lines[] | select(any(.[]; . as $t | $blob | contains($t)))] | length) / ($lines | length)) * 100 | round / 100;
     def plen: .input.paths | if type == "array" then length else 0 end;
@@ -114,6 +117,11 @@ summarize() {
       | ([$f | capture("· (?<r>[0-9]+)(/(?<t>[0-9]+))? file\\(s\\) read")] | .[0]) as $c
       | $c != null and ($c.t == null or $c.r == $c.t) and (($c.r | tonumber) == plen)
         and ([$flags[] | select(. as $x | $f | contains($x))] | length == 0);
+    def batch_command:
+      .name == "Bash" and ((.input.command // "") as $c | any([
+        "node \"" + $plugin + "/batch/run.mjs\"", "node \u0027" + $plugin + "/batch/run.mjs\u0027", "node " + $plugin + "/batch/run.mjs"
+      ][]; . as $prefix | ($c == $prefix or ($c | startswith($prefix + " ")))));
+    def batch_command_denial: {name: .tool_name, input: .tool_input} | batch_command;
     . as $all
     | [$all | to_entries[] | select(.value.type == "assistant") | .key as $k
         | .value.message.content[]? | select(.type == "tool_use") | {id, name, input, pos: $k, mid: $all[$k].message.id}] as $uses
@@ -121,6 +129,7 @@ summarize() {
         | .value.message.content[]? | select(.type == "tool_result")
         | {id: .tool_use_id, is_error: (.is_error // false), text: (.content | txt), pos: $k}] as $res
     | [$uses[] | . as $u | . + {res: (first($res[] | select(.id == $u.id)) // null)}] as $J
+    | [$J[] | select(.name == "Bash" and ((.input.command // "") | startswith("node ") and contains("/batch/run.mjs")))] as $anyBatch
     | [$J[] | select(.name == $ft)] as $D
     | [$D[] | select(names_target)] as $Dt
     | ([$Dt[] | select(.res != null and (.res.is_error or (.res.text | startswith("Error:"))) and (.res.text | test("^Error: (all )?paths must") | not))] | min_by(.res.pos)) as $first
@@ -135,11 +144,12 @@ summarize() {
         answer_chars: (($r.result // "") | length),
         is_error: (if ($r | has("is_error")) then $r.is_error else true end),
         denied: [($r.permission_denials // [])[] | .tool_name],
-        plugin_denied: [($r.permission_denials // [])[] | .tool_name | select(. == "Skill" or startswith("mcp__plugin_local-llm_"))],
+        plugin_denied: [($r.permission_denials // [])[] | select(.tool_name == "Skill" or (.tool_name | startswith("mcp__plugin_local-llm_")) or batch_command_denial) | .tool_name],
         mcp_tool_listed: ([$all[] | select(.type == "system" and .subtype == "init") | .tools[]?] | index($ft) != null),
         skill_used: ([$J[] | select(.name == "Skill")] | length > 0),
         delegate_calls: ($D | length),
         late_delegate_calls: (if $ff < 0 then 0 else [$D[] | select(.pos > $ff and .mid != $first.mid)] | length end),
+        batch_calls: ($anyBatch | length),
         delegated: ($Dt | length > 0),
         delegate_ok: ([$Dt[] | select(.res != null and (.res.is_error | not) and (.res.text | startswith("Error:") | not) and footer_ok)] | length > 0),
         saw_fetch_failed: ([$Dt[] | select(.res != null and (.res.text | contains("fetch failed")))] | length > 0),
@@ -182,6 +192,7 @@ check_a2() { check_a "$1"; }
 check_g() { check_a "$1" && jq -e '.plugin_denied | length == 0' >/dev/null <<<"$1"; }
 # h: as a, on a real-looking project doc
 check_h() { check_a "$1"; }
+check_l() { jq -e '.ok and (.is_error | not) and .answer_chars > 0 and .batch_calls == 0' >/dev/null <<<"$1"; }
 check_b() { jq -e --argjson min "$EXPOSURE_MIN" '.ok and (.is_error | not) and .answer_chars > 0 and .delegate_calls == 0 and .exposure >= $min' >/dev/null <<<"$1"; }
 # j: a judgment job on a big doc is not delegated: as b, Claude reads the file itself
 check_j() { check_b "$1"; }
@@ -338,6 +349,8 @@ selftest() {
   expect_e "e: turn 2 rereads only the first file" fail e1-ok e2-reread-a
   expect_e "e: the judge has no verdict for a text (infrastructure error)" error e1-ok e2-unjudged
   expect_e "e: turn 2 summary says a log server is down" pass e1-ok e2-server-summary
+  expect "l: single-file extraction stays off batch" pass l l-ok app-20k.log
+  expect "l: single-file batch launch" fail l l-batch app-20k.log
   expect_error "a missing fixture is an error" does-not-exist
   expect_error "an unparseable trace is an error" garbage
   expect_f "f: a plugin-tool denial is flagged" fail f-plugin-denied
@@ -389,7 +402,7 @@ judge_check() {
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required${2:+; $2}"; }
 if [ "${DELEG_PRINT_FLAGS:-}" = 1 ]; then need jq; skill_flags; exit $?; fi
 if [ "${DELEG_SELFTEST:-}" = 1 ] || [ "${1:-}" = "--self-test" ]; then
-  need jq; DELEG_JUDGE=stub selftest; exit $?
+  need jq; need node; DELEG_JUDGE=stub selftest; exit $?
 fi
 if [ "${DELEG_JUDGE_CHECK:-}" = 1 ]; then
   need claude; need jq; need shasum
@@ -414,6 +427,7 @@ JUDGE_CACHE="$OUT"
 FIX=$(mktemp -d "$REPO/tests/.tmp-deleg-XXXXXX") || die "mktemp for fixtures"
 FIX=$(cd "$FIX" && pwd -P)
 PLUGINS=$(mktemp -d) || die "mktemp for plugin copies"
+PLUGINS=$(cd "$PLUGINS" && pwd -P) # match the hook's resolved plugin root, including macOS /var aliases
 WORK=$(mktemp -d) || die "mktemp for the session cwd"   # outside the repo: no project memory, no ancestor node_modules
 FAKE_PID=""
 PROJROOT=$(mktemp -d) || die "mktemp for the project"
@@ -484,7 +498,7 @@ done
 # and, when given, whose allowed_dirs default is just <allowed-dir>
 copy_plugin() {
   mkdir -p "$1" || die "mkdir $1"
-  cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" "$REPO/server" "$REPO/skills" "$REPO/hooks" "$1/" \
+  cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" "$REPO/server" "$REPO/batch" "$REPO/skills" "$REPO/hooks" "$1/" \
     || die "copying the plugin to $1"
   jq --arg u "$2" --arg d "${3:-}" '.userConfig.endpoint_url.default = $u | if $d != "" then .userConfig.allowed_dirs.default = [$d] else . end' "$REPO/.claude-plugin/plugin.json" > "$1/.claude-plugin/plugin.json" \
     || die "rewriting plugin.json in $1"
@@ -516,10 +530,11 @@ case " $CASES " in *" d "*)
   copy_plugin "$PLUGINS/nomodel" "http://127.0.0.1:$(cat "$PLUGINS/port")" ;;
 esac
 
-plugin_for() { case "$1" in a|a2|b|g) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
+plugin_for() { case "$1" in a|a2|b|g|l) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
 target_for() { case "$1" in b) echo "$FIX/app-2k.log" ;; a2|g) echo "$FIX/notes-0412.md" ;; h|j) echo "$DOC" ;; *) echo "$FIX/app-35k.log" ;; esac; }
 prompt_for() {
   case "$1" in
+    l) echo "Extract every ERROR line and its stated cause from $FIX/app-35k.log." ;;
     b) echo "Classify $FIX/app-2k.log in five bullet points." ;;
     e) echo "Classify $FIX/app-35k.log in three bullet points." ;;
     h) echo "Classify $DOC in 5 bullets." ;;
@@ -552,7 +567,7 @@ report_run() {
 }
 for c in $CASES; do
   if [ -z "$(plugin_for "$c")" ]; then echo "unknown case: $c"; overall=1; continue; fi
-  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ] || [ "$c" = h ] || [ "$c" = j ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
+  if [ "$lm_up" = 0 ] && { [ "$c" = a ] || [ "$c" = a2 ] || [ "$c" = b ] || [ "$c" = g ] || [ "$c" = h ] || [ "$c" = j ] || [ "$c" = l ]; }; then echo "case $c: SKIP (LM Studio lists no model)"; skipped=$((skipped+1)); continue; fi
   passes=0
   for n in $(seq 1 "$RUNS"); do
     trace="$OUT/$c-$n.jsonl"
@@ -587,13 +602,13 @@ for c in $CASES; do
     fi
     case "$c" in h|j) RUN_CWD="$PROJ" ;; *) RUN_CWD="" ;; esac
     RUN_CWD="$RUN_CWD" run_claude "$PLUGINS/$(plugin_for "$c")" "$(prompt_for "$c")" "$trace"; rc=$?
-    s=$(summarize "$trace" "$(target_for "$c")")
+    s=$(summarize "$trace" "$(target_for "$c")" "$PLUGINS/$(plugin_for "$c")")
     tally "$s"
     if ! jq -e '.ok' >/dev/null <<<"$s"; then verdict="FAIL (unknown: $(jq -r '.why // "unknown"' <<<"$s" 2>/dev/null))"
     elif [ "$rc" -ne 0 ]; then verdict="FAIL (claude exited $rc)"
     elif "check_$c" "$s"; then passes=$((passes+1)); verdict=pass
     else verdict=FAIL; fi
-    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, late_delegate_calls, saw_fetch_failed, saw_no_model, delegated, exposure, denied, answer_chars}' <<<"$s" 2>/dev/null)"
+    echo "  $c-$n $verdict $(jq -c '{mcp_tool_listed, skill_used, delegate_calls, late_delegate_calls, saw_fetch_failed, saw_no_model, batch_calls, delegated, exposure, denied, answer_chars}' <<<"$s" 2>/dev/null)"
     report_run "$rc" "$trace" "$verdict"
   done
   if [ "$passes" -ge "$THRESHOLD" ]; then echo "case $c: $passes/$RUNS PASS"; else echo "case $c: $passes/$RUNS FAIL"; overall=1; fi

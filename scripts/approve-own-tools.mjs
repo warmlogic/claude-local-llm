@@ -1,17 +1,91 @@
-// PreToolUse hook. Pre-approves this plugin's own delegate-local skill and, by EXACT name, its read-only tools, so
-// that neither invoking the skill nor asking plainly ("use the local model to ...") hits a permission prompt (in
-// `claude -p` an unapproved call is denied; the skill's `allowed-tools` only applies once the skill is loaded).
-// Everything else gets no output, so the normal permission flow decides: the other houtini tools (chat,
-// custom_prompt, embed, ...) stay unapproved.
-// Why this is safe: code_task_files and verify_claims only read files, each server is fenced to the configured
-// allowed folders (scripts/launch-server.sh and scripts/launch-verify.sh fail closed, and the verify server
-// re-checks the fence, the loopback endpoint and the proxy environment itself), and all inference stays on
-// loopback. A deny rule on a tool name still wins over this hook; Read(...) deny rules on folders do
-// not apply to MCP tool arguments, so allowed_dirs is the only boundary on what these tools read.
-// Names are exact, and the skill name is qualified: a bare `delegate-local` could be another plugin's skill.
-import { readFileSync } from 'node:fs';
+// Only the batch runner, invoked as a whole Bash command, and Reads of its own output files may bypass normal approval.
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const SKILL = 'local-llm:delegate-local';
+const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
+const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
+const batchArgsAllowed = (args, cwd) => {
+  const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
+    ?? JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')).userConfig.allowed_dirs.default.join(',');
+  const roots = execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
+    env: { ...process.env, LOCAL_LLM_ALLOWED_DIRS: configured },
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
+  }).trim().split(',').filter(Boolean);
+  if (!roots.length) return false;
+  // Preserve symlink/.. ordering: resolve() before realpath could approve a different file.
+  const real = (path) => realpathSync.native(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
+  const files = [], options = new Set();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--number' || arg === '--transcripts') {
+      if (options.has(arg)) return false;
+      options.add(arg);
+      continue;
+    }
+    if (arg === '--job-json') {
+      if (options.has(arg) || !args[i + 1] || args[i + 1].startsWith('--')) return false;
+      options.add(arg);
+      i++;
+    } else if (arg.startsWith('-')) return false; // --job and --out too: an approved run writes only to a fresh private tmp dir.
+    else files.push(arg);
+  }
+  if (options.has('--number') && options.has('--transcripts')) return false;
+  // --transcripts is never auto-approved: session transcripts under $HOME/.claude/projects hold copies of files from
+  // every past session, so reading them goes through the normal permission flow (batch runs are explicit anyway).
+  if (options.has('--transcripts')) return false;
+  return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), roots));
+};
+// A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
+// No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.
+export const ownBatchCommand = (command, cwd = process.cwd()) => {
+  if (typeof command !== 'string' || /[\r\n\0]/.test(command)) return false;
+  let quote = null, word = '', started = false;
+  const words = [];
+  const push = () => { if (started) words.push(word); word = ''; started = false; };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote === "'") { if (c === "'") quote = null; else word += c; continue; }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === '$' || c === '`' || c === '\\') return false;
+      else word += c;
+      continue;
+    }
+    if (c === "'" || c === '"') { quote = c; started = true; }
+    else if (/[ \t]/.test(c)) push();
+    else if (c === '&' && /^[ \t]*$/.test(command.slice(i + 1))) { push(); break; }
+    else if (c === '\\' && command[i + 1] === "'") { word += "'"; started = true; i++; }
+    else if (/[A-Za-z0-9._\/,:@%+-]/.test(c)) { word += c; started = true; }
+    else return false; // allowlist for unquoted characters: anything else (=cmd, globs, ~, braces, ...) could expand
+  }
+  if (quote) return false;
+  push();
+  if (words[0] !== 'node' || words.length < 2) return false;
+  const script = words[1];
+  if (script !== `${root}/batch/run.mjs`) return false;
+  try { return realpathSync(script) === script && batchArgsAllowed(words.slice(2), cwd); } catch { return false; }
+};
+
+// The runner's results: a Read of one of its four output files, inside a dir it made with mkdtemp directly under
+// the OS tmpdir (local-llm-batch-XXXXXX), owned by this user, with neither the dir nor the file a symlink.
+const OUTPUTS = new Set(['index.md', 'rows.jsonl', 'dropped.jsonl', 'failures.jsonl']);
+export const ownBatchOutput = (filePath) => {
+  if (typeof filePath !== 'string' || !isAbsolute(filePath)) return false;
+  try {
+    const dir = dirname(filePath), name = basename(filePath);
+    const f = lstatSync(filePath), d = lstatSync(dir);
+    if (!OUTPUTS.has(name) || f.isSymbolicLink() || !f.isFile() || f.nlink !== 1 || d.isSymbolicLink() || !d.isDirectory()) return false;
+    if ((d.mode & 0o777) !== 0o700) return false; // mkdtemp's mode: a hand-made dir with looser permissions is not the runner's
+    if (d.uid !== process.getuid() || f.uid !== process.getuid()) return false;
+    const realDir = realpathSync.native(dir);
+    return dirname(realDir) === realpathSync.native(tmpdir()) && /^local-llm-batch-[A-Za-z0-9]{6}$/.test(basename(realDir));
+  } catch { return false; }
+};
+
+const SKILLS = new Set(['local-llm:delegate-local', 'local-llm:batch-local']);
 const TOOLS = new Set([
   'mcp__plugin_local-llm_local-llm__code_task_files',
   'mcp__plugin_local-llm_local-verify__verify_claims',
@@ -22,13 +96,14 @@ try {
 } catch {
   process.exit(0); // unreadable input: stay out of the way
 }
-const isOwnSkill = input?.tool_name === 'Skill' && input?.tool_input?.skill === SKILL;
-if (isOwnSkill || TOOLS.has(input?.tool_name)) {
+const isOwnSkill = input?.tool_name === 'Skill' && SKILLS.has(input?.tool_input?.skill);
+if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && ownBatchCommand(input?.tool_input?.command, input.cwd))
+    || (input?.tool_name === 'Read' && ownBatchOutput(input?.tool_input?.file_path))) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      permissionDecisionReason: 'local-llm plugin skill or read-only tool',
+      permissionDecisionReason: 'local-llm plugin skill, read-only tool or batch command',
     },
   }));
 }

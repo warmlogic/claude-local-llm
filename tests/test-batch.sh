@@ -71,6 +71,31 @@ run_batch "$EP" "$TMP/out-n" "$TMP/a.txt"
 if [ "$(count "$TMP/out-n/rows.jsonl")" -eq $((nreq*2)) ] && [ "$(count "$TMP/out-n/dropped.jsonl")" -eq 0 ]; then ok 'check "none" keeps every row'
 else bad "check none: kept $(count "$TMP/out-n/rows.jsonl") dropped $(count "$TMP/out-n/dropped.jsonl")"; fi
 
+# Inline job, automatic output directory and raw line numbering (including blank/CRLF lines).
+printf 'first raw evidence here\r\n\r\nthird raw evidence here\r\n' > "$TMP/raw.txt"
+job quote-in-line 2000
+before=$(shasum "$TMP/raw.txt")
+LOCAL_LLM_ENDPOINT_URL="$EP" TMPDIR="$TMP" node "$RUN" --number --job-json "$(cat "$TMP/job.json")" "$TMP/raw.txt" > "$TMP/inline.stdout" 2> "$TMP/inline.stderr"; RC=$?
+inline_index=$(tail -n 1 "$TMP/inline.stdout")
+if [ "$RC" -eq 0 ] && [ -f "$inline_index" ] && [ "$(dirname "$inline_index")" != "$TMP" ] \
+   && [ "$before" = "$(shasum "$TMP/raw.txt")" ] \
+   && jq -e -s 'map(select(.body)) | last | .body.messages[-1].content | contains("L1\tfirst raw evidence here\nL3\tthird raw evidence here")' "$LOG" >/dev/null \
+   && [ "$(count "$(dirname "$inline_index")/rows.jsonl")" -eq 1 ] \
+   && grep -q 'inline job' "$inline_index"; then ok "inline job: fresh tmp output, last stdout index path, physical raw line numbers and quote checking without changing input"
+else bad "inline job/numbering: rc=$RC index=$inline_index $(cat "$TMP/inline.stderr")"; fi
+LOCAL_LLM_ENDPOINT_URL="$EP" TMPDIR="$TMP" node "$RUN" --number --job-json "$(cat "$TMP/job.json")" "$TMP/raw.txt" > "$TMP/inline2.stdout" 2>/dev/null; RC=$?
+if [ "$RC" -eq 0 ] && [ -f "$(tail -n 1 "$TMP/inline2.stdout")" ] && [ "$(tail -n 1 "$TMP/inline2.stdout")" != "$inline_index" ]; then ok "omitted --out creates a fresh directory per run"; else bad "fresh output directory"; fi
+for args in both malformed reserved missing; do
+  case "$args" in
+    both) opts=(--job "$TMP/job.json" --job-json "$(cat "$TMP/job.json")") ;;
+    malformed) opts=(--job-json '{') ;;
+    reserved) opts=(--job-json "$(jq '.row_schema.properties.file={type:"string"}' "$TMP/job.json")") ;;
+    missing) opts=(--job-json) ;;
+  esac
+  LOCAL_LLM_ENDPOINT_URL="$EP" TMPDIR="$TMP" node "$RUN" --out "$TMP/invalid" "$TMP/raw.txt" "${opts[@]}" > "$TMP/invalid.out" 2>&1; RC=$?
+  if [ "$RC" -eq 2 ] && [ ! -f "$TMP/invalid/index.md" ]; then ok "inline validation rejects $args"; else bad "inline validation $args rc=$RC"; fi
+done
+
 # --- empty replies, all-dropped windows and optional minimum row count ----------
 start_fake zs batch-empty-some
 lines 24 100 "$TMP/zero.txt"      # one line per window; even windows return []
@@ -125,6 +150,12 @@ console.log(JSON.stringify([
 if [ "$cq" = '[null,"quote_not_in_line","line_not_in_window","quote_too_short","quote_too_short","quote_not_in_line","quote_not_in_line","quote_too_short","quote_too_short",null,null,"quote_too_short","missing_line_or_quote","missing_line_or_quote","quote_too_short","quote_too_short"]' ]; then ok "checkQuote: matches the text field only (not role, kind or id), needs 12 chars unless it is the whole text"
 else bad "checkQuote: $cq"; fi
 
+raw_quote=$(node --input-type=module -e '
+import { checkQuote } from "'"$REPO"'/batch/run.mjs";
+const m = new Map([["L1", "L1\tuser\tpermission_denial\tthe raw content"]]);
+console.log(checkQuote({line:"L1",quote:"user\tpermission_denial"}, m, true));')
+if [ "$raw_quote" = null ]; then ok "raw numbering treats role-like prefixes as source evidence"; else bad "raw numbering stripped source fields: $raw_quote"; fi
+
 # --- a line over the cap -------------------------------------------------------
 lines 5 100 "$TMP/c.txt"
 { head -2 "$TMP/c.txt"; printf 'L90\tuser\ttext\t%s\n' "$(head -c 3000 /dev/zero | tr '\0' y)"; tail -3 "$TMP/c.txt"; } > "$TMP/c2.txt"
@@ -178,6 +209,41 @@ if [ "$(count "$f")" -eq 5 ] && [ "$(sed -n 1p "$f")" = "$(printf 'L1\tuser\ttex
    && [ "$(sed -n 4p "$f")" = "$(printf 'L4\tuser\ttool_error\tout')" ] && [ "$(sed -n 3p "$f" | cut -f1-3)" = "$(printf 'L3\tassistant\ttool_use')" ] \
    && [ "$(sed -n 5p "$f" | cut -f4)" = "${long:0:2000}…" ]; then ok "flatten: ids, roles and kinds; thinking, empty and non-message entries skipped; newlines folded; blocks cut at 2000 chars"
 else bad "flatten output: $(cut -c1-80 "$f")"; fi
+
+# Integrated transcripts must produce exactly the same windows and rows as the manual CLI pipeline.
+start_fake transcripts batch
+job quote-in-line 2200
+run_batch "$EP" "$TMP/out-flat" "$TMP/flat/s.txt"
+flat_rc=$RC
+request_texts "$LOG" > "$TMP/flat-requests"
+: > "$LOG"
+LOCAL_LLM_ENDPOINT_URL="$EP" node "$RUN" --job "$TMP/job.json" --out "$TMP/out-transcripts" --transcripts "$TMP/s.jsonl" > "$TMP/transcript.stdout" 2> "$TMP/transcript.stderr"; RC=$?
+request_texts "$LOG" > "$TMP/transcript-requests"
+if [ "$flat_rc" -eq 0 ] && [ "$RC" -eq 0 ] && [ -s "$TMP/out-flat/rows.jsonl" ] \
+   && cmp -s "$TMP/flat-requests" "$TMP/transcript-requests" \
+   && diff -u <(jq -c 'del(.file)' "$TMP/out-flat/rows.jsonl") <(jq -c 'del(.file)' "$TMP/out-transcripts/rows.jsonl") \
+   && jq -e -s 'all(.[]; .file == "s.jsonl")' "$TMP/out-transcripts/rows.jsonl" >/dev/null; then ok "--transcripts matches flatten-then-run windows and rows, retaining the session filename"
+else bad "integrated transcripts: rc=$flat_rc/$RC $(head -c 300 "$TMP/transcript.stderr")"; fi
+if grep -q '^s.jsonl: 5 flattened lines, 1 unparseable skipped$' "$TMP/transcript.stderr" \
+   && grep -q '^Transcript flattening: 5 lines, 1 unparseable skipped (blocks cut at 2000 chars).$' "$TMP/out-transcripts/index.md"; then ok "--transcripts reports flattened and unparseable skipped counts on stderr and in index.md"
+else bad "transcript counts: $(head -12 "$TMP/out-transcripts/index.md")"; fi
+run_batch "$EP" "$TMP/out-mode-conflict" --number --transcripts "$TMP/s.jsonl"
+if [ "$RC" -eq 2 ] && grep -q 'mutually exclusive' "$TMP/run.out" && [ ! -e "$TMP/out-mode-conflict" ]; then ok "--number and --transcripts cannot be combined"
+else bad "conflicting input modes: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
+
+# Exclusive output creation refuses an existing file or symlink instead of following it.
+for name in index.md rows.jsonl dropped.jsonl failures.jsonl index.md.tmp; do
+  dest="$TMP/exclusive-$name"
+  mkdir -p "$dest"
+  printf 'sentinel\n' > "$TMP/sentinel"
+  ln -s "$TMP/sentinel" "$dest/$name"
+  run_batch "$EP" "$dest" --transcripts "$TMP/s.jsonl"
+  # The running index is replaced deliberately; all other output names must be exclusively created.
+  if [ "$name" = index.md ]; then
+    if [ "$RC" -eq 0 ] && [ ! -L "$dest/$name" ] && [ "$(cat "$TMP/sentinel")" = sentinel ]; then ok "output index replaces a stale symlink without following it"; else bad "stale index followed"; fi
+  elif [ "$RC" -eq 2 ] && [ "$(cat "$TMP/sentinel")" = sentinel ]; then ok "exclusive output creation: $name refuses an existing symlink"
+  else bad "exclusive output creation: $name rc=$RC sentinel=$(head -c 80 "$TMP/sentinel")"; fi
+done
 
 # --- direct-run guards: proxy, distinct basenames, paths with spaces -------------------
 : > "$LOG"
@@ -267,7 +333,7 @@ validate schema-declares-file '.row_schema.properties.file = {type:"string"}'
 validate schema-declares-reason '.row_schema.properties.reason = {type:"string"}'
 printf 'just a plain line\nanother plain line\n' > "$TMP/plain.txt"
 run_batch "$EP" "$TMP/out-plain" "$TMP/plain.txt"
-if [ "$RC" -eq 2 ] && grep -q 'not numbered input; run batch/flatten-transcripts.mjs' "$TMP/run.out" && [ ! -e "$TMP/out-plain" ]; then ok "quote-in-line on unnumbered input exits 2 and says to flatten first"
+if [ "$RC" -eq 2 ] && grep -q 'not numbered input; use --number for raw text or --transcripts for sessions' "$TMP/run.out" && [ ! -e "$TMP/out-plain" ]; then ok "quote-in-line on unnumbered input exits 2 and explains the input modes"
 else bad "unnumbered input: rc=$RC $(head -c 200 "$TMP/run.out")"; fi
 { head -2 "$TMP/m.txt"; echo 'an unnumbered line after numbered ones'; } > "$TMP/mixed.txt"
 run_batch "$EP" "$TMP/out-mixed" "$TMP/mixed.txt"
