@@ -56,6 +56,7 @@ work_dir() {
 copy_plugin() {
   local part parts=(.claude-plugin .mcp.json package.json scripts skills hooks)
   [ -e "$1/server" ] && parts+=(server)
+  [ -e "$1/batch" ] && parts+=(batch)
   mkdir -p "$2" || return 1
   for part in "${parts[@]}"; do cp -R "$1/$part" "$2/" || return 1; done
 }

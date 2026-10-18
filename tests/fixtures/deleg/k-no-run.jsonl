@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"id":"msg-t1","content":[{"type":"tool_use","id":"t1","name":"TaskOutput","input":{"task_id":"task1","block":true}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Completed: 12 of 12 windows answered.\n/tmp/batch-one/index.md"}]}}
+{"type":"assistant","message":{"id":"msg-r1","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/tmp/batch-one/index.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"Completed: 12 of 12 windows answered. Rows: 12 kept. Failures: none."}]}}
+{"type":"result","is_error":false,"result":"Local model extracted 12 rows; 12 windows answered. No failures.","permission_denials":[]}
