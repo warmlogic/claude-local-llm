@@ -8,6 +8,8 @@ When enabled, the size hint names eligible task kinds for files from about 30k c
 
 ## When to use it
 
+The rules behind this list, with every measurement, are in [docs/best-practices.md](docs/best-practices.md).
+
 - **An explicit single-file job:** “Use the local model to extract ERROR messages from /path/to/app.log.” Use files from 30k characters through the loaded context cap, with output you can check.
 - **A deliberate batch over many files or transcripts:** “Use the local model to classify these 200 tickets in /path/to/tickets.” Or: “Run a local batch over these transcripts to mine corrections with quotes.” Choose classification, narrow extraction or mining with evidence; [batch measurements](docs/results.md#d-unprompted-batch-routing) explain why this requires an explicit request.
 - **Measured opt-in delegation:** once your model measures well, set `delegate_tasks` to kinds such as `classify,extract`, then ask “Classify /path/to/large-document.md by topic.” [The current model's results](docs/results.md#c-unprompted-single-file-delegation-re-measured-2026-10-17-run-20261017-213110) keep this off by default.

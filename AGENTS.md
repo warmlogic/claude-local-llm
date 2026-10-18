@@ -114,6 +114,7 @@ measure/
   selftest.sh        # offline: synthetic traces and runs, a fake $HOME, a fake judge
   fixtures/          # synthetic stream-json traces and a synthetic file for selftest.sh
 docs/
+  best-practices.md  # canonical when-and-how rules for a local model beside a frontier agent; model-routing cites it
   results.md         # hand-written findings; run.sh replaces it only with MEASURE_PUBLISH=1
 ```
 
