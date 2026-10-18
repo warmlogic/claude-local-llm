@@ -1,7 +1,7 @@
 // Only the batch runner, invoked as a whole Bash command, and Reads of its own output files may bypass normal approval.
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,10 +33,9 @@ const batchArgsAllowed = (args, cwd) => {
     else files.push(arg);
   }
   if (options.has('--number') && options.has('--transcripts')) return false;
-  if (options.has('--transcripts')) {
-    // Claude Code session transcripts also live outside allowed_dirs, under $HOME/.claude/projects.
-    try { roots.push(realpathSync.native(join(homedir(), '.claude/projects'))); } catch { /* no transcripts */ }
-  }
+  // --transcripts is never auto-approved: session transcripts under $HOME/.claude/projects hold copies of files from
+  // every past session, so reading them goes through the normal permission flow (batch runs are explicit anyway).
+  if (options.has('--transcripts')) return false;
   return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), roots));
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
@@ -59,8 +58,8 @@ export const ownBatchCommand = (command, cwd = process.cwd()) => {
     else if (/[ \t]/.test(c)) push();
     else if (c === '&' && /^[ \t]*$/.test(command.slice(i + 1))) { push(); break; }
     else if (c === '\\' && command[i + 1] === "'") { word += "'"; started = true; i++; }
-    else if (/[;&|<>$`\\#()*?\[\]{}~!]/.test(c)) return false;
-    else { word += c; started = true; }
+    else if (/[A-Za-z0-9._\/,:@%+-]/.test(c)) { word += c; started = true; }
+    else return false; // allowlist for unquoted characters: anything else (=cmd, globs, ~, braces, ...) could expand
   }
   if (quote) return false;
   push();
@@ -78,7 +77,8 @@ export const ownBatchOutput = (filePath) => {
   try {
     const dir = dirname(filePath), name = basename(filePath);
     const f = lstatSync(filePath), d = lstatSync(dir);
-    if (!OUTPUTS.has(name) || f.isSymbolicLink() || !f.isFile() || d.isSymbolicLink() || !d.isDirectory()) return false;
+    if (!OUTPUTS.has(name) || f.isSymbolicLink() || !f.isFile() || f.nlink !== 1 || d.isSymbolicLink() || !d.isDirectory()) return false;
+    if ((d.mode & 0o777) !== 0o700) return false; // mkdtemp's mode: a hand-made dir with looser permissions is not the runner's
     if (d.uid !== process.getuid() || f.uid !== process.getuid()) return false;
     const realDir = realpathSync.native(dir);
     return dirname(realDir) === realpathSync.native(tmpdir()) && /^local-llm-batch-[A-Za-z0-9]{6}$/.test(basename(realDir));

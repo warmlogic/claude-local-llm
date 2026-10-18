@@ -369,6 +369,8 @@ if [ "$(uname -s)" = Darwin ]; then
   batch_cmd private-tmp-out reject "$RUN --out /private/tmp --job-json '{}' '$INPUT'"
 fi
 batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
+printf 'L1\tx\n' > "$HOOK_TMP/allowed/=cat"
+batch_cmd zsh-equals reject "$RUN --job-json '{}' =cat" false "$HOOK_TMP/allowed"
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
 # Reads of the runner's own outputs: index.md etc. in a mkdtemp dir under the OS tmpdir
 read_out() { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | node "$REPO/scripts/approve-own-tools.mjs"; }
@@ -379,7 +381,12 @@ if read_out "$OD/index.md" | grep -q '"allow"'; then ok "batch hook: approves a 
 for f in "$OD/notes.md" "$OD_EVIL/index.md" "$OD/rows.jsonl" "/etc/hosts" "index.md"; do
   if [ -z "$(read_out "$f")" ]; then ok "batch hook: no approval for Read $f"; else bad "batch hook: approved Read $f"; fi
 done
-rm -rf "$OD" "$OD_EVIL"
+# a hardlinked output file and a hand-made dir with looser permissions are not the runner's
+ln "$OD/notes.md" "$OD/failures.jsonl"
+if [ -z "$(read_out "$OD/failures.jsonl")" ]; then ok "batch hook: no approval for Read of a hardlinked output"; else bad "batch hook: approved a hardlinked output"; fi
+LOOSE=$(node -e "const fs=require('fs'),os=require('os'),p=require('path');const d=fs.mkdtempSync(p.join(os.tmpdir(),'local-llm-batch-'));fs.chmodSync(d,0o755);fs.writeFileSync(p.join(d,'index.md'),'x');console.log(d)")
+if [ -z "$(read_out "$LOOSE/index.md")" ]; then ok "batch hook: no approval for Read in a non-0700 dir"; else bad "batch hook: approved Read in a non-0700 dir"; fi
+rm -rf "$OD" "$OD_EVIL" "$LOOSE"
 mkdir -p /tmp/local-llm-batch/hooktest && printf 'L1\tx\n' > /tmp/local-llm-batch/hooktest/staged.txt
 batch_cmd staged-input reject "$RUN --job-json '{}' '/tmp/local-llm-batch/hooktest/staged.txt'"
 printf 'L1\tx\n' > "$HOOK_TMP/out.txt"
@@ -406,10 +413,10 @@ batch_cmd flatten-symlink-input reject "$FLATTEN '$HOOK_TMP/out' '$HOOK_TMP/allo
 batch_cmd flatten-outside-out reject "$FLATTEN '$HOME_TMP/outside' '$INPUT'"
 batch_cmd flatten-unknown-flag reject "$FLATTEN '$HOOK_TMP/out' --number '$INPUT'"
 # Only --transcripts enables the extra session root; use a temporary HOME.
-HOME="$HOOK_TMP/home" batch_cmd transcripts allow "$RUN --transcripts --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
+HOME="$HOOK_TMP/home" batch_cmd transcripts reject "$RUN --transcripts --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
 HOME="$HOOK_TMP/home" batch_cmd run-transcripts reject "$RUN --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
 HOME="$HOOK_TMP/home" batch_cmd number-transcripts reject "$RUN --number --job-json '{}' '$HOOK_TMP/home/.claude/projects/session.jsonl'"
-batch_cmd transcripts-allowed allow "$RUN --transcripts --job-json '{}' '$INPUT'"
+batch_cmd transcripts-allowed reject "$RUN --transcripts --job-json '{}' '$INPUT'"
 batch_cmd conflicting-modes reject "$RUN --number --transcripts --job-json '{}' '$INPUT'"
 HOME="$HOOK_TMP/home" batch_cmd transcripts-outside reject "$RUN --transcripts --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
 ln -s "$HOOK_TMP/allowed-evil/out.txt" "$HOOK_TMP/home/.claude/projects/link.jsonl"
