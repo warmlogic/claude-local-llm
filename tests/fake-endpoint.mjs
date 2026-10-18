@@ -41,6 +41,8 @@
 //   batch-bad          as batch, but every reply's content is not JSON.
 //   batch-bad-once     as batch, but the first reply to each distinct request is not JSON.
 //   batch-length       as batch, but every reply is cut off (finish_reason "length").
+//   batch-empty-some   as batch, but every even request returns an empty rows array.
+//   batch-all-dropped  as batch, but returns only the row with a fabricated quote.
 //   batch-flaky        as batch, but every other request (the 1st, 3rd, ...) fails with HTTP 500.
 //   batch-then-fail    as batch, but only the first request is answered; every later one fails with HTTP 500.
 //   batch-stall        logs the request and never answers.
@@ -158,12 +160,13 @@ const batch = (req, res) => {
     if (mode === 'batch-flaky' && ++requests % 2 === 1) return json(res, 500, { error: { code: 'server_error' } });
     if (mode === 'batch-bad' || (mode === 'batch-bad-once' && first)) return reply('not json');
     if (mode === 'batch-length') return reply('{"rows":[', 'length');
+    if (mode === 'batch-empty-some' && ++requests % 2 === 0) return reply('{"rows":[]}');
     const rows = line ? [
       // file and window are provenance the runner sets; a model-supplied value must never win
       { line: line[1], kind: 'correction', quote: line[2].slice(0, 12), note: 'true quote', file: 'model-says-so', window: 99 },
       { line: line[1], kind: 'stuck', quote: 'FABRICATED-QUOTE-NOT-IN-LINE', note: 'fabricated', reason: 'model-says-so' },
     ] : [];
-    reply(JSON.stringify({ rows }));
+    reply(JSON.stringify({ rows: mode === 'batch-all-dropped' ? rows.slice(1) : rows }));
   });
 };
 const proxy = (req, res) => {

@@ -3,8 +3,9 @@
 // Runs one extraction prompt over many text files on the local model (LM Studio, loopback only), window by
 // window, and writes rows.jsonl, dropped.jsonl, failures.jsonl and a short index.md. See AGENTS.md "Batch runner".
 // job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars"?,
-// "reasoning_effort"?}. index.md is the one file Claude reads, so it never claims more than happened: a stub
-// says RUNNING until the final index replaces it, and its header says how many windows were answered.
+// "reasoning_effort"?, "min_rows_per_window"? (positive integer)}. index.md is the one file Claude reads, so it
+// never claims more than happened: a stub says RUNNING until the final index replaces it, and its header
+// says how many windows were answered.
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -123,6 +124,7 @@ const loadJob = async (path, endpoint) => {
   const capSource = defaults ? `${defaults.source}${defaults.reason ? ` (assumed 32k context; ${defaults.reason})` : ''}` : 'job';
   if (defaults && cap < 1) usage(`the loaded model's context (${defaults.contextTokens} tokens) leaves no room for a window; load a larger context or set max_window_chars`);
   if (typeof job?.prompt !== 'string' || !Number.isInteger(cap) || cap < 1) usage('job needs a prompt and a positive integer max_window_chars');
+  if (job.min_rows_per_window !== undefined && (!Number.isInteger(job.min_rows_per_window) || job.min_rows_per_window < 1)) usage('job min_rows_per_window must be a positive integer');
   if (!job.row_schema || typeof job.row_schema !== 'object' || Array.isArray(job.row_schema)) usage('job row_schema must be a JSON schema object');
   const reserved = RESERVED_ROW_KEYS.filter((k) => Object.hasOwn(job.row_schema.properties ?? {}, k));
   if (reserved.length) usage(`row_schema may not declare ${reserved.join(', ')}: the runner sets them`);
@@ -159,7 +161,7 @@ const main = async () => {
   const emit = (n, o) => appendFileSync(path(n), JSON.stringify(o) + '\n');
 
   const schema = { type: 'object', properties: { rows: { type: 'array', items: job.row_schema } }, required: ['rows'] };
-  const stats = { windows: 0, answered: 0, kept: 0, dropped: 0, reached: 0, tokens: { prompt: 0, completion: 0 }, failures: {}, kinds: {}, perFile: [] };
+  const stats = { windows: 0, answered: 0, noRows: 0, noRowIds: [], kept: 0, dropped: 0, reached: 0, tokens: { prompt: 0, completion: 0 }, failures: {}, kinds: {}, perFile: [] };
   let last = null;
   let windowFailure = null;
   const fail = (type, f, w, detail) => {
@@ -211,12 +213,17 @@ const main = async () => {
           if (attempt === 1) fail('malformed_reply', name, w, p.problem);
         }
       }
+      if (parsed && parsed.length < job.min_rows_per_window) fail('under_min_rows', name, w, `${parsed.length} rows`);
       for (const row of parsed ?? []) {
         const out = { ...row, file: name, window: w }; // the runner's keys win
         const reason = check === 'quote-in-line' ? checkQuote(row, lineMap) : null;
         if (reason) { emit('dropped.jsonl', { ...out, reason }); stats.dropped++; fs.dropped++; continue; }
         emit('rows.jsonl', out); stats.kept++; fs.kept++;
         if (typeof row.kind === 'string') stats.kinds[row.kind] = (stats.kinds[row.kind] ?? 0) + 1;
+      }
+      if (parsed && fs.kept === kept0) {
+        stats.noRows++;
+        if (stats.noRowIds.length < 10) stats.noRowIds.push(`(${name}, ${w})`);
       }
       console.error(`${name} window ${w}/${windows.length}: ${windowFailure ?? `kept ${fs.kept - kept0} dropped ${fs.dropped - dropped0}`}`);
     }
@@ -225,7 +232,7 @@ const main = async () => {
   const failed = stats.answered === 0;
   const base = failed ? `**FAILED**: no window answered (last failure: ${last ?? 'none'})${aborted ? `; aborted after ${MAX_CONSECUTIVE_FAILED_REQUESTS} consecutive failed requests` : ''}.`
     : aborted ? `**ABORTED** after ${MAX_CONSECUTIVE_FAILED_REQUESTS} consecutive failed requests (last failure: ${last}): ${stats.answered} of ${stats.windows} windows answered.`
-    : `Completed: ${stats.answered} of ${stats.windows} windows answered.`;
+    : `Completed: ${stats.answered} of ${stats.windows} windows answered${stats.noRows ? `; ${stats.noRows} returned no rows` : ''}${stats.failures.under_min_rows ? `; ${stats.failures.under_min_rows} under minimum rows` : ''}.`;
   const skipped = ['unreadable_input', 'line_over_cap', 'empty_input', 'duplicate_line_id'].reduce((n, t) => n + (stats.failures[t] ?? 0), 0);
   const header = skipped ? base.replace(/\.$/, `; ${skipped} input problem${skipped > 1 ? 's' : ''} skipped.`) : base;
   const total = stats.kept + stats.dropped;
@@ -237,6 +244,7 @@ const main = async () => {
     `Rows: ${stats.kept} kept, ${stats.dropped} dropped by check "${check}"${total ? ` (${Math.round((100 * stats.kept) / total)}% passing)` : ''}.`,
     `Kept per kind: ${list(stats.kinds)}.`,
     `Failures: ${list(stats.failures)}.`,
+    ...(stats.noRows ? [`Returned no rows: ${stats.noRows} (includes all rows dropped by check); ${stats.noRowIds.join(', ')}.`] : []),
     `Tokens: ${stats.tokens.prompt} prompt, ${stats.tokens.completion} completion.`,
   ];
   const index = [

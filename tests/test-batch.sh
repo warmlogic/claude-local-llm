@@ -71,6 +71,47 @@ run_batch "$EP" "$TMP/out-n" "$TMP/a.txt"
 if [ "$(count "$TMP/out-n/rows.jsonl")" -eq $((nreq*2)) ] && [ "$(count "$TMP/out-n/dropped.jsonl")" -eq 0 ]; then ok 'check "none" keeps every row'
 else bad "check none: kept $(count "$TMP/out-n/rows.jsonl") dropped $(count "$TMP/out-n/dropped.jsonl")"; fi
 
+# --- empty replies, all-dropped windows and optional minimum row count ----------
+start_fake zs batch-empty-some
+lines 24 100 "$TMP/zero.txt"      # one line per window; even windows return []
+job quote-in-line 100
+run_batch "$EP" "$TMP/out-zero" "$TMP/zero.txt"
+if [ "$RC" -eq 0 ] && grep -q '^Completed: 24 of 24 windows answered; 12 returned no rows\.$' "$TMP/out-zero/index.md" \
+   && grep -q '^Returned no rows: 12 (includes all rows dropped by check);' "$TMP/out-zero/index.md" \
+   && [ "$(grep -oE '\(zero.txt, [0-9]+\)' "$TMP/out-zero/index.md" | tr '\n' '|')" = '(zero.txt, 2)|(zero.txt, 4)|(zero.txt, 6)|(zero.txt, 8)|(zero.txt, 10)|(zero.txt, 12)|(zero.txt, 14)|(zero.txt, 16)|(zero.txt, 18)|(zero.txt, 20)|' ]; then ok "empty replies: count in header and index, first ten file/window ids only"
+else bad "empty replies: rc=$RC $(head -10 "$TMP/out-zero/index.md")"; fi
+: > "$TMP/empty-zero.txt"
+run_batch "$EP" "$TMP/out-zero-skipped" "$TMP/zero.txt" "$TMP/empty-zero.txt"
+if grep -q '^Completed: 24 of 24 windows answered; 12 returned no rows; 1 input problem skipped\.$' "$TMP/out-zero-skipped/index.md"; then ok "empty replies preserve the input-problem suffix"
+else bad "empty reply input suffix: $(sed -n 3p "$TMP/out-zero-skipped/index.md")"; fi
+start_fake zd batch-all-dropped
+run_batch "$EP" "$TMP/out-dropped" "$TMP/zero.txt"
+if [ "$RC" -eq 0 ] && grep -q '^Completed: 24 of 24 windows answered; 24 returned no rows\.$' "$TMP/out-dropped/index.md" \
+   && grep -q '^Returned no rows: 24 (includes all rows dropped by check); (zero.txt, 1), (zero.txt, 2),' "$TMP/out-dropped/index.md" \
+   && [ "$(count "$TMP/out-dropped/rows.jsonl")" -eq 0 ] && [ "$(count "$TMP/out-dropped/dropped.jsonl")" -eq 24 ]; then ok "all rows dropped by check are included in the no-row count and ids"
+else bad "all-dropped windows: rc=$RC $(head -10 "$TMP/out-dropped/index.md")"; fi
+start_fake mn batch
+job quote-in-line 2000
+jq '.min_rows_per_window = 3' "$TMP/job.json" > "$TMP/job-min.json"
+JOB="$TMP/job-min.json" run_batch "$EP" "$TMP/out-min" "$TMP/a.txt"
+if [ "$RC" -eq 0 ] && jq -e -s 'length == 4 and all(.[]; .type == "under_min_rows" and .detail == "2 rows" and .file == "a.txt") and (map(.window) == [1,2,3,4])' "$TMP/out-min/failures.jsonl" >/dev/null \
+   && grep -q '^Completed: 4 of 4 windows answered; 4 under minimum rows\.$' "$TMP/out-min/index.md" \
+   && grep -q '^Failures: under_min_rows 4\.$' "$TMP/out-min/index.md" \
+   && [ "$(count "$TMP/out-min/rows.jsonl")" -eq 4 ] && [ "$(count "$TMP/out-min/dropped.jsonl")" -eq 4 ]; then ok "minimum rows: short replies are counted failures and flagged in header, keeping their rows"
+else bad "minimum rows: rc=$RC $(head -10 "$TMP/out-min/index.md") $(head -c 300 "$TMP/out-min/failures.jsonl")"; fi
+jq '.min_rows_per_window = 2' "$TMP/job.json" > "$TMP/job-min.json"
+JOB="$TMP/job-min.json" run_batch "$EP" "$TMP/out-min-boundary" "$TMP/a.txt"
+if [ "$RC" -eq 0 ] && [ "$(count "$TMP/out-min-boundary/failures.jsonl")" -eq 0 ] \
+   && [ "$(sed -n 3p "$TMP/out-min-boundary/index.md")" = 'Completed: 4 of 4 windows answered.' ]; then ok "minimum is inclusive and counts returned rows before the check; clean header stays byte-identical"
+else bad "minimum boundary: rc=$RC $(head -10 "$TMP/out-min-boundary/index.md")"; fi
+start_fake mz batch-empty-some
+jq '.min_rows_per_window = 1' "$TMP/job.json" > "$TMP/job-min.json"
+JOB="$TMP/job-min.json" run_batch "$EP" "$TMP/out-min-zero" "$TMP/a.txt"
+if [ "$RC" -eq 0 ] && jq -e -s 'length == 2 and all(.[]; .type == "under_min_rows" and .detail == "0 rows") and (map(.window) == [2,4])' "$TMP/out-min-zero/failures.jsonl" >/dev/null \
+   && grep -q '^Completed: 4 of 4 windows answered; 2 returned no rows; 2 under minimum rows\.$' "$TMP/out-min-zero/index.md" \
+   && [ "$(count "$TMP/out-min-zero/rows.jsonl")" -eq 2 ]; then ok "empty replies below the minimum count once each as both no-row windows and failures"
+else bad "empty replies below minimum: rc=$RC $(head -10 "$TMP/out-min-zero/index.md")"; fi
+
 # the checker itself: whitespace-normalized fallback and a line that is not in the window
 cq=$(node --input-type=module -e '
 import { checkQuote } from "'"$REPO"'/batch/run.mjs";
@@ -214,6 +255,12 @@ validate() { # <name> <jq filter over the job> : the run must exit 2 and leave -
 validate unknown-check '.check = "nope"'
 validate zero-window-cap '.max_window_chars = 0'
 validate text-window-cap '.max_window_chars = "big"'
+validate zero-min-rows '.min_rows_per_window = 0'
+validate negative-min-rows '.min_rows_per_window = -1'
+validate fractional-min-rows '.min_rows_per_window = 1.5'
+validate text-min-rows '.min_rows_per_window = "2"'
+validate null-min-rows '.min_rows_per_window = null'
+validate boolean-min-rows '.min_rows_per_window = true'
 validate null-row-schema '.row_schema = null'
 validate array-row-schema '.row_schema = []'
 validate schema-declares-file '.row_schema.properties.file = {type:"string"}'
