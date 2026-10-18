@@ -420,6 +420,24 @@ if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-
 else bad "fail-open: rc=$rc_a/$rc_b $(diff "$TMP/run-a.norm" "$TMP/run-b.norm" | head -5)"; fi
 rm -f "$HOME/catalyst"
 
+# --- the runner still dies by the signal, not by an exit code --------------------------------------
+mkdir -p "$HOME/catalyst"; start_fake sg batch-stall
+sigs=$(EP="$EP" RUN="$RUN" JOBF="$TMP/job.json" INPUT="$TMP/m.txt" node --input-type=module -e '
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+const lanes = `${process.env.HOME}/catalyst/band/lanes`;
+const out = [];
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  const c = spawn(process.execPath, [process.env.RUN, "--job", process.env.JOBF, "--out", `${process.env.HOME}/o-${sig}`, process.env.INPUT], { env: { ...process.env, LOCAL_LLM_ENDPOINT_URL: process.env.EP }, stdio: "ignore" });
+  const done = new Promise((r) => c.on("exit", (code, signal) => r(signal ?? `code${code}`)));
+  for (let i = 0; i < 100 && !existsSync(`${lanes}/local-${c.pid}.json`); i++) await new Promise((r) => setTimeout(r, 100));
+  c.kill(sig); out.push(await done);
+}
+console.log(out.join(" "));')
+if [ "$sigs" = "SIGINT SIGTERM" ]; then ok "SIGINT and SIGTERM end the runner by the signal itself (WIFSIGNALED), not by an exit code"
+else bad "death by signal: $sigs"; fi
+rm -rf "$HOME/catalyst"
+
 # --- the git lookup can never hold the run up: a git that ignores SIGTERM is killed ---------------
 mkdir -p "$TMP/gitstub" "$HOME/catalyst"
 printf '#!/bin/sh\ntrap "" TERM\nexec sleep 30\n' > "$TMP/gitstub/git"; chmod +x "$TMP/gitstub/git"
