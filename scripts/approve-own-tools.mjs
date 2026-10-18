@@ -1,8 +1,8 @@
-// Only the batch runner, invoked as a whole Bash command, may bypass normal approval.
-import { readFileSync, realpathSync } from 'node:fs';
+// Only the batch runner, invoked as a whole Bash command, and Reads of its own output files may bypass normal approval.
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, sep } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
@@ -70,6 +70,21 @@ export const ownBatchCommand = (command, cwd = process.cwd()) => {
   try { return realpathSync(script) === script && batchArgsAllowed(words.slice(2), cwd); } catch { return false; }
 };
 
+// The runner's results: a Read of one of its four output files, inside a dir it made with mkdtemp directly under
+// the OS tmpdir (local-llm-batch-XXXXXX), owned by this user, with neither the dir nor the file a symlink.
+const OUTPUTS = new Set(['index.md', 'rows.jsonl', 'dropped.jsonl', 'failures.jsonl']);
+export const ownBatchOutput = (filePath) => {
+  if (typeof filePath !== 'string' || !isAbsolute(filePath)) return false;
+  try {
+    const dir = dirname(filePath), name = basename(filePath);
+    const f = lstatSync(filePath), d = lstatSync(dir);
+    if (!OUTPUTS.has(name) || f.isSymbolicLink() || !f.isFile() || d.isSymbolicLink() || !d.isDirectory()) return false;
+    if (d.uid !== process.getuid() || f.uid !== process.getuid()) return false;
+    const realDir = realpathSync.native(dir);
+    return dirname(realDir) === realpathSync.native(tmpdir()) && /^local-llm-batch-[A-Za-z0-9]{6}$/.test(basename(realDir));
+  } catch { return false; }
+};
+
 const SKILLS = new Set(['local-llm:delegate-local', 'local-llm:batch-local']);
 const TOOLS = new Set([
   'mcp__plugin_local-llm_local-llm__code_task_files',
@@ -82,7 +97,8 @@ try {
   process.exit(0); // unreadable input: stay out of the way
 }
 const isOwnSkill = input?.tool_name === 'Skill' && SKILLS.has(input?.tool_input?.skill);
-if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && ownBatchCommand(input?.tool_input?.command, input.cwd))) {
+if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && ownBatchCommand(input?.tool_input?.command, input.cwd))
+    || (input?.tool_name === 'Read' && ownBatchOutput(input?.tool_input?.file_path))) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',

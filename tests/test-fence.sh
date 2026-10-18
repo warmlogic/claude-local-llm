@@ -370,6 +370,16 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
+# Reads of the runner's own outputs: index.md etc. in a mkdtemp dir under the OS tmpdir
+read_out() { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | node "$REPO/scripts/approve-own-tools.mjs"; }
+OD=$(node -e "const fs=require('fs'),os=require('os'),p=require('path');const d=fs.mkdtempSync(p.join(os.tmpdir(),'local-llm-batch-'));fs.writeFileSync(p.join(d,'index.md'),'x');fs.writeFileSync(p.join(d,'notes.md'),'x');console.log(d)")
+OD_EVIL=$(node -e "const fs=require('fs'),os=require('os'),p=require('path');const d=fs.mkdtempSync(p.join(os.tmpdir(),'other-'));fs.writeFileSync(p.join(d,'index.md'),'x');console.log(d)")
+ln -s "$HOME/.ssh/config" "$OD/rows.jsonl" 2>/dev/null || ln -s /etc/hosts "$OD/rows.jsonl"
+if read_out "$OD/index.md" | grep -q '"allow"'; then ok "batch hook: approves a Read of the runner's index.md"; else bad "batch hook: runner index.md Read not approved"; fi
+for f in "$OD/notes.md" "$OD_EVIL/index.md" "$OD/rows.jsonl" "/etc/hosts" "index.md"; do
+  if [ -z "$(read_out "$f")" ]; then ok "batch hook: no approval for Read $f"; else bad "batch hook: approved Read $f"; fi
+done
+rm -rf "$OD" "$OD_EVIL"
 mkdir -p /tmp/local-llm-batch/hooktest && printf 'L1\tx\n' > /tmp/local-llm-batch/hooktest/staged.txt
 batch_cmd staged-input reject "$RUN --job-json '{}' '/tmp/local-llm-batch/hooktest/staged.txt'"
 printf 'L1\tx\n' > "$HOOK_TMP/out.txt"
@@ -464,7 +474,7 @@ if jq -e '.hooks.PreToolUse | any((.matcher | split("|") | index("Skill") != nul
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"
 else bad "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"; fi
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$REPO/hooks/hooks.json" 2>/dev/null)
-if [ "$matcher" = "Skill|Bash|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
+if [ "$matcher" = "Skill|Bash|Read|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
   ok "PreToolUse matcher covers Skill, Bash and the two read-only file tools"
 else bad "PreToolUse matcher is: $matcher"; fi
 
