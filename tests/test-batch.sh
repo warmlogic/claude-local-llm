@@ -385,18 +385,26 @@ start_stalled CATALYST_TASK=x46 LOCAL_LLM_MODEL=acme/qwen3-7b@q4_k_m.gguf
 lane_wait; lf="$LANES/local-$st_pid.json"
 if jq -e --argjson p "$st_pid" '.v == 1 and .kind == "local" and .pid == $p and .task == "x46" and .label == "qwen3-7b" and (.started | test("^[0-9]{4}-.*Z$")) and (.repo == null or (.repo | startswith("/")))' "$lf" >/dev/null 2>&1; then ok "a running batch writes local-<pid>.json (v 1, kind local, own pid, task, shortened LOCAL_LLM_MODEL label)"
 else bad "lane file: $(head -c 300 "$lf" 2>&1)"; fi
+[ -e "$lf" ]; was_int=$? # present mid-run, or "gone" proves nothing
 kill -INT "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_int=$?
-if [ "$rc_int" -eq 130 ] && [ ! -e "$lf" ]; then ok "SIGINT removes the lane file and exits 130"
+if [ "$was_int" -eq 0 ] && [ "$rc_int" -eq 130 ] && [ ! -e "$lf" ]; then ok "SIGINT removes the lane file and exits 130"
 else bad "SIGINT: rc=$rc_int file=$([ -e "$lf" ] && echo present || echo gone)"; fi
 start_stalled LOCAL_LLM_MODEL=m
 lane_wait; lf="$LANES/local-$st_pid.json"
+[ -e "$lf" ]; was_term=$?
 kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_term=$?
-if [ "$rc_term" -eq 143 ] && [ ! -e "$lf" ]; then ok "SIGTERM removes the lane file and exits 143"
+if [ "$was_term" -eq 0 ] && [ "$rc_term" -eq 143 ] && [ ! -e "$lf" ]; then ok "SIGTERM removes the lane file and exits 143"
 else bad "SIGTERM: rc=$rc_term file=$([ -e "$lf" ] && echo present || echo gone)"; fi
 start_fake ln batch
-run_batch "$EP" "$TMP/out-ln1" "$TMP/a.txt"
-if [ "$RC" -eq 0 ] && ! ls "$LANES"/local-*.json >/dev/null 2>&1; then ok "a normal end leaves no lane file"
-else bad "normal end: rc=$RC $(ls "$LANES" 2>&1)"; fi
+# The probe registers its exit hook before the runner does, so it sees the file just before remove() runs.
+cat > "$TMP/probe.mjs" <<'PROBE'
+import { readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+process.on('exit', () => { try { console.error(`PROBE ${readdirSync(`${homedir()}/catalyst/band/lanes`).join(',')}`); } catch { console.error('PROBE none'); } });
+PROBE
+LOCAL_LLM_ENDPOINT_URL="$EP" node --import "$TMP/probe.mjs" "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln1" "$TMP/a.txt" > "$TMP/run.out" 2>&1; RC=$?
+if [ "$RC" -eq 0 ] && grep -qE '^PROBE local-[0-9]+\.json$' "$TMP/run.out" && ! ls "$LANES"/local-*.json >/dev/null 2>&1; then ok "a normal end removes the lane file that was present until exit"
+else bad "normal end: rc=$RC $(grep PROBE "$TMP/run.out") $(ls "$LANES" 2>&1)"; fi
 rm -rf "$HOME/catalyst"
 HTTP_PROXY=http://127.0.0.1:9 run_batch "$EP" "$TMP/out-ln2" "$TMP/a.txt"; rc_p=$RC
 LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln3" "$TMP/a.txt" > /dev/null 2>&1; rc_nl=$?
