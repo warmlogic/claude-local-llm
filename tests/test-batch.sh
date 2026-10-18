@@ -420,5 +420,20 @@ if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-
 else bad "fail-open: rc=$rc_a/$rc_b $(diff "$TMP/run-a.norm" "$TMP/run-b.norm" | head -5)"; fi
 rm -f "$HOME/catalyst"
 
+# --- the git lookup can never hold the run up: a git that ignores SIGTERM is killed ---------------
+mkdir -p "$TMP/gitstub" "$HOME/catalyst"
+printf '#!/bin/sh\ntrap "" TERM\nexec sleep 30\n' > "$TMP/gitstub/git"; chmod +x "$TMP/gitstub/git"
+t0=$(date +%s)
+repo_out=$(PATH="$TMP/gitstub:$PATH" node --input-type=module -e '
+import { registerLane } from "'"$REPO"'/batch/lane.mjs";
+import { readFileSync } from "node:fs";
+const rm = registerLane({ label: "m" });
+const f = `${process.env.HOME}/catalyst/band/lanes/local-${process.pid}.json`;
+console.log(JSON.stringify(JSON.parse(readFileSync(f, "utf8")).repo)); rm();')
+t1=$(date +%s)
+if [ "$repo_out" = "null" ] && [ $((t1 - t0)) -le 4 ]; then ok "a git that ignores SIGTERM is killed at the timeout: registration returns in $((t1 - t0)) s with repo null"
+else bad "git stub: repo=$repo_out took $((t1 - t0)) s"; fi
+rm -rf "$HOME/catalyst"
+
 echo "batch pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]

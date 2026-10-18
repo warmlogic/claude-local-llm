@@ -16,7 +16,7 @@ export const shortLabel = (name) => {
 
 const gitCommonDir = () => {
   try {
-    const out = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: GIT_TIMEOUT_MS, encoding: 'utf8' }).trim();
+    const out = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: GIT_TIMEOUT_MS, killSignal: 'SIGKILL', encoding: 'utf8' }).trim();
     return out.startsWith('/') && !out.includes('\n') ? out : null;
   } catch { return null; }
 };
