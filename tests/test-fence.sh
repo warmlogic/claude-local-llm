@@ -328,6 +328,41 @@ for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_
     ok "approval hook allows the plugin's read-only tool $t"
   else bad "approval hook allows the plugin's read-only tool $t"; fi
 done
+# Whole-command approval, not prefix approval. Keep every allow/reject visible for mutation checks.
+batch_cmd() {
+  local label="$1" decision="$2" command="$3" background="${4:-false}" output
+  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" '{tool_name:"Bash",tool_input:{command:$c,run_in_background:$b}}')")
+  if { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
+     || { [ "$decision" = reject ] && [ -z "$output" ]; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label"; fi
+}
+# Use physical paths: the shell test REPO may contain a trailing /.. .
+BROOT=$(cd "$REPO" && pwd -P)
+batch_cmd raw allow "node $BROOT/batch/run.mjs --number --job-json '{}' /tmp/a /tmp/b"
+batch_cmd quoted allow "node \"$BROOT/batch/run.mjs\" --job-json '{\"prompt\":\"a; | > < && || \$(literal) \`literal\`\"}' '/tmp/a b'" true
+batch_cmd single-quotes allow "node '$BROOT/batch/run.mjs' --job /tmp/job.json /tmp/*.txt &"
+batch_cmd flatten allow "node \"$BROOT/batch/flatten-transcripts.mjs\" /tmp/out /tmp/session.jsonl" true
+batch_cmd apostrophe allow "node '$BROOT/batch/run.mjs' --job-json 'it'\\''s literal' /tmp/a"
+for suffix in '; rm -rf ~' ' | sh' ' && true' ' || true' ' > /tmp/out' ' < /tmp/in' ' $(id)' ' `id`' $'\ntrue' ' &&' ' # comment' ' & true'; do
+  batch_cmd "operator $(printf %q "$suffix")" reject "node $BROOT/batch/run.mjs$suffix"
+done
+batch_cmd foreign reject 'node /tmp/batch/run.mjs'
+batch_cmd traversal reject "node $BROOT/../x.mjs"
+batch_cmd internal-traversal reject "node $BROOT/batch/../batch/run.mjs"
+batch_cmd other-script reject "node $BROOT/scripts/size-hint.mjs"
+batch_cmd node-flags reject "node --eval 'evil()' $BROOT/batch/run.mjs"
+batch_cmd double-substitution reject "node \"$BROOT/batch/run.mjs\" \"\$(id)\""
+batch_cmd double-backtick reject 'node "'"$BROOT"'/batch/run.mjs" "`id`"'
+batch_cmd unclosed reject "node '$BROOT/batch/run.mjs"
+# A script with the right lexical path but resolving outside the copied plugin is not approved.
+HOOK_TMP=$(cd "$TMP" && pwd -P)
+mkdir -p "$HOOK_TMP/hook-plugin/scripts" "$HOOK_TMP/hook-plugin/batch"
+cp "$HOOK" "$HOOK_TMP/hook-plugin/scripts/approve-own-tools.mjs"
+ln -s "$BROOT/batch/run.mjs" "$HOOK_TMP/hook-plugin/batch/run.mjs"
+ORIGINAL_HOOK="$HOOK"; HOOK="$HOOK_TMP/hook-plugin/scripts/approve-own-tools.mjs"
+batch_cmd symlink-out reject "node $HOOK_TMP/hook-plugin/batch/run.mjs"
+HOOK="$ORIGINAL_HOOK"
+if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:batch-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then ok "approval hook allows batch-local skill"; else bad "approval hook allows batch-local skill"; fi
+if [ "$(wc -l < "$BROOT/skills/batch-local/SKILL.md")" -lt 60 ] && jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Bash") != null' "$BROOT/hooks/hooks.json" >/dev/null; then ok "batch skill under 60 lines and Bash hook wired"; else bad "batch skill bounds/hook matcher"; fi
 for input in '{"tool_name":"Skill","tool_input":{"skill":"other:delegate-local"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"local-llm:delegate-local2"}}' \
              '{"tool_name":"Skill","tool_input":{"skill":"delegate-local"}}' \
@@ -352,8 +387,8 @@ if jq -e '.hooks.PreToolUse | any((.matcher | split("|") | index("Skill") != nul
    && [ -f "$HOOK" ]; then ok "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"
 else bad "hooks.json registers scripts/approve-own-tools.mjs on PreToolUse"; fi
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$REPO/hooks/hooks.json" 2>/dev/null)
-if [ "$matcher" = "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
-  ok "PreToolUse matcher covers exactly the skill and the two read-only file tools"
+if [ "$matcher" = "Skill|Bash|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims" ]; then
+  ok "PreToolUse matcher covers Skill, Bash and the two read-only file tools"
 else bad "PreToolUse matcher is: $matcher"; fi
 
 # --- size-hint hook (UserPromptSubmit) -------------------------------------------

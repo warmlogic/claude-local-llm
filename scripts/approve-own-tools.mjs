@@ -1,17 +1,41 @@
-// PreToolUse hook. Pre-approves this plugin's own delegate-local skill and, by EXACT name, its read-only tools, so
-// that neither invoking the skill nor asking plainly ("use the local model to ...") hits a permission prompt (in
-// `claude -p` an unapproved call is denied; the skill's `allowed-tools` only applies once the skill is loaded).
-// Everything else gets no output, so the normal permission flow decides: the other houtini tools (chat,
-// custom_prompt, embed, ...) stay unapproved.
-// Why this is safe: code_task_files and verify_claims only read files, each server is fenced to the configured
-// allowed folders (scripts/launch-server.sh and scripts/launch-verify.sh fail closed, and the verify server
-// re-checks the fence, the loopback endpoint and the proxy environment itself), and all inference stays on
-// loopback. A deny rule on a tool name still wins over this hook; Read(...) deny rules on folders do
-// not apply to MCP tool arguments, so allowed_dirs is the only boundary on what these tools read.
-// Names are exact, and the skill name is qualified: a bare `delegate-local` could be another plugin's skill.
-import { readFileSync } from 'node:fs';
+// Only these two scripts, invoked as a whole Bash command, may bypass normal approval.
+import { readFileSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const SKILL = 'local-llm:delegate-local';
+const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
+// A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
+// No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.
+export const ownBatchCommand = (command) => {
+  if (typeof command !== 'string' || /[\r\n\0]/.test(command)) return false;
+  let quote = null, word = '', started = false;
+  const words = [];
+  const push = () => { if (started) words.push(word); word = ''; started = false; };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote === "'") { if (c === "'") quote = null; else word += c; continue; }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === '$' || c === '`' || c === '\\') return false;
+      else word += c;
+      continue;
+    }
+    if (c === "'" || c === '"') { quote = c; started = true; }
+    else if (/[ \t]/.test(c)) push();
+    else if (c === '&' && /^[ \t]*$/.test(command.slice(i + 1))) { push(); break; }
+    else if (c === '\\' && command[i + 1] === "'") { word += "'"; started = true; i++; }
+    else if (/[;&|<>$`\\#()]/.test(c)) return false;
+    else { word += c; started = true; }
+  }
+  if (quote) return false;
+  push();
+  if (words[0] !== 'node' || words.length < 2) return false;
+  const script = words[1];
+  if (!['run.mjs', 'flatten-transcripts.mjs'].some((name) => script === `${root}/batch/${name}`)) return false;
+  try { return realpathSync(script) === script; } catch { return false; }
+};
+
+const SKILLS = new Set(['local-llm:delegate-local', 'local-llm:batch-local']);
 const TOOLS = new Set([
   'mcp__plugin_local-llm_local-llm__code_task_files',
   'mcp__plugin_local-llm_local-verify__verify_claims',
@@ -22,13 +46,13 @@ try {
 } catch {
   process.exit(0); // unreadable input: stay out of the way
 }
-const isOwnSkill = input?.tool_name === 'Skill' && input?.tool_input?.skill === SKILL;
-if (isOwnSkill || TOOLS.has(input?.tool_name)) {
+const isOwnSkill = input?.tool_name === 'Skill' && SKILLS.has(input?.tool_input?.skill);
+if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && ownBatchCommand(input?.tool_input?.command))) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      permissionDecisionReason: 'local-llm plugin skill or read-only tool',
+      permissionDecisionReason: 'local-llm plugin skill, read-only tool or batch command',
     },
   }));
 }

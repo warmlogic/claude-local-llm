@@ -214,7 +214,7 @@ test('skill requires hinted kinds or an explicit local-model request', () => {
   assert.match(skill, /Delegate unprompted only for the task kinds named by the size hint/);
   assert.match(skill, /With no hint naming kinds, delegate only when the user explicitly asks for the local model/);
   assert.match(skill.split('\n')[2], /with no hint naming kinds, use it only when the user explicitly asks for the local model/);
-  assert.match(skill, /Many files, or a mining job.*`batch\/run.mjs`/);
+  assert.match(skill, /bulk checkable.*invoke `local-llm:batch-local`/);
 });
 test('delegation harness prompts exercise classify and extract with opt-in', () => {
   const harness = readFileSync(join(repo, 'tests/test-delegation.sh'), 'utf8');

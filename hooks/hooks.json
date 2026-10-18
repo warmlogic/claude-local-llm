@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Skill|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims",
+        "matcher": "Skill|Bash|mcp__plugin_local-llm_local-llm__code_task_files|mcp__plugin_local-llm_local-verify__verify_claims",
         "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/approve-own-tools.mjs\"" }]
       }
     ],
