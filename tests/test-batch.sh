@@ -392,8 +392,9 @@ else bad "SIGINT: rc=$rc_int file=$([ -e "$lf" ] && echo present || echo gone)";
 start_stalled LOCAL_LLM_MODEL=m
 lane_wait; lf="$LANES/local-$st_pid.json"
 [ -e "$lf" ]; was_term=$?
+task_null=$(jq -r '.task == null' "$lf" 2>/dev/null)
 kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_term=$?
-if [ "$was_term" -eq 0 ] && [ "$rc_term" -eq 143 ] && [ ! -e "$lf" ]; then ok "SIGTERM removes the lane file and exits 143"
+if [ "$task_null" = true ] && [ "$was_term" -eq 0 ] && [ "$rc_term" -eq 143 ] && [ ! -e "$lf" ]; then ok "SIGTERM removes the lane file and exits 143; task is null without CATALYST_TASK"
 else bad "SIGTERM: rc=$rc_term file=$([ -e "$lf" ] && echo present || echo gone)"; fi
 start_fake ln batch
 # The probe registers its exit hook before the runner does, so it sees the file just before remove() runs.
@@ -421,6 +422,13 @@ sed -E "s#$TMP/out-ln6#OUT#g; s#Started [0-9TZ:.-]+#Started T#" "$TMP/run.out" >
 if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-b.norm"; then ok "with \$HOME/catalyst/band a regular file, exit status and output match a run without it"
 else bad "fail-open: rc=$rc_a/$rc_b $(diff "$TMP/run-a.norm" "$TMP/run-b.norm" | head -5)"; fi
 rm -rf "$HOME/catalyst"
+
+# --- shortLabel ----------------------------------------------------------------------------------
+labels=$(node --input-type=module -e '
+import { shortLabel } from "'"$REPO"'/batch/lane.mjs";
+console.log(JSON.stringify([shortLabel("qwen3-7b"), shortLabel("a\u0007b\nc"), shortLabel(""), shortLabel("x".repeat(40)).length, shortLabel("acme/m@q4.gguf")]));')
+if [ "$labels" = '["qwen3-7b","abc","local",24,"m"]' ]; then ok "shortLabel: plain name kept, control characters stripped, empty becomes local, 24-character cap, prefix/quant/.gguf stripped"
+else bad "shortLabel: $labels"; fi
 
 # --- the runner still dies by the signal, not by an exit code --------------------------------------
 mkdir -p "$HOME/catalyst"; start_fake sg batch-stall

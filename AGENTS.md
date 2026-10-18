@@ -80,6 +80,7 @@ scripts/
 batch/
   flatten-transcripts.mjs # session .jsonl -> one line per block: L<n>, role, kind, text (cut at 2000 chars)
   run.mjs            # batch runner: raw text or in-memory transcripts, one prompt over many text windows on the local model; writes rows, dropped, failures, index.md
+  lane.mjs           # shows the running batch as a lane in Catalyst's band: writes and removes $HOME/catalyst/band/lanes/local-<pid>.json, fail-open
   jobs/friction.json # pilot job: user/Claude friction in transcripts (correction, stuck, tool_error, permission_denial)
 server/
   verify-server.mjs  # stdio MCP (initialize, ping, tools/list, tools/call); re-checks roots and endpoint
