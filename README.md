@@ -60,7 +60,7 @@ node "/path/to/claude-local-llm/batch/run.mjs" --job "/tmp/local-job.json" --num
 
 `--number` adds `L<n><TAB>` to raw lines in memory, preserving source line numbers for quote checks. For session JSONL, use `--transcripts` instead; it flattens in memory, cuts blocks at 2000 characters, and reports unparseable lines skipped. Interpretation-heavy jobs use about 20k-character windows. Quote checks establish where evidence occurs, not whether labels are correct or every fact was found.
 
-While a batch runs, it also shows as a lane in Catalyst's band when Catalyst is installed (it writes `~/catalyst/band/lanes/local-<pid>.json` and removes it on exit; harmless otherwise).
+While a batch runs, it also shows as a lane in Catalyst's band when Catalyst is installed (it writes `~/catalyst/band/lanes/local-<pid>.json` and removes it on exit. With Catalyst present, a failed lane write prints one `local-llm:` stderr line and the run is otherwise unchanged; without Catalyst, nothing is written).
 
 Batch uses Bash's filesystem access. Only pass intended inputs, and keep scratch jobs, transcripts and rows uncommitted. The runner uses `LOCAL_LLM_ENDPOINT_URL` and `LOCAL_LLM_MODEL` for non-default setups; plugin configuration does not reach Bash. The offline delegation self-test retains case l, which guards against single-file batch launches. Case l is in the default paid harness (55 sessions); no paid run is needed for the offline checks.
 
