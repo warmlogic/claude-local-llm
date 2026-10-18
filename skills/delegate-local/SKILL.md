@@ -6,7 +6,7 @@ allowed-tools: mcp__plugin_local-llm_local-llm__code_task_files
 
 # Delegate big text jobs to the local model
 
-A model in LM Studio reads the file and returns text; you never load the file into your own context. Unprompted single-file delegation is off by default: real-file answers were usable 4/10 vs 8/10 when you read them, and cost 3% more. Treat its answer as a draft and check it in proportion to what depends on it.
+A model in LM Studio reads the file and returns text; you never load the file into your own context. Treat its answer as a draft and check it in proportion to what depends on it.
 
 ## Names (the only place the server's specifics live)
 

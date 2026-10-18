@@ -138,7 +138,9 @@ run_one() {
   [ -z "$MODEL" ] || args+=(--model "$MODEL")
   [ "$2" = off ] || args+=(--plugin-dir "$8")
   start=$SECONDS
-  (cd "$WORK" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
+  # the plugin's delegate_tasks default is off; "on" runs measure delegation, so opt every corpus task kind in
+  # (an explicit CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS, even empty, wins)
+  (cd "$WORK" && export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract,summarize}" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
   rc=$?
   trace_facts "$RUN_DIR/facts/.$1" "$t" "$1" "$2" "$3" "$4" "$5" "$6" "$rc" "$((SECONDS - start))" > "$RUN_DIR/facts/$1.json.new" \
     && mv "$RUN_DIR/facts/$1.json.new" "$RUN_DIR/facts/$1.json" || die "writing facts for $1"
