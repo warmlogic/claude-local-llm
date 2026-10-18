@@ -150,7 +150,7 @@ const batch = (req, res) => {
     const key = text.length + text.slice(-200);
     const first = !seen.has(key);
     seen.add(key);
-    const line = text.match(/^(L\d+)\t[^\t]*\t[^\t]*\t(.*)$/m);
+    const line = text.match(/^(L\d+)\t(?:(?:user|assistant)\t[^\t]*\t)?(.*)$/m);
     const reply = (content, finish = 'stop') => json(res, 200, {
       choices: [{ message: { role: 'assistant', content }, finish_reason: finish }],
       usage: { prompt_tokens: 10, completion_tokens: 5 },

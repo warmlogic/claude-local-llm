@@ -71,6 +71,31 @@ run_batch "$EP" "$TMP/out-n" "$TMP/a.txt"
 if [ "$(count "$TMP/out-n/rows.jsonl")" -eq $((nreq*2)) ] && [ "$(count "$TMP/out-n/dropped.jsonl")" -eq 0 ]; then ok 'check "none" keeps every row'
 else bad "check none: kept $(count "$TMP/out-n/rows.jsonl") dropped $(count "$TMP/out-n/dropped.jsonl")"; fi
 
+# Inline job, automatic output directory and raw line numbering (including blank/CRLF lines).
+printf 'first raw evidence here\r\n\r\nthird raw evidence here\r\n' > "$TMP/raw.txt"
+job quote-in-line 2000
+before=$(shasum "$TMP/raw.txt")
+LOCAL_LLM_ENDPOINT_URL="$EP" TMPDIR="$TMP" node "$RUN" --number --job-json "$(cat "$TMP/job.json")" "$TMP/raw.txt" > "$TMP/inline.stdout" 2> "$TMP/inline.stderr"; RC=$?
+inline_index=$(tail -n 1 "$TMP/inline.stdout")
+if [ "$RC" -eq 0 ] && [ -f "$inline_index" ] && [ "$(dirname "$inline_index")" != "$TMP" ] \
+   && [ "$before" = "$(shasum "$TMP/raw.txt")" ] \
+   && jq -e -s 'map(select(.body)) | last | .body.messages[-1].content | contains("L1\tfirst raw evidence here\nL3\tthird raw evidence here")' "$LOG" >/dev/null \
+   && [ "$(count "$(dirname "$inline_index")/rows.jsonl")" -eq 1 ] \
+   && grep -q 'inline job' "$inline_index"; then ok "inline job: fresh tmp output, last stdout index path, physical raw line numbers and quote checking without changing input"
+else bad "inline job/numbering: rc=$RC index=$inline_index $(cat "$TMP/inline.stderr")"; fi
+LOCAL_LLM_ENDPOINT_URL="$EP" TMPDIR="$TMP" node "$RUN" --number --job-json "$(cat "$TMP/job.json")" "$TMP/raw.txt" > "$TMP/inline2.stdout" 2>/dev/null; RC=$?
+if [ "$RC" -eq 0 ] && [ -f "$(tail -n 1 "$TMP/inline2.stdout")" ] && [ "$(tail -n 1 "$TMP/inline2.stdout")" != "$inline_index" ]; then ok "omitted --out creates a fresh directory per run"; else bad "fresh output directory"; fi
+for args in both malformed reserved missing; do
+  case "$args" in
+    both) opts=(--job "$TMP/job.json" --job-json "$(cat "$TMP/job.json")") ;;
+    malformed) opts=(--job-json '{') ;;
+    reserved) opts=(--job-json "$(jq '.row_schema.properties.file={type:"string"}' "$TMP/job.json")") ;;
+    missing) opts=(--job-json) ;;
+  esac
+  LOCAL_LLM_ENDPOINT_URL="$EP" TMPDIR="$TMP" node "$RUN" --out "$TMP/invalid" "$TMP/raw.txt" "${opts[@]}" > "$TMP/invalid.out" 2>&1; RC=$?
+  if [ "$RC" -eq 2 ] && [ ! -f "$TMP/invalid/index.md" ]; then ok "inline validation rejects $args"; else bad "inline validation $args rc=$RC"; fi
+done
+
 # --- empty replies, all-dropped windows and optional minimum row count ----------
 start_fake zs batch-empty-some
 lines 24 100 "$TMP/zero.txt"      # one line per window; even windows return []
@@ -124,6 +149,12 @@ console.log(JSON.stringify([
   q("L1", ""), checkQuote({ quote: "other" }, m), q("L1", "           x"), q("L1", "no,    use")]));')
 if [ "$cq" = '[null,"quote_not_in_line","line_not_in_window","quote_too_short","quote_too_short","quote_not_in_line","quote_not_in_line","quote_too_short","quote_too_short",null,null,"quote_too_short","missing_line_or_quote","missing_line_or_quote","quote_too_short","quote_too_short"]' ]; then ok "checkQuote: matches the text field only (not role, kind or id), needs 12 chars unless it is the whole text"
 else bad "checkQuote: $cq"; fi
+
+raw_quote=$(node --input-type=module -e '
+import { checkQuote } from "'"$REPO"'/batch/run.mjs";
+const m = new Map([["L1", "L1\tuser\tpermission_denial\tthe raw content"]]);
+console.log(checkQuote({line:"L1",quote:"user\tpermission_denial"}, m, true));')
+if [ "$raw_quote" = null ]; then ok "raw numbering treats role-like prefixes as source evidence"; else bad "raw numbering stripped source fields: $raw_quote"; fi
 
 # --- a line over the cap -------------------------------------------------------
 lines 5 100 "$TMP/c.txt"

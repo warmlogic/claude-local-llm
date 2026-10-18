@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// Usage: node run.mjs --job <job.json> --out <dir> <input files...>
+// Usage: node run.mjs (--job <job.json> | --job-json <json>) [--number] [--out <dir>] <input files...>
 // Runs one extraction prompt over many text files on the local model (LM Studio, loopback only), window by
 // window, and writes rows.jsonl, dropped.jsonl, failures.jsonl and a short index.md. See AGENTS.md "Batch runner".
 // job.json: {"prompt", "row_schema" (JSON schema of one row), "check": "quote-in-line" | "none", "max_window_chars"?,
 // "reasoning_effort"?, "min_rows_per_window"? (positive integer)}. index.md is the one file Claude reads, so it
 // never claims more than happened: a stub says RUNNING until the final index replaces it, and its header
 // says how many windows were answered.
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync, realpathSync } from 'node:fs';
-import { basename } from 'node:path';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopback.mjs';
 import { getContextCap, capForContext } from '../scripts/context-cap.mjs';
@@ -47,11 +48,11 @@ const textField = (line) => line.replace(/^L\d+\t(?:(?:user|assistant)\t[^\t]*\t
 
 // quote-in-line: the row cites a line of this window and quotes its text (exact, then whitespace-normalized),
 // not its id fields, and at least MIN_QUOTE_CHARS long unless it is the whole text.
-export const checkQuote = (row, lineMap) => {
+export const checkQuote = (row, lineMap, rawNumbered = false) => {
   if (typeof row.line !== 'string' || typeof row.quote !== 'string' || !row.quote.trim()) return 'missing_line_or_quote';
   const line = lineMap.get(row.line);
   if (line === undefined) return 'line_not_in_window';
-  const text = textField(line);
+  const text = rawNumbered ? line.replace(/^L\d+\t/, '') : textField(line);
   const [q, t] = [squash(row.quote), squash(text)];
   if (q.length < MIN_QUOTE_CHARS && q !== t) return 'quote_too_short'; // lengths count after whitespace is normalized
   return text.includes(row.quote) || t.includes(q) ? null : 'quote_not_in_line';
@@ -109,16 +110,23 @@ const parseArgs = (args) => {
   const opt = {};
   const files = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--job' || args[i] === '--out') opt[args[i].slice(2)] = args[++i];
+    if (['--job', '--job-json', '--out'].includes(args[i])) {
+      const key = args[i].slice(2);
+      if (opt[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('--')) usage(`missing or repeated --${key}`);
+      opt[key] = args[++i];
+    }
+    else if (args[i] === '--number') opt.number = true;
+    else if (args[i].startsWith('--')) usage(`unknown option: ${args[i]}`);
     else files.push(args[i]);
   }
-  if (!opt.job || !opt.out || files.length === 0) usage('usage: run.mjs --job <job.json> --out <dir> <input files...>');
+  if ((Boolean(opt.job) === Boolean(opt['job-json'])) || files.length === 0) usage('usage: run.mjs (--job <job.json> | --job-json <json>) [--number] [--out <dir>] <input files...>');
+  opt.out = opt.out ? resolve(opt.out) : mkdtempSync(join(tmpdir(), 'local-llm-batch-'));
   return { opt, files };
 };
 
-const loadJob = async (path, endpoint) => {
+const loadJob = async (opt, endpoint) => {
   let job;
-  try { job = JSON.parse(readFileSync(path, 'utf8')); } catch (e) { usage(`cannot read job: ${e.message}`); }
+  try { job = JSON.parse(opt['job-json'] ?? readFileSync(opt.job, 'utf8')); } catch (e) { usage(`cannot read job: ${e.message}`); }
   const defaults = job?.max_window_chars === undefined ? await getContextCap({ endpoint }) : null;
   const cap = defaults ? capForContext(defaults.contextTokens, MAX_TOKENS + 1024) : job.max_window_chars;
   const capSource = defaults ? `${defaults.source}${defaults.reason ? ` (assumed 32k context; ${defaults.reason})` : ''}` : 'job';
@@ -142,13 +150,13 @@ const main = async () => {
   if (new Set(files.map((f) => basename(f))).size !== files.length) usage('input files must have distinct basenames (results are keyed by basename)');
   const endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234';
   if (!isLoopbackEndpoint(endpoint)) usage(loopbackError(endpoint));
-  const { job, cap, check, capSource } = await loadJob(opt.job, endpoint);
+  const { job, cap, check, capSource } = await loadJob(opt, endpoint);
 
-  if (check === 'quote-in-line') { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
+  if (check === 'quote-in-line' && !opt.number) { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
     for (const f of files) {
       let t;
       try { t = readFileSync(f, 'utf8'); } catch { continue; } // reported as unreadable_input when its turn comes
-      if (t.split('\n').some((l) => l.length && !/^L\d+\t/.test(l))) usage(`${f}: not numbered input; run batch/flatten-transcripts.mjs (or number lines L<n><TAB>) first`);
+      if (t.split('\n').some((l) => l.length && !/^L\d+\t/.test(l))) usage(`${f}: not numbered input; run batch/flatten-transcripts.mjs (or use --number) first`);
     }
   }
 
@@ -178,7 +186,7 @@ const main = async () => {
     stats.perFile.push(fs); stats.reached++;
     let text;
     try { text = readFileSync(file, 'utf8'); } catch (e) { fail('unreadable_input', name, 0, e.code ?? e.name); continue; }
-    const { windows, overCap } = makeWindows(text.split('\n').filter((l) => l.length), cap);
+    const { windows, overCap } = makeWindows(text.split(/\r?\n/).map((l, i) => opt.number && l.length ? `L${i + 1}\t${l}` : l).filter((l) => l.length), cap);
     for (const l of overCap) fail('line_over_cap', name, 0, `${l.split('\t')[0].slice(0, 20)} (${l.length} chars)`);
     if (!windows.length && !overCap.length) fail('empty_input', name, 0, 'no lines');
     for (const [i, win] of windows.entries()) {
@@ -216,7 +224,7 @@ const main = async () => {
       if (parsed && parsed.length < job.min_rows_per_window) fail('under_min_rows', name, w, `${parsed.length} rows`);
       for (const row of parsed ?? []) {
         const out = { ...row, file: name, window: w }; // the runner's keys win
-        const reason = check === 'quote-in-line' ? checkQuote(row, lineMap) : null;
+        const reason = check === 'quote-in-line' ? checkQuote(row, lineMap, opt.number) : null;
         if (reason) { emit('dropped.jsonl', { ...out, reason }); stats.dropped++; fs.dropped++; continue; }
         emit('rows.jsonl', out); stats.kept++; fs.kept++;
         if (typeof row.kind === 'string') stats.kinds[row.kind] = (stats.kinds[row.kind] ?? 0) + 1;
@@ -248,7 +256,7 @@ const main = async () => {
     `Tokens: ${stats.tokens.prompt} prompt, ${stats.tokens.completion} completion.`,
   ];
   const index = [
-    `# Batch index: ${basename(opt.job)}`, '', ...summary, '',
+    `# Batch index: ${opt.job ? basename(opt.job) : 'inline job'}`, '', ...summary, '',
     '| file | windows | kept | dropped |', '| --- | ---: | ---: | ---: |',
     ...shown.map((f) => `| ${f.name} | ${f.windows} | ${f.kept} | ${f.dropped} |`),
     ...(stats.perFile.length > shown.length ? [`| (${stats.perFile.length - shown.length} more files) | | | |`] : []),
@@ -257,6 +265,7 @@ const main = async () => {
   writeFileSync(`${indexPath}.tmp`, index.join('\n') + '\n');
   renameSync(`${indexPath}.tmp`, indexPath);
   console.log(summary.join('\n'));
+  console.log(indexPath); // stable last stdout line, including failed/aborted runs with an index
   process.exit(failed || aborted ? 1 : 0);
 };
 
