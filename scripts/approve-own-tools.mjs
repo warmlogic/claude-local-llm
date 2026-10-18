@@ -1,5 +1,5 @@
 // Only these two scripts, invoked as a whole Bash command, may bypass normal approval.
-import { readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
@@ -8,6 +8,14 @@ import { fileURLToPath } from 'node:url';
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
 export const STAGING_DIR = '/tmp/local-llm-batch';
+// The staging dir is trusted only as a real directory owned by this user: a planted symlink, or a dir someone else
+// made, would otherwise widen the read boundary. Returns [] or [its realpath].
+export const trustedStaging = (dir) => {
+  try {
+    const st = lstatSync(dir);
+    return st.isDirectory() && !st.isSymbolicLink() && st.uid === process.getuid() ? [realpathSync.native(dir)] : [];
+  } catch { return []; }
+};
 
 const batchArgsAllowed = (script, args, cwd) => {
   const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
@@ -32,19 +40,16 @@ const batchArgsAllowed = (script, args, cwd) => {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--number') continue;
-    if (arg === '--job-json' || arg === '--out') {
+    if (arg === '--job-json') {
       if (options.has(arg) || !args[i + 1] || args[i + 1].startsWith('--')) return false;
       options.add(arg);
-      const value = args[++i];
-      // run.mjs normalizes --out with resolve(); check that destination as well as the raw path.
-      if (arg === '--out' && (!isTmp(value) || !isTmp(resolve(cwd, value)))) return false;
-    } else if (arg.startsWith('-')) return false; // Includes --job: only inline jobs may bypass approval.
+      i++;
+    } else if (arg.startsWith('-')) return false; // --job and --out too: an approved run writes only to a fresh private tmp dir.
     else files.push(arg);
   }
   // The one tmp location inputs may come from: where the skill stages flattened or copied outside data. Not all of
   // tmp, so arbitrary tmp files still go through the normal permission flow.
-  const staging = [];
-  try { staging.push(realpathSync.native(STAGING_DIR)); } catch { /* nothing staged yet */ }
+  const staging = trustedStaging(STAGING_DIR);
   return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), [...roots, ...staging]));
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.

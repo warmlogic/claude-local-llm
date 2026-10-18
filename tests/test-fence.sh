@@ -363,15 +363,20 @@ batch_cmd quoted allow "$RUN --job-json '{\"prompt\":\"a; | > < && || \$(literal
 batch_cmd single-quotes allow "$RUN --job-json '{}' '$INPUT' &"
 batch_cmd flatten allow "$FLATTEN '$HOOK_TMP/out' '$INPUT'" true
 batch_cmd apostrophe allow "$RUN --job-json 'it'\\''s literal' '$INPUT'"
-batch_cmd tmp-out allow "$RUN --out '$HOOK_TMP/out' --job-json '{}' '$INPUT'"
+batch_cmd tmp-out reject "$RUN --out '$HOOK_TMP/out' --job-json '{}' '$INPUT'"
 batch_cmd relative-input allow "$RUN --job-json '{}' a.txt" false "$HOOK_TMP/allowed"
 if [ "$(uname -s)" = Darwin ]; then
-  batch_cmd private-tmp-out allow "$RUN --out /private/tmp --job-json '{}' '$INPUT'"
+  batch_cmd private-tmp-out reject "$RUN --out /private/tmp --job-json '{}' '$INPUT'"
 fi
 batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
 mkdir -p /tmp/local-llm-batch/hooktest && printf 'L1\tx\n' > /tmp/local-llm-batch/hooktest/staged.txt
 batch_cmd staged-input allow "$RUN --job-json '{}' '/tmp/local-llm-batch/hooktest/staged.txt'"
+# a staging dir that is a symlink is not trusted (it would widen the read boundary)
+SL="$HOOK_TMP/sl-target"; mkdir -p "$SL"; printf 'L1\tx\n' > "$SL/f.txt"
+ln -s "$SL" "$HOOK_TMP/sl-link"
+st=$(printf '{}' | node --input-type=module -e "const m = await import('$REPO/scripts/approve-own-tools.mjs'); console.log(JSON.stringify([m.trustedStaging('$HOOK_TMP/sl-link').length, m.trustedStaging('$SL').length]))" 2>/dev/null)
+if [ "$st" = "[0,1]" ]; then ok "batch hook: a symlinked staging dir is not trusted, a real one is"; else bad "batch hook: staging trust ($st)"; fi
 printf 'L1\tx\n' > "$HOOK_TMP/out.txt"
 batch_cmd tmp-not-staged reject "$RUN --job-json '{}' '$HOOK_TMP/out.txt'"
 batch_cmd mixed-inputs reject "$RUN --job-json '{}' '$INPUT' '$HOOK_TMP/allowed-evil/out.txt'"
