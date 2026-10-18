@@ -46,6 +46,7 @@
 //   batch-flaky        as batch, but every other request (the 1st, 3rd, ...) fails with HTTP 500.
 //   batch-then-fail    as batch, but only the first request is answered; every later one fails with HTTP 500.
 //   batch-stall        logs the request and never answers.
+//   batch-stall-model  as batch-stall, and /api/v0/models shows one loaded chat model, acme/qwen3-7b@q4_k_m.
 //   proxy     an HTTP proxy that must never be used: logs each request (absolute URL) and answers 502.
 import { createServer } from 'node:http';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -143,6 +144,7 @@ const batch = (req, res) => {
   let raw = '';
   req.on('data', (d) => { raw += d; });
   req.on('end', () => {
+    if (req.url === '/api/v0/models' && mode === 'batch-stall-model') return json(res, 200, { data: [{ id: 'acme/qwen3-7b@q4_k_m', type: 'llm', state: 'loaded', loaded_context_length: 32768 }] });
     if (req.url !== '/v1/chat/completions') return json(res, 404, { error: `Unexpected endpoint (${req.url})` });
     const body = JSON.parse(raw);
     appendFileSync(logFile, JSON.stringify({ url: req.url, body }) + '\n');
@@ -155,7 +157,7 @@ const batch = (req, res) => {
       choices: [{ message: { role: 'assistant', content }, finish_reason: finish }],
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     });
-    if (mode === 'batch-stall') return; // never answer
+    if (mode === 'batch-stall' || mode === 'batch-stall-model') return; // never answer
     if (mode === 'batch-then-fail' && ++requests > 1) return json(res, 500, { error: { code: 'server_error' } });
     if (mode === 'batch-flaky' && ++requests % 2 === 1) return json(res, 500, { error: { code: 'server_error' } });
     if (mode === 'batch-bad' || (mode === 'batch-bad-once' && first)) return reply('not json');

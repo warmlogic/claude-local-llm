@@ -374,7 +374,7 @@ else bad "stale index after refusal: rc=$rc1/$RC"; fi
 lane_wait() { for _ in $(seq 1 100); do ls "$LANES"/local-*.json >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1; }
 start_stalled() { # [env...]: starts a stalled run in the background; sets st_pid, waits for its first request
   : > "$LOG"
-  env LOCAL_LLM_ENDPOINT_URL="$EP" "$@" node "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln$RANDOM" "$TMP/m.txt" > /dev/null 2>&1 &
+  env LOCAL_LLM_ENDPOINT_URL="$EP" "$@" node "$RUN" --job "${JOB:-$TMP/job.json}" --out "$TMP/out-ln$RANDOM" "$TMP/m.txt" > /dev/null 2>&1 &
   st_pid=$!
   for _ in $(seq 1 100); do grep -q '"body"' "$LOG" && break; sleep 0.1; done
 }
@@ -433,6 +433,17 @@ console.log(JSON.stringify(JSON.parse(readFileSync(f, "utf8")).repo)); rm();')
 t1=$(date +%s)
 if [ "$repo_out" = "null" ] && [ $((t1 - t0)) -le 4 ]; then ok "a git that ignores SIGTERM is killed at the timeout: registration returns in $((t1 - t0)) s with repo null"
 else bad "git stub: repo=$repo_out took $((t1 - t0)) s"; fi
+rm -rf "$HOME/catalyst"
+
+# --- the label comes from the models query when the job sets no window and LOCAL_LLM_MODEL is unset ---
+job quote-in-line 2000; jq 'del(.max_window_chars)' "$TMP/job.json" > "$TMP/job-nocap.json"
+mkdir -p "$HOME/catalyst"
+start_fake lm batch-stall-model
+JOB="$TMP/job-nocap.json" start_stalled
+lane_wait; lf="$LANES/local-$st_pid.json"
+if jq -e '.label == "qwen3-7b"' "$lf" >/dev/null 2>&1; then ok "with no max_window_chars and no LOCAL_LLM_MODEL, the label is the single loaded model's short id"
+else bad "models-query label: $(head -c 300 "$lf" 2>&1)"; fi
+kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null
 rm -rf "$HOME/catalyst"
 
 echo "batch pass=$pass fail=$fail"

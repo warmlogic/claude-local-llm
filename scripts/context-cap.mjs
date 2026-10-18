@@ -53,8 +53,9 @@ export async function getContextCap({
     if (!loaded.length) return model
       ? fallback('pinned model not loaded', 'pinned model not loaded') : fallback('no chat model loaded');
     if (loaded.some((m) => !Number.isSafeInteger(m.loaded_context_length) || m.loaded_context_length <= 0)) return fallback('invalid context');
-    const smallest = loaded.reduce((a, m) => (m.loaded_context_length < a.loaded_context_length ? m : a));
-    return budget(smallest.loaded_context_length, 'loaded', undefined, typeof smallest.id === 'string' ? smallest.id : undefined);
+    // Name the model only when it is unambiguous: one loaded chat model, or the pinned one.
+    const named = loaded.length === 1 || model ? loaded[0].id : undefined;
+    return budget(Math.min(...loaded.map((m) => m.loaded_context_length)), 'loaded', undefined, typeof named === 'string' ? named : undefined);
   } catch (e) {
     const reason = e.name === 'AbortError' ? 'timeout'
       : /^(http \d{3}|metadata too large|no metadata)$/.test(e.message) ? e.message : 'no metadata';

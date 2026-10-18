@@ -77,9 +77,9 @@ test('context formula follows 32k and 64k loaded contexts', async () => {
 test('model selection uses the smallest loaded chat context unless pinned', async () => {
   let models = [model('embed', 999999, 'loaded', 'embeddings'), model('idle', 999999, 'not-loaded'), model('a', 65536)];
   const endpoint = await serve((q, r) => r.end(JSON.stringify({ data: models })));
-  assert.equal((await getContextCap({ endpoint })).capChars, 98304);
+  assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 65536, capChars: 98304, source: 'loaded', model: 'a' });
   models.push(model('b', 16384));
-  assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 16384, capChars: 19660, source: 'loaded', model: 'b' });
+  assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 16384, capChars: 19660, source: 'loaded' });
   assert.deepEqual(await getContextCap({ endpoint, model: 'b' }), { contextTokens: 16384, capChars: 19660, source: 'loaded', model: 'b' });
   writeFileSync(join(tmp, 'pin.txt'), 'x'.repeat(35000));
   for (const pin of ['missing', 'idle']) {
