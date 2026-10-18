@@ -17,6 +17,9 @@ for tool in node jq; do
 done
 
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }
+export HOME="$TMP/home"; mkdir -p "$HOME" # lane files must never reach the real ~/catalyst
+unset CATALYST_TASK
+LANES="$HOME/catalyst/band/lanes"
 PIDS=()
 trap 'for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$TMP"' EXIT
 
@@ -366,6 +369,48 @@ printf 'Completed: 9 of 9 windows answered.\n' > "$TMP/out-a/index.md"
 JOB="$TMP/job-unknown-check.json" run_batch "$EP" "$TMP/out-a" "$TMP/m.txt"
 if [ "$rc1" -eq 2 ] && [ "$RC" -eq 2 ] && [ "${stale1:-0}" -eq 0 ] && ! grep -q Completed "$TMP/out-a/index.md" 2>/dev/null; then ok "a refused re-run (proxy, bad job) removes the previous index.md"
 else bad "stale index after refusal: rc=$rc1/$RC"; fi
+
+# --- the run shows as a lane in Catalyst's band while it runs ------------------------------------
+lane_wait() { for _ in $(seq 1 100); do ls "$LANES"/local-*.json >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1; }
+start_stalled() { # [env...]: starts a stalled run in the background; sets st_pid, waits for its first request
+  : > "$LOG"
+  env LOCAL_LLM_ENDPOINT_URL="$EP" "$@" node "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln$RANDOM" "$TMP/m.txt" > /dev/null 2>&1 &
+  st_pid=$!
+  for _ in $(seq 1 100); do grep -q '"body"' "$LOG" && break; sleep 0.1; done
+}
+rm -rf "$HOME/catalyst"
+job quote-in-line 2000
+start_fake ls batch-stall
+start_stalled CATALYST_TASK=x46 LOCAL_LLM_MODEL=acme/qwen3-7b@q4_k_m.gguf
+lane_wait; lf="$LANES/local-$st_pid.json"
+if jq -e --argjson p "$st_pid" '.v == 1 and .kind == "local" and .pid == $p and .task == "x46" and .label == "qwen3-7b" and (.started | test("^[0-9]{4}-.*Z$")) and (.repo == null or (.repo | startswith("/")))' "$lf" >/dev/null 2>&1; then ok "a running batch writes local-<pid>.json (v 1, kind local, own pid, task, shortened LOCAL_LLM_MODEL label)"
+else bad "lane file: $(head -c 300 "$lf" 2>&1)"; fi
+kill -INT "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_int=$?
+if [ "$rc_int" -eq 130 ] && [ ! -e "$lf" ]; then ok "SIGINT removes the lane file and exits 130"
+else bad "SIGINT: rc=$rc_int file=$([ -e "$lf" ] && echo present || echo gone)"; fi
+start_stalled LOCAL_LLM_MODEL=m
+lane_wait; lf="$LANES/local-$st_pid.json"
+kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_term=$?
+if [ "$rc_term" -eq 143 ] && [ ! -e "$lf" ]; then ok "SIGTERM removes the lane file and exits 143"
+else bad "SIGTERM: rc=$rc_term file=$([ -e "$lf" ] && echo present || echo gone)"; fi
+start_fake ln batch
+run_batch "$EP" "$TMP/out-ln1" "$TMP/a.txt"
+if [ "$RC" -eq 0 ] && ! ls "$LANES"/local-*.json >/dev/null 2>&1; then ok "a normal end leaves no lane file"
+else bad "normal end: rc=$RC $(ls "$LANES" 2>&1)"; fi
+rm -rf "$HOME/catalyst"
+HTTP_PROXY=http://127.0.0.1:9 run_batch "$EP" "$TMP/out-ln2" "$TMP/a.txt"; rc_p=$RC
+LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln3" "$TMP/a.txt" > /dev/null 2>&1; rc_nl=$?
+JOB="$TMP/job-unknown-check.json" run_batch "$EP" "$TMP/out-ln4" "$TMP/a.txt"
+if [ "$rc_p" -eq 2 ] && [ "$rc_nl" -eq 2 ] && [ "$RC" -eq 2 ] && [ ! -e "$HOME/catalyst" ]; then ok "refused runs (proxy, non-loopback endpoint, bad job) write no lane file"
+else bad "refused runs: rc=$rc_p/$rc_nl/$RC $(ls "$HOME" 2>&1)"; fi
+rm -rf "$HOME/catalyst"; run_batch "$EP" "$TMP/out-ln5" "$TMP/a.txt"; rc_a=$RC
+sed -E "s#$TMP/out-ln5#OUT#g; s#Started [0-9TZ:.-]+#Started T#" "$TMP/run.out" > "$TMP/run-a.norm"
+rm -rf "$HOME/catalyst"; : > "$HOME/catalyst" # a regular file where the lane dir would go
+run_batch "$EP" "$TMP/out-ln6" "$TMP/a.txt"; rc_b=$RC
+sed -E "s#$TMP/out-ln6#OUT#g; s#Started [0-9TZ:.-]+#Started T#" "$TMP/run.out" > "$TMP/run-b.norm"
+if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-b.norm"; then ok "with \$HOME/catalyst a regular file, exit status and output match a run without it"
+else bad "fail-open: rc=$rc_a/$rc_b $(diff "$TMP/run-a.norm" "$TMP/run-b.norm" | head -5)"; fi
+rm -f "$HOME/catalyst"
 
 echo "batch pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]

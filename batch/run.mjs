@@ -14,6 +14,7 @@ import { isLoopbackEndpoint, loopbackError, PROXY_VARS } from '../scripts/loopba
 import { getContextCap, capForContext } from '../scripts/context-cap.mjs';
 import { flatten } from './flatten-transcripts.mjs';
 import { upstreamCode } from '../server/endpoint.mjs';
+import { registerLane } from './lane.mjs';
 
 const REQUEST_TIMEOUT_MS = 180_000;
 const MAX_TOKENS = 4000;
@@ -140,7 +141,7 @@ const loadJob = async (opt, endpoint) => {
   if (reserved.length) usage(`row_schema may not declare ${reserved.join(', ')}: the runner sets them`);
   const check = job.check ?? 'none';
   if (check !== 'none' && check !== 'quote-in-line') usage(`unknown check: ${check}`);
-  return { job, cap, check, capSource };
+  return { job, cap, check, capSource, model: defaults?.model };
 };
 
 let indexPath = null;
@@ -152,7 +153,7 @@ const main = async () => {
   if (new Set(files.map((f) => basename(f))).size !== files.length) usage('input files must have distinct basenames (results are keyed by basename)');
   const endpoint = process.env.LOCAL_LLM_ENDPOINT_URL || 'http://127.0.0.1:1234';
   if (!isLoopbackEndpoint(endpoint)) usage(loopbackError(endpoint));
-  const { job, cap, check, capSource } = await loadJob(opt, endpoint);
+  const { job, cap, check, capSource, model } = await loadJob(opt, endpoint);
 
   if (check === 'quote-in-line' && !opt.number && !opt.transcripts) { // every line must carry an id, or a quote could cite an arbitrary string; one file in memory at a time
     for (const f of files) {
@@ -167,6 +168,9 @@ const main = async () => {
   const started = new Date();
   indexPath = path('index.md');
   writeFileSync(indexPath, `RUNNING since ${started.toISOString()} (pid ${process.pid}) — not complete\n`, { flag: 'wx' });
+  const removeLane = registerLane({ label: process.env.LOCAL_LLM_MODEL || model || 'local', task: process.env.CATALYST_TASK });
+  process.on('exit', removeLane);
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(sig, () => { removeLane(); process.exit(code); });
   const outputs = new Map(['rows.jsonl', 'dropped.jsonl', 'failures.jsonl'].map((n) => [n, openSync(path(n), 'wx')]));
   const emit = (n, o) => appendFileSync(outputs.get(n), JSON.stringify(o) + '\n');
 

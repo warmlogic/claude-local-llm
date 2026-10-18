@@ -18,8 +18,8 @@ const MAX_METADATA_CHARS = 1_000_000;
 // Houtini's HOUTINI_LM_MAX_FILE_MB=1 also bounds large loaded contexts.
 export const capForContext = (contextTokens, reserveTokens = RESERVE_TOKENS) =>
   Math.min(1_000_000, Math.max(0, Math.floor((contextTokens - reserveTokens) * CHARS_PER_TOKEN)));
-const budget = (contextTokens, source, reason) => ({
-  contextTokens, capChars: capForContext(contextTokens), source, ...(reason ? { reason } : {}),
+const budget = (contextTokens, source, reason, model) => ({
+  contextTokens, capChars: capForContext(contextTokens), source, ...(reason ? { reason } : {}), ...(model ? { model } : {}),
 });
 
 // http(s).get bypasses ambient env proxies and never follows redirects. The signal
@@ -53,7 +53,8 @@ export async function getContextCap({
     if (!loaded.length) return model
       ? fallback('pinned model not loaded', 'pinned model not loaded') : fallback('no chat model loaded');
     if (loaded.some((m) => !Number.isSafeInteger(m.loaded_context_length) || m.loaded_context_length <= 0)) return fallback('invalid context');
-    return budget(loaded.reduce((min, m) => Math.min(min, m.loaded_context_length), Infinity), 'loaded');
+    const smallest = loaded.reduce((a, m) => (m.loaded_context_length < a.loaded_context_length ? m : a));
+    return budget(smallest.loaded_context_length, 'loaded', undefined, typeof smallest.id === 'string' ? smallest.id : undefined);
   } catch (e) {
     const reason = e.name === 'AbortError' ? 'timeout'
       : /^(http \d{3}|metadata too large|no metadata)$/.test(e.message) ? e.message : 'no metadata';
