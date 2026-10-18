@@ -378,7 +378,7 @@ start_stalled() { # [env...]: starts a stalled run in the background; sets st_pi
   st_pid=$!
   for _ in $(seq 1 100); do grep -q '"body"' "$LOG" && break; sleep 0.1; done
 }
-rm -rf "$HOME/catalyst"
+rm -rf "$HOME/catalyst"; mkdir -p "$HOME/catalyst" # Catalyst is installed: the dir exists
 job quote-in-line 2000
 start_fake ls batch-stall
 start_stalled CATALYST_TASK=x46 LOCAL_LLM_MODEL=acme/qwen3-7b@q4_k_m.gguf
@@ -405,20 +405,22 @@ PROBE
 LOCAL_LLM_ENDPOINT_URL="$EP" node --import "$TMP/probe.mjs" "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln1" "$TMP/a.txt" > "$TMP/run.out" 2>&1; RC=$?
 if [ "$RC" -eq 0 ] && grep -qE '^PROBE local-[0-9]+\.json$' "$TMP/run.out" && ! ls "$LANES"/local-*.json >/dev/null 2>&1; then ok "a normal end removes the lane file that was present until exit"
 else bad "normal end: rc=$RC $(grep PROBE "$TMP/run.out") $(ls "$LANES" 2>&1)"; fi
-rm -rf "$HOME/catalyst"
+rm -rf "$HOME/catalyst"; mkdir -p "$HOME/catalyst"
 HTTP_PROXY=http://127.0.0.1:9 run_batch "$EP" "$TMP/out-ln2" "$TMP/a.txt"; rc_p=$RC
 LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln3" "$TMP/a.txt" > /dev/null 2>&1; rc_nl=$?
 JOB="$TMP/job-unknown-check.json" run_batch "$EP" "$TMP/out-ln4" "$TMP/a.txt"
-if [ "$rc_p" -eq 2 ] && [ "$rc_nl" -eq 2 ] && [ "$RC" -eq 2 ] && [ ! -e "$HOME/catalyst" ]; then ok "refused runs (proxy, non-loopback endpoint, bad job) write no lane file"
+if [ "$rc_p" -eq 2 ] && [ "$rc_nl" -eq 2 ] && [ "$RC" -eq 2 ] && [ ! -e "$LANES" ]; then ok "refused runs (proxy, non-loopback endpoint, bad job) write no lane file"
 else bad "refused runs: rc=$rc_p/$rc_nl/$RC $(ls "$HOME" 2>&1)"; fi
 rm -rf "$HOME/catalyst"; run_batch "$EP" "$TMP/out-ln5" "$TMP/a.txt"; rc_a=$RC
+if [ "$rc_a" -eq 0 ] && [ ! -e "$HOME/catalyst" ]; then ok "without Catalyst installed (no \$HOME/catalyst), a run leaves no trace"
+else bad "no-catalyst trace: rc=$rc_a $(ls "$HOME" 2>&1)"; fi
 sed -E "s#$TMP/out-ln5#OUT#g; s#Started [0-9TZ:.-]+#Started T#" "$TMP/run.out" > "$TMP/run-a.norm"
-rm -rf "$HOME/catalyst"; : > "$HOME/catalyst" # a regular file where the lane dir would go
+mkdir -p "$HOME/catalyst"; : > "$HOME/catalyst/band" # a regular file where the lane dir would go: mkdir fails
 run_batch "$EP" "$TMP/out-ln6" "$TMP/a.txt"; rc_b=$RC
 sed -E "s#$TMP/out-ln6#OUT#g; s#Started [0-9TZ:.-]+#Started T#" "$TMP/run.out" > "$TMP/run-b.norm"
-if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-b.norm"; then ok "with \$HOME/catalyst a regular file, exit status and output match a run without it"
+if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-b.norm"; then ok "with \$HOME/catalyst/band a regular file, exit status and output match a run without it"
 else bad "fail-open: rc=$rc_a/$rc_b $(diff "$TMP/run-a.norm" "$TMP/run-b.norm" | head -5)"; fi
-rm -f "$HOME/catalyst"
+rm -rf "$HOME/catalyst"
 
 # --- the runner still dies by the signal, not by an exit code --------------------------------------
 mkdir -p "$HOME/catalyst"; start_fake sg batch-stall

@@ -1,6 +1,6 @@
 // Shows a running batch as a lane in Catalyst's band: ~/catalyst/band/lanes/local-<pid>.json while it runs.
 // Harmless without Catalyst, and fail-open: no step here may change the run's output or exit status.
-import { writeFileSync, renameSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, renameSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -24,15 +24,20 @@ const gitCommonDir = () => {
 // Returns an idempotent, synchronous remove(); a no-op when registering failed.
 export const registerLane = ({ label, task = null }) => {
   let file = null;
+  let tmp = null;
   try {
-    const dir = join(homedir(), 'catalyst', 'band', 'lanes');
+    const root = join(homedir(), 'catalyst');
+    if (!statSync(root).isDirectory()) return () => {}; // no Catalyst, no trace: never create ~/catalyst itself
+    const dir = join(root, 'band', 'lanes');
     mkdirSync(dir, { recursive: true });
     const target = join(dir, `local-${process.pid}.json`);
-    const tmp = `${target}.tmp`;
+    tmp = `${target}.tmp`;
     const lane = { v: 1, kind: 'local', label: shortLabel(label), task: task || null, pid: process.pid, started: new Date().toISOString().replace(/\.\d+Z$/, 'Z'), repo: gitCommonDir() };
     writeFileSync(tmp, JSON.stringify(lane) + '\n');
     renameSync(tmp, target);
     file = target;
-  } catch { /* the band is optional */ }
+  } catch { // the band is optional; a missing lane is diagnosable with `catalyst lanes`
+    if (tmp) { try { rmSync(tmp, { force: true }); } catch { /* the reader prunes dead pids */ } }
+  }
   return () => { if (file) { try { rmSync(file, { force: true }); } catch { /* the reader prunes dead pids */ } } };
 };
