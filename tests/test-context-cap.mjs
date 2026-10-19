@@ -71,16 +71,16 @@ const optedHint = async (endpoint, sizes, options = { CLAUDE_PLUGIN_OPTION_DELEG
 test('context formula follows 32k and 64k loaded contexts', async () => {
   const a = await fake(32768), b = await fake(65536);
   assert.equal(MIN_DELEGATE_CHARS, 30000);
-  assert.deepEqual(await getContextCap({ endpoint: a.endpoint }), { contextTokens: 32768, capChars: 45875, source: 'loaded' });
-  assert.deepEqual(await getContextCap({ endpoint: b.endpoint }), { contextTokens: 65536, capChars: 98304, source: 'loaded' });
+  assert.deepEqual(await getContextCap({ endpoint: a.endpoint }), { contextTokens: 32768, capChars: 45875, source: 'loaded', model: 'fake-context' });
+  assert.deepEqual(await getContextCap({ endpoint: b.endpoint }), { contextTokens: 65536, capChars: 98304, source: 'loaded', model: 'fake-context' });
 });
 test('model selection uses the smallest loaded chat context unless pinned', async () => {
   let models = [model('embed', 999999, 'loaded', 'embeddings'), model('idle', 999999, 'not-loaded'), model('a', 65536)];
   const endpoint = await serve((q, r) => r.end(JSON.stringify({ data: models })));
-  assert.equal((await getContextCap({ endpoint })).capChars, 98304);
+  assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 65536, capChars: 98304, source: 'loaded', model: 'a' });
   models.push(model('b', 16384));
   assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 16384, capChars: 19660, source: 'loaded' });
-  assert.deepEqual(await getContextCap({ endpoint, model: 'b' }), { contextTokens: 16384, capChars: 19660, source: 'loaded' });
+  assert.deepEqual(await getContextCap({ endpoint, model: 'b' }), { contextTokens: 16384, capChars: 19660, source: 'loaded', model: 'b' });
   writeFileSync(join(tmp, 'pin.txt'), 'x'.repeat(35000));
   for (const pin of ['missing', 'idle']) {
     assert.deepEqual(await getContextCap({ endpoint, model: pin }), assumed('pinned model not loaded', 'pinned model not loaded'));
@@ -89,7 +89,7 @@ test('model selection uses the smallest loaded chat context unless pinned', asyn
   }
   // Exercise the helper's env defaults in a separate process.
   const result = await run('scripts/context-cap.mjs', [], { LOCAL_LLM_ENDPOINT_URL: endpoint, LOCAL_LLM_MODEL: 'b' });
-  assert.deepEqual(JSON.parse(result.stdout), { contextTokens: 16384, capChars: 19660, source: 'loaded' });
+  assert.deepEqual(JSON.parse(result.stdout), { contextTokens: 16384, capChars: 19660, source: 'loaded', model: 'b' });
 });
 test('unavailable or malformed metadata falls back; tiny context has no usable room', async () => {
   let payload = {};
@@ -100,7 +100,7 @@ test('unavailable or malformed metadata falls back; tiny context has no usable r
     assert.deepEqual(await getContextCap({ endpoint }), assumed(reason));
   }
   payload = { data: [model('a', 2048)] };
-  assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 2048, capChars: 0, source: 'loaded' });
+  assert.deepEqual(await getContextCap({ endpoint }), { contextTokens: 2048, capChars: 0, source: 'loaded', model: 'a' });
   const dead = await serve(() => {});
   await new Promise((r) => servers.at(-1).close(r));
   assert.deepEqual(await getContextCap({ endpoint: dead }), assumed('no metadata'));
@@ -119,7 +119,7 @@ test('loopback validation, redirect refusal and proxy bypass keep metadata local
     LOCAL_LLM_ENDPOINT_URL: target, HTTP_PROXY: proxy, NODE_USE_ENV_PROXY: '1', NO_PROXY: '', no_proxy: '',
   });
   assert.equal(result.code, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { contextTokens: 65536, capChars: 98304, source: 'loaded' });
+  assert.deepEqual(JSON.parse(result.stdout), { contextTokens: 65536, capChars: 98304, source: 'loaded', model: 'a' });
   assert.equal(proxyHits, 0);
 });
 test('stalled metadata times out and hook returns within its five-second budget', async () => {

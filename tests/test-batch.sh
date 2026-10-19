@@ -17,6 +17,9 @@ for tool in node jq; do
 done
 
 TMP=$(mktemp -d) || { echo "FAIL: mktemp"; exit 1; }
+export HOME="$TMP/home"; mkdir -p "$HOME" # lane files must never reach the real ~/catalyst
+unset CATALYST_TASK LOCAL_LLM_MODEL # the suite must not depend on the caller's env
+LANES="$HOME/catalyst/band/lanes"
 PIDS=()
 trap 'for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$TMP"' EXIT
 
@@ -366,6 +369,135 @@ printf 'Completed: 9 of 9 windows answered.\n' > "$TMP/out-a/index.md"
 JOB="$TMP/job-unknown-check.json" run_batch "$EP" "$TMP/out-a" "$TMP/m.txt"
 if [ "$rc1" -eq 2 ] && [ "$RC" -eq 2 ] && [ "${stale1:-0}" -eq 0 ] && ! grep -q Completed "$TMP/out-a/index.md" 2>/dev/null; then ok "a refused re-run (proxy, bad job) removes the previous index.md"
 else bad "stale index after refusal: rc=$rc1/$RC"; fi
+
+# --- the run shows as a lane in Catalyst's band while it runs ------------------------------------
+lane_wait() { for _ in $(seq 1 100); do ls "$LANES"/local-*.json >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1; }
+start_stalled() { # [env...]: starts a stalled run in the background; sets st_pid, waits for its first request
+  : > "$LOG"
+  env LOCAL_LLM_ENDPOINT_URL="$EP" "$@" node "$RUN" --job "${JOB:-$TMP/job.json}" --out "$TMP/out-ln$RANDOM" "$TMP/m.txt" > /dev/null 2>&1 &
+  st_pid=$!
+  for _ in $(seq 1 100); do grep -q '"body"' "$LOG" && break; sleep 0.1; done
+}
+rm -rf "$HOME/catalyst"; mkdir -p "$HOME/catalyst" # Catalyst is installed: the dir exists
+job quote-in-line 2000
+start_fake ls batch-stall
+start_stalled CATALYST_TASK=x46 LOCAL_LLM_MODEL=acme/qwen3-7b@q4_k_m.gguf
+lane_wait; lf="$LANES/local-$st_pid.json"
+if jq -e --argjson p "$st_pid" '.v == 1 and .kind == "local" and .pid == $p and .task == "x46" and .label == "qwen3-7b" and (.started | test("^[0-9]{4}-.*Z$")) and (.repo == null or (.repo | startswith("/")))' "$lf" >/dev/null 2>&1; then ok "a running batch writes local-<pid>.json (v 1, kind local, own pid, task, shortened LOCAL_LLM_MODEL label)"
+else bad "lane file: $(head -c 300 "$lf" 2>&1)"; fi
+[ -e "$lf" ]; was_int=$? # present mid-run, or "gone" proves nothing
+kill -INT "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_int=$?
+if [ "$was_int" -eq 0 ] && [ "$rc_int" -eq 130 ] && [ ! -e "$lf" ]; then ok "SIGINT removes the lane file and exits 130"
+else bad "SIGINT: rc=$rc_int file=$([ -e "$lf" ] && echo present || echo gone)"; fi
+start_stalled LOCAL_LLM_MODEL=m
+lane_wait; lf="$LANES/local-$st_pid.json"
+[ -e "$lf" ]; was_term=$?
+task_null=$(jq -r '.task == null' "$lf" 2>/dev/null)
+kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null; rc_term=$?
+if [ "$task_null" = true ] && [ "$was_term" -eq 0 ] && [ "$rc_term" -eq 143 ] && [ ! -e "$lf" ]; then ok "SIGTERM removes the lane file and exits 143; task is null without CATALYST_TASK"
+else bad "SIGTERM: rc=$rc_term file=$([ -e "$lf" ] && echo present || echo gone)"; fi
+start_fake ln batch
+# The probe registers its exit hook before the runner does, so it sees the file just before remove() runs.
+cat > "$TMP/probe.mjs" <<'PROBE'
+import { readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+process.on('exit', () => { try { console.error(`PROBE ${readdirSync(`${homedir()}/catalyst/band/lanes`).join(',')}`); } catch { console.error('PROBE none'); } });
+PROBE
+LOCAL_LLM_ENDPOINT_URL="$EP" node --import "$TMP/probe.mjs" "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln1" "$TMP/a.txt" > "$TMP/run.out" 2>&1; RC=$?
+if [ "$RC" -eq 0 ] && grep -qE '^PROBE local-[0-9]+\.json$' "$TMP/run.out" && ! ls "$LANES"/local-*.json >/dev/null 2>&1; then ok "a normal end removes the lane file that was present until exit"
+else bad "normal end: rc=$RC $(grep PROBE "$TMP/run.out") $(ls "$LANES" 2>&1)"; fi
+rm -rf "$HOME/catalyst"; mkdir -p "$HOME/catalyst"
+HTTP_PROXY=http://127.0.0.1:9 run_batch "$EP" "$TMP/out-ln2" "$TMP/a.txt"; rc_p=$RC
+LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$RUN" --job "$TMP/job.json" --out "$TMP/out-ln3" "$TMP/a.txt" > /dev/null 2>&1; rc_nl=$?
+JOB="$TMP/job-unknown-check.json" run_batch "$EP" "$TMP/out-ln4" "$TMP/a.txt"
+if [ "$rc_p" -eq 2 ] && [ "$rc_nl" -eq 2 ] && [ "$RC" -eq 2 ] && [ ! -e "$LANES" ]; then ok "refused runs (proxy, non-loopback endpoint, bad job) write no lane file"
+else bad "refused runs: rc=$rc_p/$rc_nl/$RC $(ls "$HOME" 2>&1)"; fi
+rm -rf "$HOME/catalyst"; run_batch "$EP" "$TMP/out-ln5" "$TMP/a.txt"; rc_a=$RC
+if [ "$rc_a" -eq 0 ] && [ ! -e "$HOME/catalyst" ]; then ok "without Catalyst installed (no \$HOME/catalyst), a run leaves no trace"
+else bad "no-catalyst trace: rc=$rc_a $(ls "$HOME" 2>&1)"; fi
+# run_split <outdir>: like run_batch, but stdout and stderr apart; prints a normalized stdout + output-file digest
+run_split() {
+  LOCAL_LLM_ENDPOINT_URL="$EP" node "$RUN" --job "$TMP/job.json" --out "$1" "$TMP/a.txt" > "$TMP/split.so" 2> "$TMP/split.se"; RC=$?
+  { sed -E "s#$1#OUT#g; s#Started [0-9TZ:.-]+#Started T#; s#wall time [0-9]+ s#wall time N s#" "$TMP/split.so"; cat "$1"/rows.jsonl "$1"/dropped.jsonl "$1"/failures.jsonl; sed -E "s#Started [0-9TZ:.-]+#Started T#; s#wall time [0-9]+ s#wall time N s#" "$1/index.md"; } > "$2"
+}
+run_split "$TMP/out-ln5b" "$TMP/run-a.norm"; rc_a=$RC
+cp "$TMP/split.se" "$TMP/split-a.se"
+mkdir -p "$HOME/catalyst"; : > "$HOME/catalyst/band" # a regular file where the lane dir would go: mkdir fails
+run_split "$TMP/out-ln6" "$TMP/run-b.norm"; rc_b=$RC
+if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-b.norm" \
+   && [ "$(grep -c '^local-llm:' "$TMP/split.se")" -eq 1 ] && grep -qE "^local-llm: could not write a lane file in .*/catalyst/band/lanes \([A-Z]+\); running without a band lane$" "$TMP/split.se" \
+   && ! grep -q '^local-llm:' "$TMP/split-a.se" && cmp -s "$TMP/split-a.se" <(grep -v '^local-llm:' "$TMP/split.se"); then ok "a failed lane write prints exactly one local-llm: stderr line; exit status, stdout and output files match a run without it"
+else bad "fail-open: rc=$rc_a/$rc_b stderr=$(head -c 300 "$TMP/split.se") $(diff "$TMP/run-a.norm" "$TMP/run-b.norm" | head -5)"; fi
+rm -rf "$HOME/catalyst"; : > "$HOME/catalyst" # Catalyst's dir is a regular file: not installed, silent
+run_split "$TMP/out-ln7" "$TMP/run-c.norm"; rc_c=$RC
+if [ "$rc_c" -eq 0 ] && cmp -s "$TMP/run-a.norm" "$TMP/run-c.norm" && cmp -s "$TMP/split-a.se" "$TMP/split.se"; then ok "with \$HOME/catalyst a regular file there is no lane and nothing changes (silent)"
+else bad "catalyst-as-file: rc=$rc_c $(head -c 200 "$TMP/split.se")"; fi
+rm -rf "$HOME/catalyst"
+
+# --- shortLabel ----------------------------------------------------------------------------------
+labels=$(node --input-type=module -e '
+import { shortLabel } from "'"$REPO"'/batch/lane.mjs";
+console.log(JSON.stringify([shortLabel("qwen3-7b"), shortLabel("a\u0007b\nc"), shortLabel(""), shortLabel("x".repeat(40)).length, shortLabel("acme/m@q4.gguf")]));')
+if [ "$labels" = '["qwen3-7b","abc","local",24,"m"]' ]; then ok "shortLabel: plain name kept, control characters stripped, empty becomes local, 24-character cap, prefix/quant/.gguf stripped"
+else bad "shortLabel: $labels"; fi
+
+# --- a failed rename leaves no temp file, and remove() is then a no-op ----------------------------
+mkdir -p "$HOME/catalyst"
+tmpleft=$(node --input-type=module -e '
+import { registerLane } from "'"$REPO"'/batch/lane.mjs";
+import { mkdirSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+const dir = `${process.env.HOME}/catalyst/band/lanes`;
+mkdirSync(`${dir}/local-${process.pid}.json`, { recursive: true }); // a non-empty directory: rename onto it fails
+writeFileSync(`${dir}/local-${process.pid}.json/keep`, "x");
+const rm = registerLane({ label: "m" }); rm(); rm();
+console.log(readdirSync(dir).filter((f) => f.endsWith(".tmp")).length, existsSync(`${dir}/local-${process.pid}.json/keep`));' 2>/dev/null)
+if [ "$tmpleft" = "0 true" ]; then ok "a failed rename leaves no .tmp file and remove() deletes nothing"
+else bad "temp cleanup: $tmpleft"; fi
+rm -rf "$HOME/catalyst"
+
+# --- the runner still dies by the signal, not by an exit code --------------------------------------
+mkdir -p "$HOME/catalyst"; start_fake sg batch-stall
+sigs=$(EP="$EP" RUN="$RUN" JOBF="$TMP/job.json" INPUT="$TMP/m.txt" node --input-type=module -e '
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+const lanes = `${process.env.HOME}/catalyst/band/lanes`;
+const out = [];
+for (const [n, sig, twice] of [[0, "SIGINT"], [1, "SIGTERM"], [2, "SIGTERM", true]]) {
+  const c = spawn(process.execPath, [process.env.RUN, "--job", process.env.JOBF, "--out", `${process.env.HOME}/o-${n}`, process.env.INPUT], { env: { ...process.env, LOCAL_LLM_ENDPOINT_URL: process.env.EP }, stdio: "ignore" });
+  const done = new Promise((r) => c.on("exit", (code, signal) => r(signal ?? `code${code}`)));
+  for (let i = 0; i < 100 && !existsSync(`${lanes}/local-${c.pid}.json`); i++) await new Promise((r) => setTimeout(r, 100));
+  c.kill(sig); if (twice) c.kill(sig); out.push(await done); if (twice) out.push(existsSync(`${lanes}/local-${c.pid}.json`) ? "leaked" : "clean");
+}
+console.log(out.join(" "));')
+if [ "$sigs" = "SIGINT SIGTERM SIGTERM clean" ]; then ok "SIGINT and SIGTERM end the runner by the signal itself (WIFSIGNALED), not an exit code; the same signal twice back to back still leaves no lane file"
+else bad "death by signal: $sigs"; fi
+rm -rf "$HOME/catalyst"
+
+# --- the git lookup can never hold the run up: a git that ignores SIGTERM is killed ---------------
+mkdir -p "$TMP/gitstub" "$HOME/catalyst"
+printf '#!/bin/sh\ntrap "" TERM\nexec sleep 30\n' > "$TMP/gitstub/git"; chmod +x "$TMP/gitstub/git"
+t0=$(date +%s)
+repo_out=$(PATH="$TMP/gitstub:$PATH" node --input-type=module -e '
+import { registerLane } from "'"$REPO"'/batch/lane.mjs";
+import { readFileSync } from "node:fs";
+const rm = registerLane({ label: "m" });
+const f = `${process.env.HOME}/catalyst/band/lanes/local-${process.pid}.json`;
+console.log(JSON.stringify(JSON.parse(readFileSync(f, "utf8")).repo)); rm();')
+t1=$(date +%s)
+if [ "$repo_out" = "null" ] && [ $((t1 - t0)) -le 4 ]; then ok "a git that ignores SIGTERM is killed at the timeout: registration returns in $((t1 - t0)) s with repo null"
+else bad "git stub: repo=$repo_out took $((t1 - t0)) s"; fi
+rm -rf "$HOME/catalyst"
+
+# --- the label comes from the models query when the job sets no window and LOCAL_LLM_MODEL is unset ---
+job quote-in-line 2000; jq 'del(.max_window_chars)' "$TMP/job.json" > "$TMP/job-nocap.json"
+mkdir -p "$HOME/catalyst"
+start_fake lm batch-stall-model
+JOB="$TMP/job-nocap.json" start_stalled
+lane_wait; lf="$LANES/local-$st_pid.json"
+if jq -e '.label == "qwen3-7b"' "$lf" >/dev/null 2>&1; then ok "with no max_window_chars and no LOCAL_LLM_MODEL, the label is the single loaded model's short id"
+else bad "models-query label: $(head -c 300 "$lf" 2>&1)"; fi
+kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null
+rm -rf "$HOME/catalyst"
 
 echo "batch pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]

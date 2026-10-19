@@ -80,6 +80,7 @@ scripts/
 batch/
   flatten-transcripts.mjs # session .jsonl -> one line per block: L<n>, role, kind, text (cut at 2000 chars)
   run.mjs            # batch runner: raw text or in-memory transcripts, one prompt over many text windows on the local model; writes rows, dropped, failures, index.md
+  lane.mjs           # shows the running batch as a lane in Catalyst's band: writes and removes $HOME/catalyst/band/lanes/local-<pid>.json, fail-open
   jobs/friction.json # pilot job: user/Claude friction in transcripts (correction, stuck, tool_error, permission_denial)
 server/
   verify-server.mjs  # stdio MCP (initialize, ping, tools/list, tools/call); re-checks roots and endpoint
@@ -95,7 +96,7 @@ tests/
   eval-verify.mjs    # verifier live eval on the spike's sets (needs LM Studio; not per-commit)
   mcp-call.mjs       # minimal stdio MCP client used by the tests (`--list` sends tools/list)
   mcp-raw.mjs        # sends raw lines (malformed ones too, or two calls at once) and collects the replies
-  fake-endpoint.mjs  # loopback HTTP listener that logs requests; `no-model` mimics LM Studio with nothing loaded, `error500` fails every chat with HTTP 500, `verify*` modes answer label requests, `proxy` is a proxy that must stay unused; `context` lists loaded contexts plus embeddings/unloaded decoys; `batch`, `batch-bad`, `batch-bad-once`, `batch-length`, `batch-flaky`, `batch-stall` answer the batch runner's requests
+  fake-endpoint.mjs  # loopback HTTP listener that logs requests; `no-model` mimics LM Studio with nothing loaded, `error500` fails every chat with HTTP 500, `verify*` modes answer label requests, `proxy` is a proxy that must stay unused; `context` lists loaded contexts plus embeddings/unloaded decoys; `batch`, `batch-bad`, `batch-bad-once`, `batch-length`, `batch-flaky`, `batch-then-fail`, `batch-stall`, `batch-stall-model` (also lists one loaded model) answer the batch runner's requests
   test-delegation.sh # delegation acceptance harness (real claude -p sessions; not in the per-commit suite)
   fixtures/deleg/    # hand-written stream-json traces, tiny target files, canned judge verdicts and judge labels
   fixtures/verify/   # the jev spike's two synthetic claim sets (sources plus easy.json, hard.json)
@@ -141,6 +142,8 @@ docs/
 ## Batch runner
 
 `skills/batch-local/SKILL.md` (at most 50 lines) triggers only when the user explicitly asks for the local model or a batch/local run over many files (e.g. "use the local model to classify these 200 tickets" or "run a local batch over these transcripts"). Ordinary requests never trigger it; single-file jobs, judgment, synthesis and writing never use batch. Paid 60-ticket runs started the runner unprompted but took 14–17 Claude turns and $0.19–0.44: inline-JSON quoting hit Claude Code's brace-expansion check, globs were rejected, and checking rows led Claude to re-read tickets. See `docs/results.md`, section D.
+
+While it runs, `batch/lane.mjs` writes `$HOME/catalyst/band/lanes/local-<pid>.json` (Catalyst's lane-file format) so the runner shows in Catalyst's band when Catalyst is installed (it creates `band/lanes/` inside an existing `$HOME/catalyst` and never creates `$HOME/catalyst` itself); the file is removed on exit, SIGINT and SIGTERM, and a failed write prints one stderr line (`local-llm: could not write a lane file in <dir> (<code>); running without a band lane`) and the run goes on unchanged; without `$HOME/catalyst` it is silent. The label is `LOCAL_LLM_MODEL`, else the model the context-cap query names (only when exactly one chat model is loaded, or the pinned one), else `local`: so it is `local` when the job sets `max_window_chars` (no query is made), when several models are loaded, or when the query fails, unless `LOCAL_LLM_MODEL` is set. `CATALYST_TASK` sets the task.
 
 For interactive sessions, write the job JSON to a scratch file with Write, resolve `<base directory>/../../batch/run.mjs` from the skill's displayed base directory, and start one Bash command with `run_in_background: true`. Expand globs yourself from a listing (e.g. `ls`) and pass explicit file paths. Each job asks for one kind of fact with a strict row schema containing `line`, `quote` and the fact fields, and `check: "quote-in-line"`. Interpretation-heavy kinds use about 20k-char windows. Wait, read the returned `index.md`, and check only rows the user's answer depends on. Do not re-read inputs to check rows: that defeats the batch. Report counts, no-row windows and failures. Quote validation proves location, not semantic correctness or complete recall.
 
