@@ -136,6 +136,8 @@ git clone git@github.com:warmlogic/claude-local-llm.git "$HOME/github/claude-loc
 claude --plugin-dir "$HOME/github/claude-local-llm"
 ```
 
+`--plugin-dir` shows no setup prompt, and `allowed_dirs` has no default, so the plugin's servers will not start until you set it: see [Choose the folders the local model may read](#choose-the-folders-the-local-model-may-read).
+
 `--plugin-dir` loads the plugin for that session only, so pass it each time.
 
 For a permanent install, add the clone as a marketplace and install from it. The repo's `.claude-plugin/marketplace.json` lists the plugin:
@@ -159,6 +161,8 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 ### Choose the folders the local model may read
 
 `allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
+
+Anything under these folders can reach Claude's context with no permission prompt: the local model's answers and batch rows are returned to Claude, and a file's content can steer what gets asked. Do not include folders that hold secrets (`.env` files, credentials, keys).
 
 Until it is set, Claude Code does not start the plugin's servers: `/mcp` shows them failed with `Plugin option "allowed_dirs" isn't set`, and the plugin's tools do not exist. Set it any one of these ways, then restart Claude Code:
 

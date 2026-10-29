@@ -121,6 +121,10 @@ for frag in "claude plugin configure local-llm@" "--values-stdin" '{"allowed_dir
   else bad "unset allowed_dirs message names: $frag ($out)"; fi
 done
 
+# The manifest keeps allowed_dirs required and gives it no default.
+if jq -e '.userConfig.allowed_dirs | (has("default") | not) and .required == true' "$REPO/.claude-plugin/plugin.json" >/dev/null; then ok "manifest: allowed_dirs is required with no default"
+else bad "manifest: allowed_dirs is required with no default"; fi
+
 # --- loopback only: a remote endpoint is refused before houtini starts ---------
 for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@evil.example/" \
           "http://localhost:1@evil.example/" "http://127.0.0.1:1.evil.com" "http://localhost:12x" \
