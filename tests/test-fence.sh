@@ -114,6 +114,12 @@ check_refuses "'path:suffix' (would authorize path plus a cwd-relative suffix)" 
 out=$(env -u LOCAL_LLM_ALLOWED_DIRS node "$DRIVER" "$LAUNCHER")
 if did_not_start "$out" "no allowed folders"; then ok "launcher refuses to start: allowed_dirs unset"
 else bad "launcher refuses to start: allowed_dirs unset ($out)"; fi
+# The message must say how to set it (Claude Code never starts the server while a required option is unset, so
+# a user sees this only for an empty value or a direct run): configure command, JSON key, /plugin UI, restart.
+for frag in "claude plugin configure local-llm@" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
+  if did_not_start "$out" "$frag"; then ok "unset allowed_dirs message names: $frag"
+  else bad "unset allowed_dirs message names: $frag ($out)"; fi
+done
 
 # --- loopback only: a remote endpoint is refused before houtini starts ---------
 for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@evil.example/" \
@@ -428,11 +434,11 @@ CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='/' batch_cmd slash-root reject "$RUN --job-js
 CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=" $HOOK_TMP/allowed" batch_cmd padded-root reject "$RUN --job-json '{}' '$INPUT'"
 CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='relative' batch_cmd relative-root reject "$RUN --job-json '{}' '$INPUT'"
 HOME="$HOOK_TMP/home" CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='~/../allowed' batch_cmd home-root allow "$RUN --job-json '{}' '$INPUT'"
-# Manifest defaults must work without a saved option; no dependency on the real HOME tree.
+# allowed_dirs has no manifest default: an unset option approves nothing (fail closed), even for an input under HOME.
 mkdir -p "$HOOK_TMP/home/github"
 printf 'input\n' > "$HOOK_TMP/home/github/default.txt"
 unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
-HOME="$HOOK_TMP/home" batch_cmd manifest-default allow "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
+HOME="$HOOK_TMP/home" batch_cmd unset-option reject "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
 export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
 for suffix in '; rm -rf ~' ' | sh' ' && true' ' || true' ' > /tmp/out' ' < /tmp/in' ' $(id)' ' `id`' $'\ntrue' ' &&' ' # comment' ' & true'; do
   batch_cmd "operator $(printf %q "$suffix")" reject "$RUN --job-json '{}' '$INPUT'$suffix"
@@ -453,6 +459,11 @@ cp -R "$BROOT/.claude-plugin" "$HOOK_TMP/hook-plugin/"
 ln -s "$BROOT/batch/run.mjs" "$HOOK_TMP/hook-plugin/batch/run.mjs"
 ORIGINAL_HOOK="$HOOK"; HOOK="$HOOK_TMP/hook-plugin/scripts/approve-own-tools.mjs"
 batch_cmd symlink-out reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'"
+# Even if a manifest default for allowed_dirs reappeared, the hook reads only the saved option.
+jq '.userConfig.allowed_dirs.default = ["'"$HOOK_TMP"'/allowed"]' "$BROOT/.claude-plugin/plugin.json" > "$HOOK_TMP/hook-plugin/.claude-plugin/plugin.json"
+rm -f "$HOOK_TMP/hook-plugin/batch/run.mjs"; cp "$BROOT/batch/run.mjs" "$HOOK_TMP/hook-plugin/batch/run.mjs"
+unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
+batch_cmd unset-option-ignores-manifest-default reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'"
 HOOK="$ORIGINAL_HOOK"
 if [ "$HAD_ALLOWED_DIRS" = x ]; then export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$SAVED_ALLOWED_DIRS"; else unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; fi
 if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:batch-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then ok "approval hook allows batch-local skill"; else bad "approval hook allows batch-local skill"; fi
