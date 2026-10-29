@@ -35,8 +35,10 @@ Status:
 
 - An Apple Silicon Mac with enough memory for the model. The recommended model is a 20.95 GB download, and the Splash runtime asks for a Mac with an M3 or later, macOS 26.4 or later, and at least 36 GB of memory (vendor figures).
 - Node.js with `npx`. The plugin starts its server with `npx`.
-- [LM Studio](https://lmstudio.ai) and its `lms` command line tool.
+- [LM Studio](https://lmstudio.ai) and its `lms` command line tool, with its server running on loopback (section 3) and a model loaded (section 2). The alternative is LM Studio's just-in-time model loading with the plugin's `model` option set: LM Studio then loads that model on the first request, at its default (smaller) context (see section 2).
+- Network access on the first launch: the plugin runs a pinned copy of houtini-lm through `npx`, which downloads it into the npx cache once and works offline from then on. Behind a proxy, pre-warm the cache once (see [First launch is slow or times out](#first-launch-is-slow-or-times-out)).
 - Claude Code.
+- At least one folder of files for the local model to read. You choose these folders yourself; the plugin has no default (see [Choose the folders the local model may read](#choose-the-folders-the-local-model-may-read)).
 
 ## Bulk jobs
 
@@ -144,16 +146,24 @@ claude plugin install local-llm@warmlogic-local-llm
 
 It then loads in every session, under the id `local-llm@warmlogic-local-llm`. A local-path marketplace installs whatever the clone has checked out, so keep the clone on `main`. The configure commands below use the per-session id `local-llm@inline`. For the permanent install, run them without `--plugin-dir` and with the installed id, e.g. `claude plugin configure local-llm@warmlogic-local-llm`. The plugin is unversioned, so every merge to `main` is a release. Pull the clone, then run `claude plugin marketplace update warmlogic-local-llm` and `claude plugin update local-llm@warmlogic-local-llm`, and restart or `/reload-plugins`. To remove it: `claude plugin uninstall local-llm@warmlogic-local-llm`, then `claude plugin marketplace remove warmlogic-local-llm`.
 
-The plugin has five options (declared as `userConfig` in `.claude-plugin/plugin.json`):
+The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.json`):
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `allowed_dirs` | `$HOME/github`, `$HOME/catalyst` | The folders the local model may read. Nothing outside them is readable *by the local model*. Folder names must not contain `,` or `:`. A folder that does not exist on your machine (`$HOME/catalyst` for most people) is skipped with a warning. |
+| `allowed_dirs` | none (required) | The folders the local model may read. Nothing outside them is readable *by the local model*. Folder names must not contain `,` or `:`. A folder that does not exist is skipped with a warning. |
 | `endpoint_url` | `http://127.0.0.1:1234` | The LM Studio server. Must be loopback. |
 | `model` | empty | A model id to request. Empty means whichever model LM Studio has loaded. |
 | `delegate_tasks` | empty (off) | Comma-separated read-only task kinds to delegate unprompted: `classify`, `extract`, `summarize`, `draft`. Add `summarize` only for a local model whose summaries have been measured as reliable. Unknown kinds are ignored with a stderr note; empty or all-unknown disables delegation instructions while keeping oversized-file warnings. |
 
-With `--plugin-dir` the plugin's id is `local-llm@inline`. If you have never set the options, the defaults apply. Set `allowed_dirs` to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of `allowed_dirs` (the default covers all of `$HOME/github` and `$HOME/catalyst`, so narrow it if either holds something private). To see the options and which are unset:
+### Choose the folders the local model may read
+
+`allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
+
+Until it is set, Claude Code does not start the plugin's servers: `/mcp` shows them failed with `Plugin option "allowed_dirs" isn't set`, and the plugin's tools do not exist. Set it any one of these ways, then restart Claude Code:
+
+- **The prompt.** Claude Code asks for the plugin's options when you enable it, and its dialog does not accept an empty value for a required option. A `--plugin-dir` session has no enable step and so no prompt; use one of the next two.
+- **The `/plugin` UI.** Open `/plugin`, pick the plugin, and choose its configuration.
+- **`claude plugin configure`.** Run it with the plugin's id (`local-llm@warmlogic-local-llm` for the permanent install below, `local-llm@inline` with `--plugin-dir`) to see the options and which are unset. For a `--plugin-dir` session, pass the same flag:
 
 ```bash
 claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@inline
@@ -162,7 +172,7 @@ claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@i
 To save values, pipe a JSON object of strings to the same command with `--values-stdin`. A list of folders is one comma-separated string:
 
 ```bash
-printf '%s\n' '{"allowed_dirs": "$HOME/logs,$HOME/github"}' |
+printf '%s\n' '{"allowed_dirs": "$HOME/logs,$HOME/projects"}' |
   claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@inline --values-stdin
 ```
 
@@ -195,7 +205,7 @@ The plugin ships what it needs, so you do not add an allow rule.
 
 ## Smoke test
 
-Make a file of about 35k characters in a folder inside one of your `allowed_dirs` (`$HOME/github` by default), and start Claude Code from that folder. If you removed `$HOME/github` from `allowed_dirs`, use one of your folders in these commands instead.
+Make a file of about 35k characters in a folder inside one of your `allowed_dirs`, and start Claude Code from that folder. The commands below use `$HOME/github`; if it is not in your `allowed_dirs`, use one of your folders instead.
 
 ```bash
 mkdir -p "$HOME/github/local-llm-smoke"
@@ -219,12 +229,12 @@ Optional: after opting in with `delegate_tasks=classify,extract`, to see whether
 
 ### The server does not connect, or `/mcp` shows it failed
 
-The launcher exits with status 2 and a one-line reason before houtini starts. These are the refusals:
+If `/mcp` instead says `Plugin option "allowed_dirs" isn't set`, Claude Code never launched the server: set `allowed_dirs` ([Choose the folders](#choose-the-folders-the-local-model-may-read)) and restart. Otherwise the launcher exits with status 2 and a reason before houtini starts. These are the refusals:
 
 | Message starts with | Cause and fix |
 | --- | --- |
 | `local-llm: node (Node.js) is required` / `npx (Node.js) is required` | Install Node.js so both are on the `PATH` Claude Code sees. |
-| `local-llm: no allowed folders configured` | `allowed_dirs` is empty. Set it in the plugin options. |
+| `local-llm: no allowed folders configured` | `allowed_dirs` is empty. Set it ([Choose the folders](#choose-the-folders-the-local-model-may-read)) and restart Claude Code. |
 | `local-llm: allowed folder must not contain ':'` | Remove the `:` from the folder name or pick another folder. Commas are forbidden too. |
 | `local-llm: endpoint must be loopback` | `endpoint_url` must be `http(s)://` with host `127.0.0.1`, `localhost`, or `[::1]`, no user info, and a numeric port. |
 | `local-llm: none of the allowed folders exist` | Every folder in `allowed_dirs` is missing. Fix the paths. |
@@ -242,7 +252,7 @@ Claude Code saves each MCP server's stderr under `~/Library/Caches/claude-cli-no
 
 ### The `allowed folders:` line
 
-On a healthy start, stderr shows `local-llm: allowed folders: <comma-separated resolved paths>`. This is the exact set the model can read, after symlinks are resolved. A folder that does not exist is skipped with `local-llm: allowed folder not found, skipping: <path>`, so a default like `$HOME/catalyst` on a machine without it is harmless. If a folder you expected is missing from the line, that is why: check the path for a typo.
+On a healthy start, stderr shows `local-llm: allowed folders: <comma-separated resolved paths>`. This is the exact set the model can read, after symlinks are resolved. A folder that does not exist is skipped with `local-llm: allowed folder not found, skipping: <path>`, and the server starts as long as one folder remains. If a folder you expected is missing from the line, that is why: check the path for a typo.
 
 ### First launch is slow or times out
 
