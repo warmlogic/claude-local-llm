@@ -40,8 +40,9 @@ const batchArgsAllowed = (args, cwd) => {
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
 // No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.
-export const ownBatchCommand = (command, cwd = process.cwd()) => {
+export const ownBatchCommand = (command, cwd) => {
   if (typeof command !== 'string' || /[\r\n\0]/.test(command)) return false;
+  if (typeof cwd !== 'string' || !isAbsolute(cwd)) return false; // relative inputs resolve against it
   let quote = null, word = '', started = false;
   const words = [];
   const push = () => { if (started) words.push(word); word = ''; started = false; };
@@ -98,8 +99,8 @@ try {
   process.exit(0); // unreadable input: stay out of the way
 }
 const isOwnSkill = input?.tool_name === 'Skill' && SKILLS.has(input?.tool_input?.skill);
-if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && !input?.tool_input?.dangerouslyDisableSandbox && typeof input.cwd === 'string' && isAbsolute(input.cwd)
-      && ownBatchCommand(input.tool_input.command, input.cwd))
+if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && !input?.tool_input?.dangerouslyDisableSandbox
+      && ownBatchCommand(input?.tool_input?.command, input.cwd))
     || (input?.tool_name === 'Read' && ownBatchOutput(input?.tool_input?.file_path))) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {

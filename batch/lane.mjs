@@ -32,12 +32,12 @@ export const registerLane = ({ label, task = null }) => {
     const target = join(dir, `local-${process.pid}.json`);
     tmp = `${target}.tmp`;
     const lane = { v: 1, kind: 'local', label: shortLabel(label), task: task || null, pid: process.pid, started: new Date().toISOString().replace(/\.\d+Z$/, 'Z'), repo: gitCommonDir() };
-    writeFileSync(tmp, JSON.stringify(lane) + '\n', { flag: 'wx' }); // exclusive: a planted file or symlink at the tmp name fails open
+    writeFileSync(tmp, JSON.stringify(lane) + '\n', { flag: 'wx' }); // exclusive: a planted file or symlink at the tmp name fails this run open, never overwritten through
     renameSync(tmp, target);
     file = target;
   } catch (e) { // Catalyst is installed but the write failed: say so once, and run on
     console.error(`local-llm: could not write a lane file in ${dir} (${e.code ?? e.name}); running without a band lane`);
-    if (tmp && e.code !== 'EEXIST') { try { rmSync(tmp, { force: true }); } catch { /* the reader prunes dead pids */ } } // never delete a file we did not create
+    if (tmp) { try { rmSync(tmp, { force: true }); } catch { /* the reader prunes dead pids */ } } // unlinks (never follows) whatever sits at our own pid's tmp name, so a stale one cannot block this pid's lane again
   }
   return () => { if (file) { try { rmSync(file, { force: true }); } catch { /* the reader prunes dead pids */ } } };
 };
