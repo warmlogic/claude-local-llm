@@ -497,6 +497,11 @@ lane_wait; lf="$LANES/local-$st_pid.json"
 if jq -e '.label == "qwen3-7b"' "$lf" >/dev/null 2>&1; then ok "with no max_window_chars and no LOCAL_LLM_MODEL, the label is the single loaded model's short id"
 else bad "models-query label: $(head -c 300 "$lf" 2>&1)"; fi
 kill -TERM "$st_pid" 2>/dev/null; wait "$st_pid" 2>/dev/null
+# A planted symlink at the lane's tmp name must not be followed: the victim stays intact, and the write fails open.
+rm -rf "$HOME/catalyst"; mkdir -p "$LANES"; printf 'victim\n' > "$TMP/victim"
+LOCAL_LLM_ENDPOINT_URL="$EP" bash -c 'ln -s "$1" "$2/local-$$.json.tmp"; exec node "$3" --job "$4" --out "$5" "$6"' _ "$TMP/victim" "$LANES" "$RUN" "$TMP/job.json" "$TMP/out-ln8" "$TMP/a.txt" > /dev/null 2> "$TMP/lnk.se"; rc_k=$?
+if [ "$(cat "$TMP/victim")" = victim ] && grep -q '^local-llm: could not write a lane file' "$TMP/lnk.se"; then ok "a symlink planted at the lane tmp name is not followed (victim intact, run fails open)"
+else bad "lane symlink: rc=$rc_k victim=$(cat "$TMP/victim") $(head -c 200 "$TMP/lnk.se")"; fi
 rm -rf "$HOME/catalyst"
 
 echo "batch pass=$pass fail=$fail"
