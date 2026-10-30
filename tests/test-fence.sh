@@ -341,10 +341,11 @@ for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_
 done
 # Whole-command approval, not prefix approval. Keep every allow/reject visible for mutation checks.
 batch_cmd() {
-  local label="$1" decision="$2" command="$3" background="${4:-false}" cwd="${5:-$PWD}" output
-  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')" 2>/dev/null)
-  if { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
-     || { [ "$decision" = reject ] && [ -z "$output" ]; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label"; fi
+  local label="$1" decision="$2" command="$3" background="${4:-false}" cwd="${5:-$PWD}" output rc
+  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')"); rc=$?
+  # A reject is exit 0 with no stdout, or exactly the one systemMessage line (no decision): a crash cannot pass as a reject.
+  if [ "$rc" -eq 0 ] && { { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
+     || { [ "$decision" = reject ] && { [ -z "$output" ] || jq -e 'keys == ["systemMessage"] and (.systemMessage | startswith("local-llm: batch auto-approval skipped: "))' >/dev/null <<<"$output"; }; }; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label (rc=$rc: $output)"; fi
 }
 # Use physical paths: the shell test REPO may contain a trailing /.. .
 BROOT=$(cd "$REPO" && pwd -P)
@@ -462,19 +463,18 @@ mkdir -p "$HOOK_TMP/home/github"
 printf 'input\n' > "$HOOK_TMP/home/github/default.txt"
 unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
 HOME="$HOOK_TMP/home" batch_cmd unset-option reject "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
-# A withheld approval says why on stderr (fixed strings, no paths); stdout stays empty and no deny is sent.
-batch_err() { hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c}}')" 2>&1 >"$HOOK_TMP/batch-err.out"; }
-unset_err=$(HOME="$HOOK_TMP/home" batch_err)
-if [ "$unset_err" = "local-llm: batch auto-approval skipped: allowed_dirs option is not set" ] && [ ! -s "$HOOK_TMP/batch-err.out" ]; then ok "batch hook: unset allowed_dirs prints one fixed stderr reason and nothing on stdout"
-else bad "batch hook: unset allowed_dirs stderr: $unset_err"; fi
-empty_err=$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_err)
-if [ "$empty_err" = "local-llm: batch auto-approval skipped: allowed_dirs option is not set" ]; then ok "batch hook: empty allowed_dirs prints the same reason"
-else bad "batch hook: empty allowed_dirs stderr: $empty_err"; fi
-res_err=$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_err)
-if [ "$res_err" = "local-llm: batch auto-approval skipped: allowed_dirs could not be resolved" ] && ! grep -q "$HOOK_TMP" <<<"$res_err"; then ok "batch hook: unresolvable allowed_dirs prints a fixed reason without the path"
-else bad "batch hook: unresolvable allowed_dirs stderr: $res_err"; fi
-quiet_err=$(unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; hook_out "$(jq -nc --arg c "node /tmp/other.mjs" '{tool_name:"Bash",cwd:"/",tool_input:{command:$c}}')" 2>&1)
-if [ -z "$quiet_err" ]; then ok "batch hook: a command that is not the runner prints nothing"; else bad "batch hook: non-runner stderr: $quiet_err"; fi
+# A withheld approval says why in a systemMessage (fixed strings, no paths): no hookSpecificOutput, so the normal prompt decides and nothing is denied.
+batch_msg() { hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c}}')" 2>"$HOOK_TMP/batch-msg.err"; }
+msg_is() { # <label> <reason> <stdout>: exactly {"systemMessage": "local-llm: batch auto-approval skipped: <reason>"}, nothing on stderr
+  if [ "$(jq -c . <<<"$3")" = "$(jq -nc --arg m "local-llm: batch auto-approval skipped: $2" '{systemMessage:$m}')" ] && [ ! -s "$HOOK_TMP/batch-msg.err" ] && ! grep -q "$HOOK_TMP" <<<"$3"; then ok "batch hook: $1 prints only the systemMessage '$2'"
+  else bad "batch hook: $1 printed: $3 (stderr: $(head -c 200 "$HOOK_TMP/batch-msg.err"))"; fi
+}
+msg_is "unset allowed_dirs" "allowed_dirs option is not set" "$(HOME="$HOOK_TMP/home" batch_msg)"
+msg_is "empty allowed_dirs" "allowed_dirs option is not set" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_msg)"
+msg_is "a missing allowed_dirs folder" "allowed_dirs could not be resolved" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_msg)"
+msg_is "a relative allowed_dirs entry (resolver exits 2)" "allowed_dirs could not be resolved" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=relative batch_msg)"
+quiet_out=$(unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; hook_out "$(jq -nc --arg c "node /tmp/other.mjs" '{tool_name:"Bash",cwd:"/",tool_input:{command:$c}}')" 2>&1)
+if [ -z "$quiet_out" ]; then ok "batch hook: a command that is not the runner prints nothing"; else bad "batch hook: non-runner output: $quiet_out"; fi
 export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
 for suffix in '; rm -rf ~' ' | sh' ' && true' ' || true' ' > /tmp/out' ' < /tmp/in' ' $(id)' ' `id`' $'\ntrue' ' &&' ' # comment' ' & true'; do
   batch_cmd "operator $(printf %q "$suffix")" reject "$RUN --job-json '{}' '$INPUT'$suffix"
@@ -500,6 +500,10 @@ jq '.userConfig.allowed_dirs.default = ["'"$HOOK_TMP"'/allowed"]' "$BROOT/.claud
 rm -f "$HOOK_TMP/hook-plugin/batch/run.mjs"; cp "$BROOT/batch/run.mjs" "$HOOK_TMP/hook-plugin/batch/run.mjs"
 unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
 batch_cmd unset-option-ignores-manifest-default reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'"
+# A resolver that outlives the hook's 1 s limit gets its own reason.
+printf 'await new Promise((r) => setTimeout(r, 4000));\n' > "$HOOK_TMP/hook-plugin/scripts/resolve-roots.mjs"
+export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
+msg_is "a resolver timeout" "allowed_dirs resolution timed out" "$(hook_out "$(jq -nc --arg c "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c}}')" 2>"$HOOK_TMP/batch-msg.err")"
 HOOK="$ORIGINAL_HOOK"
 if [ "$HAD_ALLOWED_DIRS" = x ]; then export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$SAVED_ALLOWED_DIRS"; else unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; fi
 if hook_out '{"tool_name":"Skill","tool_input":{"skill":"local-llm:batch-local"}}' | jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null; then ok "approval hook allows batch-local skill"; else bad "approval hook allows batch-local skill"; fi
