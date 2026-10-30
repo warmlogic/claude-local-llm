@@ -40,8 +40,9 @@ const batchArgsAllowed = (args, cwd) => {
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
 // No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.
-export const ownBatchCommand = (command, cwd = process.cwd()) => {
+export const ownBatchCommand = (command, cwd) => {
   if (typeof command !== 'string' || /[\r\n\0]/.test(command)) return false;
+  if (typeof cwd !== 'string' || !isAbsolute(cwd)) return false; // relative inputs resolve against it
   let quote = null, word = '', started = false;
   const words = [];
   const push = () => { if (started) words.push(word); word = ''; started = false; };
@@ -69,8 +70,9 @@ export const ownBatchCommand = (command, cwd = process.cwd()) => {
   try { return realpathSync(script) === script && batchArgsAllowed(words.slice(2), cwd); } catch { return false; }
 };
 
-// The runner's results: a Read of one of its four output files, inside a dir it made with mkdtemp directly under
-// the OS tmpdir (local-llm-batch-XXXXXX), owned by this user, with neither the dir nor the file a symlink.
+// The runner's results: a Read of one of its four output files, inside a directory named local-llm-batch-XXXXXX
+// directly under the OS tmpdir, mode 0700, owned by this user, with neither the dir nor the file a symlink or hardlink.
+// Those are the only checks: a hand-made directory that satisfies them is accepted too.
 const OUTPUTS = new Set(['index.md', 'rows.jsonl', 'dropped.jsonl', 'failures.jsonl']);
 export const ownBatchOutput = (filePath) => {
   if (typeof filePath !== 'string' || !isAbsolute(filePath)) return false;
@@ -78,7 +80,7 @@ export const ownBatchOutput = (filePath) => {
     const dir = dirname(filePath), name = basename(filePath);
     const f = lstatSync(filePath), d = lstatSync(dir);
     if (!OUTPUTS.has(name) || f.isSymbolicLink() || !f.isFile() || f.nlink !== 1 || d.isSymbolicLink() || !d.isDirectory()) return false;
-    if ((d.mode & 0o777) !== 0o700) return false; // mkdtemp's mode: a hand-made dir with looser permissions is not the runner's
+    if ((d.mode & 0o777) !== 0o700) return false; // mkdtemp's mode
     if (d.uid !== process.getuid() || f.uid !== process.getuid()) return false;
     const realDir = realpathSync.native(dir);
     return dirname(realDir) === realpathSync.native(tmpdir()) && /^local-llm-batch-[A-Za-z0-9]{6}$/.test(basename(realDir));
@@ -97,7 +99,8 @@ try {
   process.exit(0); // unreadable input: stay out of the way
 }
 const isOwnSkill = input?.tool_name === 'Skill' && SKILLS.has(input?.tool_input?.skill);
-if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && ownBatchCommand(input?.tool_input?.command, input.cwd))
+if (isOwnSkill || TOOLS.has(input?.tool_name) || (input?.tool_name === 'Bash' && !input?.tool_input?.dangerouslyDisableSandbox
+      && ownBatchCommand(input?.tool_input?.command, input.cwd))
     || (input?.tool_name === 'Read' && ownBatchOutput(input?.tool_input?.file_path))) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {

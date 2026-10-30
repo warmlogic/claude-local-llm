@@ -381,6 +381,18 @@ fi
 batch_cmd root-itself allow "$RUN --job-json '{}' '$HOOK_TMP/allowed'"
 printf 'L1\tx\n' > "$HOOK_TMP/allowed/=cat"
 batch_cmd zsh-equals reject "$RUN --job-json '{}' =cat" false "$HOOK_TMP/allowed"
+# Bash input fields beyond `command`: a sandbox override or a non-absolute cwd gets no approval.
+# Built inline, not with batch_cmd: its ${5:-$PWD} replaces an empty cwd, and it has no slot for dangerouslyDisableSandbox or a missing cwd.
+sandbox_out=$(hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,dangerouslyDisableSandbox:true}}')")
+if [ -z "$sandbox_out" ]; then ok "batch hook reject: dangerouslyDisableSandbox is set"; else bad "batch hook reject: dangerouslyDisableSandbox is set"; fi
+sandbox_off=$(hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,dangerouslyDisableSandbox:false}}')")
+if jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null 2>&1 <<<"$sandbox_off"; then ok "batch hook allow: dangerouslyDisableSandbox is false"; else bad "batch hook allow: dangerouslyDisableSandbox is false"; fi
+nocwd_out=$(hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" '{tool_name:"Bash",tool_input:{command:$c}}')")
+if [ -z "$nocwd_out" ]; then ok "batch hook reject: cwd omitted"; else bad "batch hook reject: cwd omitted"; fi
+notool_out=$(hook_out '{"tool_name":"Bash","cwd":"/"}' 2>&1)
+if [ -z "$notool_out" ]; then ok "Bash input without tool_input is a quiet no-op"; else bad "Bash input without tool_input is a quiet no-op: $notool_out"; fi
+cwd_out=$(hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '${INPUT#/}'" '{tool_name:"Bash",cwd:"",tool_input:{command:$c}}')")
+if [ -z "$cwd_out" ]; then ok "batch hook reject: empty cwd turns a relative input into an absolute one"; else bad "batch hook reject: empty cwd turns a relative input into an absolute one"; fi
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
 # Reads of the runner's own outputs: index.md etc. in a mkdtemp dir under the OS tmpdir
 read_out() { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | node "$REPO/scripts/approve-own-tools.mjs"; }
