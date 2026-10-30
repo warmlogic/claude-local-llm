@@ -194,12 +194,20 @@ else bad "endpoint down: rc=$RC $(head -c 300 "$TMP/out-d/failures.jsonl")"; fi
 run_batch "http://example.com:1234" "$TMP/out-r" "$TMP/m.txt"
 if [ "$RC" -eq 2 ] && grep -q 'must be loopback' "$TMP/run.out" && [ ! -e "$TMP/out-r/rows.jsonl" ]; then ok "a non-loopback endpoint is refused before anything runs"
 else bad "non-loopback: rc=$RC $(head -c 300 "$TMP/run.out")"; fi
-for ep in "http://127.0.0.1:" "http://localhost:" "http://[::1]:" "http://127.0.0.1:1234/v1" "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f"; do
+for ep in "http://127.0.0.1:" "http://localhost:" "http://[::1]:" "http://127.0.0.1:1234/v1" "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f" "http://127.0.0.1:1234//"; do
   root_out="$TMP/out-root-$RANDOM"
   run_batch "$ep" "$root_out" "$TMP/m.txt"
   if [ "$RC" -eq 2 ] && grep -q 'server root only: no path, query or fragment' "$TMP/run.out" && [ ! -e "$root_out/rows.jsonl" ]; then ok "an endpoint that is not a server root is refused before anything runs: $ep"
   else bad "not a server root $ep: rc=$RC $(head -c 300 "$TMP/run.out")"; fi
 done
+
+# A trailing slash on the endpoint is accepted and never doubles into //v1/... (the fake 404s that).
+start_fake sl batch
+lines 8 100 "$TMP/sl.txt"
+job quote-in-line 2000
+run_batch "$EP/" "$TMP/out-sl" "$TMP/sl.txt"
+if [ "$RC" -eq 0 ] && jq -e -s '[.[] | select(.body)] | length > 0 and all(.url == "/v1/chat/completions")' "$LOG" >/dev/null && [ "$(count "$TMP/out-sl/rows.jsonl")" -gt 0 ]; then ok "a trailing-slash endpoint requests /v1/chat/completions"
+else bad "trailing-slash endpoint: rc=$RC $(head -c 300 "$TMP/run.out") $(head -c 200 "$LOG")"; fi
 
 # --- flatten-transcripts -----------------------------------------------------------
 long=$(head -c 2500 /dev/zero | tr '\0' z)
