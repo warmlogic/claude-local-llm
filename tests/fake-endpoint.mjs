@@ -32,7 +32,7 @@
 //   verify-v1-many       as verify-v1, with two chat models listed.
 //   verify-nostate       as verify, but /api/v0/models entries carry no load state.
 //   verify-badlist       as verify, but /api/v0/models answers an object with no data array.
-//   verify-nolists       as verify, but both /api/v0/models and /v1/models are 404s (endpoint_url with /v1).
+//   verify-nolists       as verify, but both /api/v0/models and /v1/models are 404s (not an LM Studio or OpenAI-compatible server).
 //   verify-twoloaded     as verify, but /api/v0/models shows two loaded chat models.
 //   verify-embedonly     as verify, but only an embeddings model is loaded.
 //   verify-slowlist      as verify, but /api/v0/models never answers.

@@ -111,8 +111,10 @@ test('loopback validation, redirect refusal and proxy bypass keep metadata local
   const target = await serve((q, r) => { hits++; r.end(JSON.stringify({ data: [model('a', 65536)] })); });
   const redirect = await serve((q, r) => { r.writeHead(307, { location: target }); r.end(); });
   assert.deepEqual(await getContextCap({ endpoint: redirect }), assumed('http 307'));
-  assert.deepEqual(await getContextCap({ endpoint: target.replace('127.0.0.1', '127.1') }), assumed('not loopback'));
+  assert.deepEqual(await getContextCap({ endpoint: target.replace('127.0.0.1', '127.1') }), assumed('not a loopback server root'));
+  assert.deepEqual(await getContextCap({ endpoint: `${target}/v1` }), assumed('not a loopback server root'));
   assert.equal(hits, 0);
+  assert.deepEqual(await getContextCap({ endpoint: `${target}/` }), { contextTokens: 65536, capChars: 98304, source: 'loaded', model: 'a' });
   let proxyHits = 0;
   const proxy = await serve((q, r) => { proxyHits++; r.end('{}'); });
   const result = await run('scripts/context-cap.mjs', [], {
