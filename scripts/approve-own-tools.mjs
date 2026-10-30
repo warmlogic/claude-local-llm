@@ -54,7 +54,7 @@ const batchArgsAllowed = (args, cwd) => {
 export const ownBatchCommand = (command, cwd) => {
   if (typeof command !== 'string' || /[\r\n\0]/.test(command)) return false;
   if (typeof cwd !== 'string' || !isAbsolute(cwd)) return false; // relative inputs resolve against it
-  if (!command.includes(`${root}/batch/run.mjs`)) return false; // a Bash deny rule matches literal text: split-quoted paths would slip past it
+  if (!command.includes(`${root}/batch/run.mjs`)) return false; // the raw command must contain the contiguous runner path somewhere, so the path-anchored deny rule Bash(*batch/run.mjs*) matches every approved form
   let quote = null, word = '', started = false;
   const words = [];
   const push = () => { if (started) words.push(word); word = ''; started = false; };
