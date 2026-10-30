@@ -69,7 +69,8 @@ if (files.length > 0) {
   const tasks = kinds.filter((kind) => known.has(kind));
   const taskList = tasks.length < 2 ? tasks[0] : `${tasks.slice(0, -1).join(', ')} or ${tasks.at(-1)}`;
   const endpoint = env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL || env.LOCAL_LLM_ENDPOINT_URL || undefined;
-  if (endpoint !== undefined && !isLoopbackEndpoint(endpoint)) {
+  const optionEndpoint = env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL; // the value .mcp.json hands the launchers; a shell variable never reaches them
+  if (tasks.length && optionEndpoint && !isLoopbackEndpoint(optionEndpoint)) {
     // Both launchers refuse this endpoint, so no local tool is running: do not tell Claude to delegate.
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext:
       'local-llm: endpoint_url is not a loopback server root (http://127.0.0.1:1234 form), so the local model tools are unavailable; read big files yourself.' } }));
