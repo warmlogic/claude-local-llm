@@ -176,7 +176,7 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 
 `allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
 
-To block the two tools that read your files, deny them by name in a Claude Code settings file: the project's `.claude/settings.json` for one project, or `~/.claude/settings.json` for everywhere. This does not stop batch runs: the hook still auto-approves an eligible `batch/run.mjs` Bash command over files inside `allowed_dirs`, so deny that Bash command too if you want batch off.
+To block the two tools that read your files, deny them by name in a Claude Code settings file: the project's `.claude/settings.json` for one project, or `~/.claude/settings.json` for everywhere. The `Bash(...)` rule turns off auto-approved batch runs: the hook approves only commands that contain the exact runner path `batch/run.mjs`, so the rule matches every form it would approve. The full off-switch is disabling the plugin; leaving `allowed_dirs` unset also stops the servers.
 
 For example:
 
@@ -185,7 +185,8 @@ For example:
   "permissions": {
     "deny": [
       "mcp__plugin_local-llm_local-llm__code_task_files",
-      "mcp__plugin_local-llm_local-verify__verify_claims"
+      "mcp__plugin_local-llm_local-verify__verify_claims",
+      "Bash(node *batch/run.mjs*)"
     ]
   }
 }

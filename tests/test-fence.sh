@@ -495,6 +495,9 @@ batch_cmd node-flags reject "node --eval 'evil()' $BROOT/batch/run.mjs"
 batch_cmd double-substitution reject "node \"$BROOT/batch/run.mjs\" \"\$(id)\""
 batch_cmd double-backtick reject 'node "'"$BROOT"'/batch/run.mjs" "`id`"'
 batch_cmd unclosed reject "node '$BROOT/batch/run.mjs"
+# A Bash deny rule matches the literal command text, so the runner path must appear contiguously; split-quoted forms get no approval.
+batch_cmd split-quote-dir reject "node \"$BROOT/batch/\"run.mjs --job-json '{}' '$INPUT'"
+batch_cmd split-quote-file reject "node $BROOT/batch/run.'mjs' --job-json '{}' '$INPUT'"
 # A script with the right lexical path but resolving outside the copied plugin is not approved.
 HOOK_TMP=$(cd "$TMP" && pwd -P)
 mkdir -p "$HOOK_TMP/hook-plugin/scripts" "$HOOK_TMP/hook-plugin/batch"
