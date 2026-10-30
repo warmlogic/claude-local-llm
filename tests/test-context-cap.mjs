@@ -282,6 +282,16 @@ test('a loaded context too small for the floor adds the raise-context sentence t
   const pinned8k = hintText(await hintResult(small.endpoint, [35000], { CLAUDE_PLUGIN_OPTION_MODEL: 'fake-context' }));
   assert.match(pinned8k, /`lms load fake-context --context-length 32768`/);
   assert.doesNotMatch(pinned8k, /<model>/);
+  // Several oversized files: the note appears once, on the first oversized line.
+  const several = await optedHint(small.endpoint, [35000, 36000]);
+  assert.equal(several.split('\n').length, 2);
+  assert.equal(several.split('tell the user').length - 1, 1);
+  // A model id that could break the line (backtick, newline) is never interpolated: the placeholder stays.
+  const odd = 'bad`\nid';
+  const oddEndpoint = await serve((q, r) => r.end(JSON.stringify({ data: [model(odd, 8192)] })));
+  const oddText = hintText(await hintResult(oddEndpoint, [35000], { CLAUDE_PLUGIN_OPTION_MODEL: odd }));
+  assert.equal(oddText.split('\n').length, 1);
+  assert.match(oddText, /`lms load <model> --context-length 32768`/);
   // 22,846 tokens is the first context whose cap (30,000) fits the floor: the oversized line is unchanged.
   for (const tokens of [22846, 32768]) {
     const f = await fake(tokens);

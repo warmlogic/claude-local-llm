@@ -44,6 +44,8 @@ if [ "$MODE" = resume ]; then   # a resumed run keeps the settings it started wi
   CONFIGS=$(jq -r .configs "$RUN_DIR/meta.json"); ONLY=$(jq -r '.only // ""' "$RUN_DIR/meta.json")
   MODEL=$(jq -r .model "$RUN_DIR/meta.json"); LOCAL_MODEL=$(jq -r .local_model "$RUN_DIR/meta.json")
   ENDPOINT=$(jq -r '.endpoint // "http://127.0.0.1:1234"' "$RUN_DIR/meta.json")
+  [ -z "${MEASURE_ENDPOINT:-}" ] || [ "$MEASURE_ENDPOINT" = "$ENDPOINT" ] \
+    || echo "measure: MEASURE_ENDPOINT differs from the recorded endpoint; using the recorded endpoint $ENDPOINT" >&2
 else
   CONFIGS="${MEASURE_CONFIGS:-off on}"; ONLY="${MEASURE_ONLY:-}"; MODEL="${MEASURE_MODEL:-}"
   LOCAL_MODEL="${MEASURE_LOCAL_MODEL:-qwen3.6-35b-a3b-splash}"
@@ -69,14 +71,16 @@ case " $CONFIGS " in *" on "*)
   # The loaded context is recorded, and a small or unknown one is warned about, not refused: the measurement
   # deliberately runs small files and counts delegation failures.
   CONTEXT=$(observe_context "$REPO" "$ENDPOINT" "$LOCAL_MODEL")
-  context_warning "$CONTEXT" "$LOCAL_MODEL" >&2 ;;
+  context_warning "$CONTEXT" "$LOCAL_MODEL" >&2 || echo "measure: could not check the loaded context against the delegation floor" >&2 ;;
 *) CONTEXT=null ;;
 esac
-if [ "$MODE" = resume ]; then   # a resumed run measures under the context it started with; no record (older or off-only run) skips the check
+if [ "$MODE" = resume ]; then
+  # A resumed run measures under the context it started with. Only two loaded contexts can be compared: an assumed
+  # source (pin not loaded yet, a lookup that timed out) proves nothing, and neither does a run with no record.
   RECORDED=$(jq -c '.context // empty' "$RUN_DIR/meta.json")
-  if [ -n "$RECORDED" ] && [ "$RECORDED" != null ] && [ "$CONTEXT" != null ] \
-     && [ "$(jq -S -c '{tokens, source}' <<<"$RECORDED")" != "$(jq -S -c '{tokens, source}' <<<"$CONTEXT")" ]; then
-    die "the loaded context changed since this run started (recorded $(jq -c '{tokens, source}' <<<"$RECORDED"), now $(jq -c '{tokens, source}' <<<"$CONTEXT")); reload the model at the recorded context, or start a new run"
+  if [ -n "$RECORDED" ] && [ "$(jq -r .source <<<"$RECORDED")" = loaded ] && [ "$(jq -r .source <<<"$CONTEXT")" = loaded ] \
+     && [ "$(jq -r .tokens <<<"$RECORDED")" != "$(jq -r .tokens <<<"$CONTEXT")" ]; then
+    die "the loaded context changed since this run started (recorded $(jq -c '{tokens, source}' <<<"$RECORDED"), now $(jq -c '{tokens, source, reason}' <<<"$CONTEXT")); reload the model at $(jq -r .tokens <<<"$RECORDED") tokens, or start a new run"
   fi
 fi
 

@@ -458,7 +458,7 @@ check "run.sh: main slots below the delegation floor use the low-floor copy, bou
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"
-runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS="${1:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" "${@:2}" > "$TMP/run.out" 2>&1 < /dev/null; }
+runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="${FAKE_CLAUDE:-$TMP/fake-claude}" MEASURE_CONFIGS="${1:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" "${@:2}" > "$TMP/run.out" 2>&1 < /dev/null; }
 mkdir -p "$TMP/rh"; : > "$FAKE_LOG"
 MEASURE_ONLY="f01 f99" runsh; rc=$?
 check "run.sh: an unknown MEASURE_ONLY id is an error, before any session" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'MEASURE_ONLY names f99' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
@@ -472,16 +472,16 @@ check "selector_rule covers the entropy guard" '1' "$(cp -R "$MDIR" "$TMP/mcopy"
 
 # --- the loaded context run.sh records and warns about (against the fake endpoint's `context` mode) ---------------
 REPO="$(cd "$MDIR/.." && pwd -P)"
-ctx_ep() { # ctx_ep <tokens>: start a fake LM Studio with that loaded context; prints its endpoint
-  local n="ctx-$1"
+ctx_ep() { # ctx_ep <tokens> [mode]: start a fake LM Studio with that loaded context (mode `context`, or e.g. verify-v1: no context metadata); prints its endpoint
+  local n="ctx-$1-${2:-context}"
   : > "$TMP/$n.port"
-  node "$REPO/tests/fake-endpoint.mjs" "$TMP/$n.port" "$TMP/$n.log" context "$1" > /dev/null 2>&1 &
+  node "$REPO/tests/fake-endpoint.mjs" "$TMP/$n.port" "$TMP/$n.log" "${2:-context}" "$1" > /dev/null 2>&1 &
   echo $! >> "$TMP/ctx.pids"   # a file: ctx_ep runs in a command substitution
   for _ in $(seq 100); do [ -s "$TMP/$n.port" ] && break; sleep 0.05; done
   [ -s "$TMP/$n.port" ] || { echo "ctx_ep: the fake endpoint for $1 tokens did not start" >&2; return 1; }
   echo "http://127.0.0.1:$(cat "$TMP/$n.port")"
 }
-ctx() { observe_context "$REPO" "$(ctx_ep "$1")" "${2:-}"; }
+ctx() { local ep; ep=$(ctx_ep "$1") || return 1; observe_context "$REPO" "$ep" "${2:-}"; }
 check "context: a loaded context is recorded as tokens and source" '{"tokens":8192,"source":"loaded","reason":null}' "$(ctx 8192 | jq -c .)"
 check "context: a pinned model that is not loaded is an assumed source with no tokens" \
   '{"tokens":null,"source":"pinned model not loaded","reason":"pinned model not loaded"}' "$(ctx 8192 nope | jq -c .)"
@@ -506,12 +506,6 @@ check "report: an assumed context shows its source and reason" '- Local server h
 variant; render
 check "report: a run without a recorded context says so" '- Local server n/a; loaded context not recorded' "$(cell '^- Local server')"
 
-# a resumed run takes its endpoint from meta.json, not from MEASURE_ENDPOINT
-rd="$TMP/resume-run"; mkdir -p "$rd"; echo '{"configs":"on","only":"","model":"","local_model":"m","endpoint":"http://127.0.0.1:4321"}' > "$rd/meta.json"
-sed -n '/^if \[ "\$MODE" = resume \]; then/,/^fi$/p' "$MDIR/run.sh" > "$TMP/resume-block.sh"
-check "run.sh: a resumed run uses the endpoint recorded in meta.json" 'http://127.0.0.1:4321' \
-  "$(MODE=resume RUN_DIR="$rd" MEASURE_ENDPOINT=http://127.0.0.1:9 bash -c '. "$1"; echo "$ENDPOINT"' _ "$TMP/resume-block.sh")"
-
 # run.sh warns about a small context in its preflight and goes on (the stale corpus rule stops it right after, before any session)
 echo stale > "$MH/corpus.rule"; : > "$FAKE_LOG"
 MEASURE_ENDPOINT="$(ctx_ep 8192)" MEASURE_LOCAL_MODEL=fake-context MEASURE_ONLY=f01 runsh on; rc=$?
@@ -525,16 +519,39 @@ MEASURE_ENDPOINT=http://192.168.1.5:1234 MEASURE_LOCAL_MODEL=fake-context MEASUR
 check "run.sh: a non-loopback MEASURE_ENDPOINT dies in the preflight, before any session" '1,1,0' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'recorded endpoint must be loopback' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 
+# a fresh run records the context and endpoint it saw and hands the endpoint to its sessions (a typo here would disable the resume guard)
+cat > "$TMP/env-claude" <<'EOF2'
+#!/usr/bin/env bash
+[ "${1:-}" != --version ] || { echo "0.0.0 (fake)"; exit 0; }
+echo "$LOCAL_LLM_ENDPOINT_URL" >> "$ENV_LOG"
+exit 0
+EOF2
+chmod +x "$TMP/env-claude"
+selector_rule > "$MH/corpus.rule"; date +%s > "$MH/corpus.cutoff"; export ENV_LOG="$TMP/env.log"; : > "$ENV_LOG"
+ep32=$(ctx_ep 32768)
+FAKE_CLAUDE="$TMP/env-claude" MEASURE_ENDPOINT="$ep32" MEASURE_LOCAL_MODEL=fake-context MEASURE_ONLY=f01 runsh on > /dev/null 2>&1
+fresh=$(ls -d "$MH"/runs/*/ | tail -n 1)   # the newest run dir: this one
+check "run.sh: a fresh run records the loaded context and the endpoint in meta.json" 'loaded,32768,'"$ep32" \
+  "$(jq -r '[.context.source, .context.tokens, .endpoint] | join(",")' "${fresh}meta.json" 2>/dev/null)"
+check "run.sh: a session gets the run's endpoint as LOCAL_LLM_ENDPOINT_URL" "$ep32" "$(head -n 1 "$ENV_LOG")"
+echo stale > "$MH/corpus.rule"
+
 # a resumed run measures under the context it started with: another loaded context dies before any session
 rr="$TMP/resume-ctx"; mkdir -p "$rr"; cp "$B/corpus.tsv" "$rr/corpus.tsv"
-resume_meta() { # resume_meta <endpoint> <context-json>
-  jq -n --arg e "$1" --argjson c "$2" '{configs: "on", only: "", model: "", local_model: "fake-context", endpoint: $e, context: $c}' > "$rr/meta.json"; }
+resume_meta() { # resume_meta <endpoint> <context-json> [local model]
+  jq -n --arg e "$1" --argjson c "$2" --arg m "${3:-fake-context}" '{configs: "on", only: "", model: "", local_model: $m, endpoint: $e, context: $c}' > "$rr/meta.json"; }
 ep8=$(ctx_ep 8192)
 : > "$FAKE_LOG"; resume_meta "$ep8" '{"tokens":32768,"source":"loaded","reason":null}'; runsh on --resume "$rr"; rc=$?
 check "run.sh: a resume under another loaded context dies before any session, naming both values" '1,1,1,0' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'recorded {"tokens":32768' "$TMP/run.out"),$(grep -c 'now {"tokens":8192' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 resume_meta "$ep8" '{"tokens":8192,"source":"loaded","reason":null}'; runsh on --resume "$rr"
 check "run.sh: a resume under the recorded context goes past the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+resume_meta "$ep8" '{"tokens":null,"source":"pinned model not loaded","reason":"pinned model not loaded"}'; runsh on --resume "$rr"
+check "run.sh: a resume of a run that started before the model was loaded goes past the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+resume_meta "$(ctx_ep 0 verify-v1)" '{"tokens":32768,"source":"loaded","reason":null}' v1-chat-model; runsh on --resume "$rr"
+check "run.sh: a resume whose lookup now falls back goes past the check (an assumed source proves nothing)" '0,1,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out"),$(grep -c 'results assume a 32k context' "$TMP/run.out")"
+MEASURE_ENDPOINT=http://127.0.0.1:9 runsh on --resume "$rr"
+check "run.sh: a resume says when it ignores a different MEASURE_ENDPOINT for the recorded one" '1' "$(grep -c 'using the recorded endpoint' "$TMP/run.out")"
 resume_meta "$ep8" null; runsh on --resume "$rr"
 check "run.sh: a resume whose recorded context is null (an off-only run) skips the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
 jq 'del(.context)' "$rr/meta.json" > "$rr/m" && mv "$rr/m" "$rr/meta.json"; runsh on --resume "$rr"
