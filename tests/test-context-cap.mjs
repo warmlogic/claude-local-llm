@@ -270,16 +270,21 @@ test('skill scales spot-checks to stakes while retaining verification safeguards
   assert.match(verify, /When the local model produced the answer, say so in a few words/);
 });
 test('a loaded context too small for the floor adds the raise-context sentence to the above-cap line only', async () => {
-  const sentence = /below what the plugin needs for 30k\+ files; tell the user they can raise it in LM Studio's load settings or with `lms load <model> --context-length 32768` \(don't run it yourself\)/;
+  const sentence = /below what the plugin needs for 30k\+ files; tell the user they can raise it in LM Studio's load settings or with `lms load [^`]+ --context-length 32768` \(don't run it yourself\)/;
   const small = await fake(8192);
-  const withSentence = [await optedHint(small.endpoint, [35000]), hintText(await hintResult(small.endpoint, [35000]))]; // opted in and default
-  for (const text of withSentence) {
-    assert.match(text, /too big for the loaded model's context \(8,192 tokens, about 6,553 chars; loaded\).*use batch\/run.mjs\./);
-    assert.match(text, sentence);
-    assert.equal(text.split('\n').length, 1);
-  }
-  // With the model option set, its id replaces the placeholder.
-  const pinned8k = hintText(await hintResult(small.endpoint, [35000], { CLAUDE_PLUGIN_OPTION_MODEL: 'fake-context' }));
+  const text8k = await optedHint(small.endpoint, [35000]);
+  assert.match(text8k, /too big for the loaded model's context \(8,192 tokens, about 6,553 chars; loaded\).*use batch\/run.mjs\./);
+  assert.match(text8k, sentence);
+  assert.equal(text8k.split('\n').length, 1);
+  // The model comes from the context lookup when the option is unset; with several loaded models it stays a placeholder.
+  assert.match(text8k, /`lms load fake-context --context-length 32768`/);
+  assert.match(await optedHint((await fake('8192,16384')).endpoint, [35000]), /`lms load <model> --context-length 32768`/);
+  // Delegation off (the default): the too-big line stays as it was, with no note.
+  const offText = hintText(await hintResult(small.endpoint, [35000]));
+  assert.match(offText, /too big for the loaded model's context/);
+  assert.doesNotMatch(offText, /tell the user/);
+  // With the model option set, its id is used.
+  const pinned8k = await optedHint(small.endpoint, [35000], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', CLAUDE_PLUGIN_OPTION_MODEL: 'fake-context' });
   assert.match(pinned8k, /`lms load fake-context --context-length 32768`/);
   assert.doesNotMatch(pinned8k, /<model>/);
   // Several oversized files: the note appears once, on the first oversized line.
@@ -289,7 +294,7 @@ test('a loaded context too small for the floor adds the raise-context sentence t
   // A model id that could break the line (backtick, newline) is never interpolated: the placeholder stays.
   const odd = 'bad`\nid';
   const oddEndpoint = await serve((q, r) => r.end(JSON.stringify({ data: [model(odd, 8192)] })));
-  const oddText = hintText(await hintResult(oddEndpoint, [35000], { CLAUDE_PLUGIN_OPTION_MODEL: odd }));
+  const oddText = await optedHint(oddEndpoint, [35000], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', CLAUDE_PLUGIN_OPTION_MODEL: odd });
   assert.equal(oddText.split('\n').length, 1);
   assert.match(oddText, /`lms load <model> --context-length 32768`/);
   // 22,846 tokens is the first context whose cap (30,000) fits the floor: the oversized line is unchanged.
@@ -307,7 +312,7 @@ test('a loaded context too small for the floor adds the raise-context sentence t
   await new Promise((r) => servers.at(-1).close(r));
   const pinned = await serve((q, r) => r.end(JSON.stringify({ data: [model('a', 8192)] })));
   for (const [endpoint, options] of [[dead, {}], [pinned, { CLAUDE_PLUGIN_OPTION_MODEL: 'missing' }]]) {
-    const text = hintText(await hintResult(endpoint, [45876], options));
+    const text = hintText(await hintResult(endpoint, [45876], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', ...options }));
     assert.match(text, /too big for the loaded model's context \(assumed 32k context/);
     assert.doesNotMatch(text, /tell the user/);
   }

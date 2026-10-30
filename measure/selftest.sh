@@ -503,6 +503,8 @@ variant; jq '.context = {tokens: 8192, source: "loaded", reason: null} | .endpoi
 check "report: the header names the endpoint and the loaded context" '- Local server http://127.0.0.1:4321; loaded context 8192 tokens (loaded)' "$(cell '^- Local server')"
 variant; jq '.context = {tokens: null, source: "fallback", reason: "timeout"} | .endpoint = "http://127.0.0.1:1234"' "$B/meta.json" > "$TMP/v/meta.json"; render
 check "report: an assumed context shows its source and reason" '- Local server http://127.0.0.1:1234; loaded context unknown (fallback: timeout)' "$(cell '^- Local server')"
+variant; jq '.context = {tokens: null, source: "pinned model not loaded", reason: "pinned model not loaded"} | .endpoint = "http://127.0.0.1:1234"' "$B/meta.json" > "$TMP/v/meta.json"; render
+check "report: a reason equal to the source is not repeated" '- Local server http://127.0.0.1:1234; loaded context unknown (pinned model not loaded)' "$(cell '^- Local server')"
 variant; render
 check "report: a run without a recorded context says so" '- Local server n/a; loaded context not recorded' "$(cell '^- Local server')"
 
@@ -523,7 +525,7 @@ check "run.sh: a non-loopback MEASURE_ENDPOINT dies in the preflight, before any
 cat > "$TMP/env-claude" <<'EOF2'
 #!/usr/bin/env bash
 [ "${1:-}" != --version ] || { echo "0.0.0 (fake)"; exit 0; }
-echo "$LOCAL_LLM_ENDPOINT_URL" >> "$ENV_LOG"
+echo "$LOCAL_LLM_ENDPOINT_URL $LOCAL_LLM_MODEL" >> "$ENV_LOG"
 exit 0
 EOF2
 chmod +x "$TMP/env-claude"
@@ -533,7 +535,7 @@ FAKE_CLAUDE="$TMP/env-claude" MEASURE_ENDPOINT="$ep32" MEASURE_LOCAL_MODEL=fake-
 fresh=$(ls -d "$MH"/runs/*/ | tail -n 1)   # the newest run dir: this one
 check "run.sh: a fresh run records the loaded context and the endpoint in meta.json" 'loaded,32768,'"$ep32" \
   "$(jq -r '[.context.source, .context.tokens, .endpoint] | join(",")' "${fresh}meta.json" 2>/dev/null)"
-check "run.sh: a session gets the run's endpoint as LOCAL_LLM_ENDPOINT_URL" "$ep32" "$(head -n 1 "$ENV_LOG")"
+check "run.sh: a session gets the run's endpoint and pinned model as LOCAL_LLM_ENDPOINT_URL and LOCAL_LLM_MODEL" "$ep32 fake-context" "$(head -n 1 "$ENV_LOG")"
 echo stale > "$MH/corpus.rule"
 
 # a resumed run measures under the context it started with: another loaded context dies before any session
@@ -549,7 +551,7 @@ check "run.sh: a resume under the recorded context goes past the check" '0,1' "$
 resume_meta "$ep8" '{"tokens":null,"source":"pinned model not loaded","reason":"pinned model not loaded"}'; runsh on --resume "$rr"
 check "run.sh: a resume of a run that started before the model was loaded goes past the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
 resume_meta "$(ctx_ep 0 verify-v1)" '{"tokens":32768,"source":"loaded","reason":null}' v1-chat-model; runsh on --resume "$rr"
-check "run.sh: a resume whose lookup now falls back goes past the check (an assumed source proves nothing)" '0,1,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out"),$(grep -c 'results assume a 32k context' "$TMP/run.out")"
+check "run.sh: a resume whose lookup now falls back goes past the check (an assumed source proves nothing)" '0,1,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out"),$(grep -c 'reload v1-chat-model at 32768 tokens' "$TMP/run.out")"
 MEASURE_ENDPOINT=http://127.0.0.1:9 runsh on --resume "$rr"
 check "run.sh: a resume says when it ignores a different MEASURE_ENDPOINT for the recorded one" '1' "$(grep -c 'using the recorded endpoint' "$TMP/run.out")"
 resume_meta "$ep8" null; runsh on --resume "$rr"

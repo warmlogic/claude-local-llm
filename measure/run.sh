@@ -81,6 +81,8 @@ if [ "$MODE" = resume ]; then
   if [ -n "$RECORDED" ] && [ "$(jq -r .source <<<"$RECORDED")" = loaded ] && [ "$(jq -r .source <<<"$CONTEXT")" = loaded ] \
      && [ "$(jq -r .tokens <<<"$RECORDED")" != "$(jq -r .tokens <<<"$CONTEXT")" ]; then
     die "the loaded context changed since this run started (recorded $(jq -c '{tokens, source}' <<<"$RECORDED"), now $(jq -c '{tokens, source, reason}' <<<"$CONTEXT")); reload the model at $(jq -r .tokens <<<"$RECORDED") tokens, or start a new run"
+  elif [ -n "$RECORDED" ] && [ "$(jq -r .source <<<"$RECORDED")" = loaded ] && [ "$(jq -r .source <<<"$CONTEXT")" != loaded ] && [ "$CONTEXT" != null ]; then
+    echo "warning: this run started with $(jq -r .tokens <<<"$RECORDED") tokens loaded and LM Studio no longer reports a loaded context; reload $LOCAL_MODEL at $(jq -r .tokens <<<"$RECORDED") tokens" >&2
   fi
 fi
 
@@ -160,7 +162,7 @@ run_one() {
   start=$SECONDS
   # the plugin's delegate_tasks default is off; "on" runs measure delegation, so opt every corpus task kind in
   # (an explicit CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS, even empty, wins)
-  (cd "$WORK" && export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract,summarize}" LOCAL_LLM_ENDPOINT_URL="$ENDPOINT" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
+  (cd "$WORK" && export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract,summarize}" LOCAL_LLM_ENDPOINT_URL="$ENDPOINT" LOCAL_LLM_MODEL="$LOCAL_MODEL" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
   rc=$?
   trace_facts "$RUN_DIR/facts/.$1" "$t" "$1" "$2" "$3" "$4" "$5" "$6" "$rc" "$((SECONDS - start))" > "$RUN_DIR/facts/$1.json.new" \
     && mv "$RUN_DIR/facts/$1.json.new" "$RUN_DIR/facts/$1.json" || die "writing facts for $1"

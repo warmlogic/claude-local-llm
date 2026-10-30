@@ -146,7 +146,7 @@ context_warning() {
         warn) echo "warning: LM Studio has $tokens tokens loaded, too few for the plugin's 30k-char delegation floor, so delegation jobs will fail. Reload with: lms load $2 --context-length 32768" ;;
         *) echo "measure: the floor check answered '$floor', not warn or ok" >&2; return 1 ;;
       esac ;;
-    "pinned model not loaded") echo "warning: $2 is listed but not loaded; load $2 in LM Studio (its context decides what delegation can read). Results assume a 32k context." ;;
-    *) echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); results assume a 32k context." ;;
+    "pinned model not loaded") echo "warning: $2 is listed but not loaded; load $2 in LM Studio (its context decides what delegation can read). The plugin's hint assumes 32k, but sessions run at whatever LM Studio loads." ;;
+    *) echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); the plugin's hint assumes 32k, but sessions run at whatever LM Studio loads." ;;
   esac
 }
