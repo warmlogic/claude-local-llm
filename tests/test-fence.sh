@@ -340,11 +340,17 @@ for t in mcp__plugin_local-llm_local-llm__code_task_files mcp__plugin_local-llm_
   else bad "approval hook allows the plugin's read-only tool $t"; fi
 done
 # Whole-command approval, not prefix approval. Keep every allow/reject visible for mutation checks.
+# The README's documented deny rule is Bash(<DENY_GLOB>): every command the hook approves must match it, so a future approved form it would miss fails here.
+DENY_GLOB='*batch/run.mjs*'
 batch_cmd() {
   local label="$1" decision="$2" command="$3" background="${4:-false}" cwd="${5:-$PWD}" output rc
   output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')"); rc=$?
   # reject: exit 0 and empty stdout. reject-msg: exit 0 and exactly the one skip systemMessage, no decision (allowed_dirs
   # alone blocked it). A crash cannot pass as either.
+  if [ "$decision" = allow ]; then
+    # shellcheck disable=SC2053 # the glob is the point
+    if [[ "$command" == $DENY_GLOB ]]; then ok "batch hook allow: $label matches the README deny rule"; else bad "batch hook allow: $label is approved but the README deny rule Bash($DENY_GLOB) would not match it"; fi
+  fi
   if [ "$rc" -eq 0 ] && { { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
      || { [ "$decision" = reject ] && [ -z "$output" ]; } \
      || { [ "$decision" = reject-msg ] && jq -e 'keys == ["systemMessage"] and (.systemMessage | startswith("local-llm: batch auto-approval skipped: "))' >/dev/null <<<"$output"; }; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label (rc=$rc: $output)"; fi
@@ -372,6 +378,9 @@ export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
 RUN="node '$BROOT/batch/run.mjs'"
 FLATTEN="node '$BROOT/batch/flatten-transcripts.mjs'"
 INPUT="$HOOK_TMP/allowed/a.txt"
+batch_cmd quoted-node allow "\"node\" '$BROOT/batch/run.mjs' --job-json '{}' '$INPUT'"
+batch_cmd tab-after-node allow "node"$'\t'"'$BROOT/batch/run.mjs' --job-json '{}' '$INPUT'"
+batch_cmd leading-space allow " $RUN --job-json '{}' '$INPUT'"
 batch_cmd raw allow "$RUN --number --job-json '{}' '$INPUT'"
 batch_cmd quoted allow "$RUN --job-json '{\"prompt\":\"a; | > < && || \$(literal) \`literal\`\"}' '$HOOK_TMP/allowed/a b.txt'" true
 batch_cmd single-quotes allow "$RUN --job-json '{}' '$INPUT' &"
