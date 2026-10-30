@@ -26,7 +26,7 @@ roots=$(node ./scripts/resolve-roots.mjs)  # exits 2 (and stops here) on a refus
 if [ -z "$roots" ]; then
   cat >&2 <<'MSG'
 local-llm: no allowed folders configured. Set the allowed_dirs plugin option:
-  claude plugin configure local-llm@<marketplace>   (shows the options; add --values-stdin and pipe
+  claude plugin configure local-llm@ai-plugin-marketplace   (shows the options; add --values-stdin and pipe
     {"allowed_dirs":"/abs/path/a,/abs/path/b"} to set it), or open /plugin in Claude Code.
 Then restart Claude Code.
 MSG
