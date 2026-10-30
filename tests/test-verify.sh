@@ -501,15 +501,23 @@ else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c
 # log for those, so an unrelated error that lands after an abort (a bad path here) must stay unmarked and be logged.
 node --input-type=module -e "
   import { verifyClaims } from '$REPO/server/verify-claims.mjs';
-  const cfg = { endpoint: 'http://127.0.0.1:9', base: 'http://127.0.0.1:9', model: 'm', roots: ['$REAL_ROOT'], requestTimeoutMs: 1000, budgetMs: 60000 };
+  const cfg = (model) => ({ endpoint: 'http://127.0.0.1:9', base: 'http://127.0.0.1:9', model, roots: ['$REAL_ROOT'], requestTimeoutMs: 1000, budgetMs: 60000 });
   const cancelled = () => { const c = new AbortController(); c.abort(new Error('cancelled')); return c.signal; };
-  const run = (path) => verifyClaims(cfg, { paths: [path], claims: ['a'], k: 1 }, cancelled()).then(() => null, (e) => e);
-  const stopped = await run('$REAL_ROOT/inside.txt');
-  const unrelated = await run('$REAL_ROOT/missing-file.txt');
-  console.log(JSON.stringify({ stopped: stopped?.callStopped === true, unrelated: unrelated?.callStopped === true, why: String(unrelated?.message).slice(0, 60) }));
+  const run = (model, path) => verifyClaims(cfg(model), { paths: [path], claims: ['a'], k: 1 }, cancelled()).then(() => null, (e) => e);
+  const wrapped = await run('m', '$REAL_ROOT/inside.txt'); // pinned model: every claim fails with the reason, wrapped as the cause
+  const direct = await run('', '$REAL_ROOT/inside.txt'); // unpinned: the model lookup rejects with the reason itself
+  const unrelated = await run('m', '$REAL_ROOT/missing-file.txt');
+  console.log(JSON.stringify({ wrapped: wrapped?.callStopped === true, direct: direct?.callStopped === true, unrelated: unrelated?.callStopped === true, why: String(unrelated?.message).slice(0, 60) }));
 " > "$TMP/stopmark.json" 2>"$TMP/stopmark.err"
-if jq -e '.stopped and (.unrelated | not)' "$TMP/stopmark.json" >/dev/null 2>&1; then ok "callStopped marks the error a stop caused, not an unrelated error after the abort"
+if jq -e '.wrapped and .direct and (.unrelated | not) and (.why | startswith("cannot use "))' "$TMP/stopmark.json" >/dev/null 2>&1; then ok "callStopped marks the error a stop caused (wrapped or direct), not an unrelated error after the abort"
 else bad "callStopped marking ($(cat "$TMP/stopmark.json") $(head -c 200 "$TMP/stopmark.err"))"; fi
+# Budget path: the budget fires while eight 600 KB files are read (a 1 ms budget), then the read check fails on the combined
+# size, an error the stop did not cause. It is still logged, and the stop is logged once as well (proving the abort happened).
+start_fake budgetunrelated verify
+out=$(call "$(jq -nc --arg h "$ROOT/half1.txt" '{paths:[range(8)|$h], claims:["a"], k:1}')" LOCAL_VERIFY_BUDGET_MS=1)
+if jq -e '.call.isError and (.stderr | contains("verify_claims failed")) and ([.stderr | scan("call stopped")] | length == 1)' >/dev/null <<<"$out"; then
+  ok "an unrelated error after a budget abort is still logged as verify_claims failed (the stop is logged once)"
+else bad "unrelated error after a budget abort ($(jq -c '{call,stderr}' <<<"$out" | cut -c1-400))"; fi
 # A cancel while the call is parked in its model lookup (the fake never answers the first /api/v0/models request):
 # no chat request has been sent yet. The cancel waits for the fake to log that stalled lookup, not for a fixed delay. The call ends quietly with one log line, and the next call answers.
 start_fake cancel0 verify-slowlist-once
@@ -523,7 +531,7 @@ if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .re
    && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" -eq 1 ] \
    && [ "$(jq -r '.stderr' <<<"$out" | grep -c 'call stopped')" -eq 1 ] && ! jq -e '.stderr | contains("verify_claims failed")' >/dev/null <<<"$out"; then
   ok "a cancel during the model lookup: no reply, exactly one stop line in the log, no chat request sent for it, the next call answers"
-else bad "cancel during the model lookup ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); chats: $(chat_count "$LOG"); stderr: $(jq -c '.stderr' <<<"$out" | cut -c1-300))"; fi
+else bad "cancel during the model lookup (waitTimedOut: $(jq -c '.waitTimedOut' <<<"$out"); $(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); chats: $(chat_count "$LOG"); stderr: $(jq -c '.stderr' <<<"$out" | cut -c1-300))"; fi
 start_fake twocalls verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" \
   --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 3)")" \

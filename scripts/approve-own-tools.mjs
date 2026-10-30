@@ -45,8 +45,8 @@ const batchArgsAllowed = (args, cwd) => {
   const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS;
   if (!configured) return skip('allowed_dirs option is not set'); // the option has no default: unset approves nothing
   let roots;
-  try { roots = resolveRoots(configured); } catch (e) { return skip(e.code === 'ETIMEDOUT' ? 'allowed_dirs resolution timed out' : 'allowed_dirs could not be resolved (check that each folder exists and is an absolute path)'); }
-  if (!roots.length) return skip('allowed_dirs could not be resolved (check that each folder exists and is an absolute path)'); // exited 0 with nothing to allow
+  try { roots = resolveRoots(configured); } catch (e) { return skip(e.code === 'ETIMEDOUT' ? 'allowed_dirs resolution timed out' : 'allowed_dirs could not be resolved (see "Choose the folders the local model may read" in the README)'); }
+  if (!roots.length) return skip('allowed_dirs could not be resolved (see "Choose the folders the local model may read" in the README)'); // exited 0 with nothing to allow
   return reals.every((path) => within(path, roots));
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
