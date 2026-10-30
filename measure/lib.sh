@@ -61,6 +61,17 @@ copy_plugin() {
   for part in "${parts[@]}"; do cp -R "$1/$part" "$2/" || return 1; done
 }
 
+# pin_plugin_config <repo> <plugin-copy> <model>: the copy's manifest with the local model pinned and allowed_dirs
+# defaulting to the corpus roots, read from select-corpus.sh's ROOTS line (its one definition), since the real
+# manifest has no default and a headless run cannot be asked.
+# Callers must set $MDIR (the measure/ directory) first; returns 1 when select-corpus.sh has no ROOTS line.
+pin_plugin_config() {
+  local roots
+  roots=$(sed -n 's/^ROOTS=(\(.*\))$/\1/p' "$MDIR/select-corpus.sh" | tr -d '"')
+  [ -n "$roots" ] || return 1
+  jq --arg m "$3" --arg r "$roots" '.userConfig.model.default = $m | .userConfig.allowed_dirs.default = ($r | split(" "))' "$1/.claude-plugin/plugin.json" > "$2/.claude-plugin/plugin.json"
+}
+
 # results_path <run-dir> <repo>: where a run's table goes. A run's table stays in its run dir; only a full run
 # (not MEASURE_ONLY, not MEASURE_ALLOW_SHORT) with MEASURE_PUBLISH=1 writes the committed docs/results.md.
 results_path() {

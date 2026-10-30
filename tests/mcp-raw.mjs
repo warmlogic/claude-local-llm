@@ -2,9 +2,11 @@
 // Usage: node mcp-raw.mjs <server-command> <json-array> <expected-responses> [timeout-ms, default 30000]
 // Each array element is sent as one line: a string as-is (so malformed JSON can be sent), anything else
 // JSON-encoded. An element {"delay_ms": n} waits n ms instead, and {"close_stdin": true} closes the
-// server's stdin. Waits for <expected-responses> responses, or for the server to exit.
+// server's stdin. {"wait_for": {"file": path, "contains": text}} waits (at most 10 s) until that file contains the text, so a
+// step can follow an event instead of a fixed delay; if it never does, the output has "waitTimedOut": true and nothing more is sent. Waits for <expected-responses> responses, or for the server to exit.
 // Prints one JSON line: {"responses":[{...msg, "at_ms": n}],"exit":int|null,"exit_ms":n|null,"timedOut":bool,"stderr":str}
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 
 const [cmd, linesJson, expected, timeoutArg] = process.argv.slice(2);
 const TIMEOUT_MS = Number(timeoutArg ?? 30000);
@@ -37,6 +39,10 @@ child.stdout.on('data', (d) => {
 });
 for (const item of JSON.parse(linesJson)) {
   if (item && typeof item === 'object' && 'delay_ms' in item) await new Promise((r) => setTimeout(r, item.delay_ms));
-  else if (item && typeof item === 'object' && item.close_stdin) child.stdin.end();
+  else if (item && typeof item === 'object' && item.wait_for) {
+    const seen = () => existsSync(item.wait_for.file) && readFileSync(item.wait_for.file, 'utf8').includes(item.wait_for.contains);
+    for (let i = 0; i < 500 && !seen(); i++) await new Promise((r) => setTimeout(r, 20));
+    if (!seen()) { out.waitTimedOut = true; finish(); } // the awaited event never came: report it, send nothing more
+  } else if (item && typeof item === 'object' && item.close_stdin) child.stdin.end();
   else child.stdin.write(`${typeof item === 'string' ? item : JSON.stringify(item)}\n`);
 }

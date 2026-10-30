@@ -73,6 +73,12 @@ for dirs in "" " , " "$TMP/nope" "relative/dir" "/"; do
   if did_not_start "$out" "allowed folder"; then ok "launcher refuses allowed_dirs '${dirs}'"
   else bad "launcher refuses allowed_dirs '${dirs}' ($out)"; fi
 done
+out=$(LOCAL_LLM_ALLOWED_DIRS="relative/dir" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
+if did_not_start "$out" "local-verify: allowed folder must be an absolute path"; then ok "a refused root under launch-verify.sh is prefixed local-verify:"
+else bad "a refused root under launch-verify.sh is prefixed local-verify: ($out)"; fi
+out=$(LOCAL_LLM_ALLOWED_DIRS="$TMP/nope,$ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
+if jq -e '.init and (.stderr | contains("local-verify: allowed folder not found, skipping: ")) and (.stderr | contains("local-llm:") | not)' >/dev/null <<<"$out"; then ok "launch-verify.sh: the skipped-folder warning is prefixed local-verify: and the server still starts"
+else bad "launch-verify.sh: skipped-folder warning prefix ($out)"; fi
 for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@127.0.0.1:1234" \
           "http://localhost:1@evil.example/" "http://10.0.0.5:1234" "http://127.1:1234" "127.0.0.1:1234"; do
   out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
@@ -88,7 +94,7 @@ for v in abc 0 -5 1.5; do
 done
 
 out=$(env -u LOCAL_LLM_ALLOWED_DIRS LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
-for frag in "claude plugin configure local-llm@ai-plugin-marketplace" "plugin configure local-llm@inline" "--plugin-dir" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
+for frag in "claude plugin configure local-llm@ai-plugin-marketplace   (marketplace install)" "claude --plugin-dir <clone> plugin configure local-llm@inline   (--plugin-dir checkout)" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
   if did_not_start "$out" "$frag"; then ok "unset allowed_dirs message names: $frag"
   else bad "unset allowed_dirs message names: $frag ($out)"; fi
 done
@@ -474,19 +480,58 @@ lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(
 out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=800 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 6000)
 a=$(jq -c '.responses[] | select(.id == 2)' <<<"$out"); b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
 if jq -e '.result.isError and (.result.content[0].text | contains("budget"))' >/dev/null <<<"$a" \
-   && jq -e '.at_ms < 3000 and .result.isError == false and (.result.content[0].text | fromjson | (has("partial") | not) and .results[0].label == "SUPPORTED")' >/dev/null <<<"$b"; then
+   && jq -e '.at_ms < 3000 and .result.isError == false and (.result.content[0].text | fromjson | (has("partial") | not) and .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+   && [ "$(jq -r '.stderr' <<<"$out" | grep -c 'call stopped')" -eq 1 ] && ! jq -e '.stderr | contains("verify_claims failed")' >/dev/null <<<"$out"; then
   ok "same server: after a call overruns its budget with every slot stalled, the next call gets slots and answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "slot leak after an overrun (a: $(cut -c1-200 <<<"$a"); b: $(cut -c1-200 <<<"$b"); $(jq -c '{timedOut,exit}' <<<"$out"))"; fi
+# Cancel after the call's requests are in flight (so the cancel has slots to free), then a second call must answer.
+# Nothing here measures wall-clock time from process start: a slow launcher start (a loaded machine) makes the lines
+# arrive together, and the verdict is whether b answered before stdin closes, not how fast.
 start_fake cancel verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 8)")" \
   --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" \
-  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2,reason:"user interrupt"}}, {delay_ms: 100}, $b]')
-out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 3000)
+  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2,reason:"user interrupt"}}, {delay_ms: 100}, $b, {delay_ms: 2500}, {close_stdin: true}]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 15000)
 b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
-if jq -e '.at_ms < 2000 and .result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
    && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("call stopped: request 2 was cancelled")' >/dev/null <<<"$out"; then
   ok "notifications/cancelled aborts the call: no reply for it, its slots free, the next call answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c1-200 <<<"$b"))"; fi
+# callStopped marks only an error the stop caused (the abort reason, or an error wrapping it): the server skips its own
+# log for those, so an unrelated error that lands after an abort (a bad path here) must stay unmarked and be logged.
+node --input-type=module -e "
+  import { verifyClaims } from '$REPO/server/verify-claims.mjs';
+  const cfg = (model) => ({ endpoint: 'http://127.0.0.1:9', base: 'http://127.0.0.1:9', model, roots: ['$REAL_ROOT'], requestTimeoutMs: 1000, budgetMs: 60000 });
+  const cancelled = () => { const c = new AbortController(); c.abort(new Error('cancelled')); return c.signal; };
+  const run = (model, path) => verifyClaims(cfg(model), { paths: [path], claims: ['a'], k: 1 }, cancelled()).then(() => null, (e) => e);
+  const wrapped = await run('m', '$REAL_ROOT/inside.txt'); // pinned model: every claim fails with the reason, wrapped as the cause
+  const direct = await run('', '$REAL_ROOT/inside.txt'); // unpinned: the model lookup rejects with the reason itself
+  const unrelated = await run('m', '$REAL_ROOT/missing-file.txt');
+  console.log(JSON.stringify({ wrapped: wrapped?.callStopped === true, direct: direct?.callStopped === true, unrelated: unrelated?.callStopped === true, why: String(unrelated?.message).slice(0, 60) }));
+" > "$TMP/stopmark.json" 2>"$TMP/stopmark.err"
+if jq -e '.wrapped and .direct and (.unrelated | not) and (.why | startswith("cannot use "))' "$TMP/stopmark.json" >/dev/null 2>&1; then ok "callStopped marks the error a stop caused (wrapped or direct), not an unrelated error after the abort"
+else bad "callStopped marking ($(cat "$TMP/stopmark.json") $(head -c 200 "$TMP/stopmark.err"))"; fi
+# Budget path: the budget fires while eight 600 KB files are read (a 1 ms budget), then the read check fails on the combined
+# size, an error the stop did not cause. It is still logged, and the stop is logged once as well (proving the abort happened).
+start_fake budgetunrelated verify
+out=$(call "$(jq -nc --arg h "$ROOT/half1.txt" '{paths:[range(8)|$h], claims:["a"], k:1}')" LOCAL_VERIFY_BUDGET_MS=1)
+if jq -e '.call.isError and (.stderr | contains("verify_claims failed")) and ([.stderr | scan("call stopped")] | length == 1)' >/dev/null <<<"$out"; then
+  ok "an unrelated error after a budget abort is still logged as verify_claims failed (the stop is logged once)"
+else bad "unrelated error after a budget abort ($(jq -c '{call,stderr}' <<<"$out" | cut -c1-400))"; fi
+# A cancel while the call is parked in its model lookup (the fake never answers the first /api/v0/models request):
+# no chat request has been sent yet. The cancel waits for the fake to log that stalled lookup, not for a fixed delay. The call ends quietly with one log line, and the next call answers.
+start_fake cancel0 verify-slowlist-once
+lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[yes] a"]' 8)")" \
+  --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" --arg log "$LOG" \
+  '[$i, $a, {wait_for: {file: $log, contains: "stalled"}}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2}}, $b, {delay_ms: 2500}, {close_stdin: true}]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 15000)
+b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
+if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+   && jq -e '.waitTimedOut | not' >/dev/null <<<"$out" \
+   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" -eq 1 ] \
+   && [ "$(jq -r '.stderr' <<<"$out" | grep -c 'call stopped')" -eq 1 ] && ! jq -e '.stderr | contains("verify_claims failed")' >/dev/null <<<"$out"; then
+  ok "a cancel during the model lookup: no reply, exactly one stop line in the log, no chat request sent for it, the next call answers"
+else bad "cancel during the model lookup (waitTimedOut: $(jq -c '.waitTimedOut' <<<"$out"); $(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); chats: $(chat_count "$LOG"); stderr: $(jq -c '.stderr' <<<"$out" | cut -c1-300))"; fi
 start_fake twocalls verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" \
   --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 3)")" \

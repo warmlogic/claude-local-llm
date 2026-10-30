@@ -11,12 +11,12 @@ set -efu
 command -v node >/dev/null 2>&1 || { echo "local-verify: node (Node.js) is required" >&2; exit 2; }
 CDPATH= cd -P -- "$(dirname -- "$0")/.." >/dev/null || { echo "local-verify: cannot enter the plugin directory" >&2; exit 2; }
 
-roots=$(node ./scripts/resolve-roots.mjs)  # exits 2 (and stops here) on a refused entry
+roots=$(LOCAL_LLM_MSG_PREFIX=local-verify node ./scripts/resolve-roots.mjs)  # exits 2 (and stops here) on a refused entry
 if [ -z "$roots" ]; then
   cat >&2 <<'MSG'
 local-verify: no allowed folders configured. Set the allowed_dirs plugin option:
-  claude plugin configure local-llm@ai-plugin-marketplace   (marketplace install), or
-  claude --plugin-dir <clone> plugin configure local-llm@inline   (one session)
+  claude plugin configure local-llm@ai-plugin-marketplace   (marketplace install)
+  claude --plugin-dir <clone> plugin configure local-llm@inline   (--plugin-dir checkout)
     shows the options; add --values-stdin and pipe {"allowed_dirs":"/abs/path/a,/abs/path/b"}
     to set it. Or open /plugin in Claude Code.
 Then restart Claude Code.

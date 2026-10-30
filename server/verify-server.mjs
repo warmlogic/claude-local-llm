@@ -129,7 +129,7 @@ async function callTool(id, params) {
     if (!cancel.signal.aborted) reply(id, text(JSON.stringify(result)));
   } catch (e) {
     if (cancel.signal.aborted) return undefined; // cancelled: the reason is logged once in verifyClaims
-    logError('verify_claims failed', e); // metadata and our own frames only, never raw error data
+    if (!e?.callStopped) logError('verify_claims failed', e); // a stopped call was logged once by verifyClaims; metadata and our own frames only, never raw error data
     reply(id, text(`Error: ${safeMessage(e)}`, true));
   } finally {
     if (inFlight.get(key) === cancel) inFlight.delete(key);
