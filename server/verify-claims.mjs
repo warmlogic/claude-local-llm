@@ -223,12 +223,13 @@ export async function verifyClaims(cfg, args, cancel = new AbortController().sig
   try {
     const model = await pickModel(cfg, signal);
     const judged = await Promise.all(claims.map((c, ci) => judgeClaim(cfg, model, state, c, ci, k, signal)));
-    if (signal.aborted) console.error(`local-verify: call stopped: ${safeMessage(signal.reason)}`);
     const results = judged.map((j) => j.result);
     const firstError = judged.find((j) => j.error)?.error;
     if (judged.every((j) => j.error)) throw new VerifyError(safeMessage(firstError), { cause: firstError });
     return firstError ? { model, k, partial: true, error: safeMessage(firstError), results } : { model, k, results };
   } finally {
+    // Logged here, not after the judging: a cancel that lands before the first request is sent throws out of pickModel and never reaches that point.
+    if (signal.aborted) console.error(`local-verify: call stopped: ${safeMessage(signal.reason)}`);
     clearTimeout(budgetTimer);
     budget.abort(new VerifyError('the call is over')); // nothing of this call may keep a slot or a request
   }

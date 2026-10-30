@@ -480,16 +480,31 @@ if jq -e '.result.isError and (.result.content[0].text | contains("budget"))' >/
    && jq -e '.at_ms < 3000 and .result.isError == false and (.result.content[0].text | fromjson | (has("partial") | not) and .results[0].label == "SUPPORTED")' >/dev/null <<<"$b"; then
   ok "same server: after a call overruns its budget with every slot stalled, the next call gets slots and answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "slot leak after an overrun (a: $(cut -c1-200 <<<"$a"); b: $(cut -c1-200 <<<"$b"); $(jq -c '{timedOut,exit}' <<<"$out"))"; fi
+# Cancel after the call's requests are in flight (so the cancel has slots to free), then a second call must answer.
+# Nothing here measures wall-clock time from process start: a slow launcher start (a loaded machine) makes the lines
+# arrive together, and the verdict is whether b answered before stdin closes, not how fast.
 start_fake cancel verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 8)")" \
   --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" \
-  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2,reason:"user interrupt"}}, {delay_ms: 100}, $b]')
-out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 3000)
+  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2,reason:"user interrupt"}}, {delay_ms: 100}, $b, {delay_ms: 2500}, {close_stdin: true}]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 15000)
 b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
-if jq -e '.at_ms < 2000 and .result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
    && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("call stopped: request 2 was cancelled")' >/dev/null <<<"$out"; then
   ok "notifications/cancelled aborts the call: no reply for it, its slots free, the next call answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c1-200 <<<"$b"))"; fi
+# A cancel that lands before the call's first request (no delay, so it can only race ahead of the file read and model lookup)
+# still ends the call quietly and still logs why it stopped.
+start_fake cancel0 verify
+lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 8)")" \
+  --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" \
+  '[$i, $a, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2}}, $b, {delay_ms: 2500}, {close_stdin: true}]')
+out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 15000)
+b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
+if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("call stopped: request 2 was cancelled")' >/dev/null <<<"$out"; then
+  ok "an immediate notifications/cancelled: no reply for the call, the stop is logged, the next call answers"
+else bad "immediate cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); stderr: $(jq -c '.stderr' <<<"$out" | cut -c1-200))"; fi
 start_fake twocalls verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" \
   --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 3)")" \
