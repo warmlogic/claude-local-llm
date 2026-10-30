@@ -86,7 +86,7 @@ const verify = (req, res) => {
     if (MODELS_V1[mode] || mode === 'verify-nolists') return json(res, 404, { error: 'Unexpected endpoint' });
     if (mode === 'verify-badlist') return json(res, 200, { object: 'list' });
     if (mode === 'verify-slowlist') return undefined; // never answer
-    if (mode === 'verify-slowlist-once' && !seen.has('models')) { seen.add('models'); return undefined; } // only the first lookup never answers
+    if (mode === 'verify-slowlist-once' && !seen.has('models')) { seen.add('models'); appendFileSync(logFile, JSON.stringify({ url: req.url, stalled: true }) + '\n'); return undefined; } // only the first lookup never answers
     return json(res, 200, { object: 'list', data: MODELS_V0[mode] ?? MODELS_V0.verify });
   }
   if (req.url === '/v1/models' && MODELS_V1[mode]) return json(res, 200, { object: 'list', data: MODELS_V1[mode] });

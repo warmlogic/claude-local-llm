@@ -498,11 +498,11 @@ if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .re
   ok "notifications/cancelled aborts the call: no reply for it, its slots free, the next call answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c1-200 <<<"$b"))"; fi
 # A cancel while the call is parked in its model lookup (the fake never answers the first /api/v0/models request):
-# no chat request has been sent yet. The call ends quietly with one log line, and the next call answers.
+# no chat request has been sent yet. The cancel waits for the fake to log that stalled lookup, not for a fixed delay. The call ends quietly with one log line, and the next call answers.
 start_fake cancel0 verify-slowlist-once
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[yes] a"]' 8)")" \
-  --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" \
-  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2}}, $b, {delay_ms: 2500}, {close_stdin: true}]')
+  --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" --arg log "$LOG" \
+  '[$i, $a, {wait_for: {file: $log, contains: "stalled"}}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2}}, $b, {delay_ms: 2500}, {close_stdin: true}]')
 out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 15000)
 b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
 if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
