@@ -270,7 +270,7 @@ test('skill scales spot-checks to stakes while retaining verification safeguards
   assert.match(verify, /When the local model produced the answer, say so in a few words/);
 });
 test('a loaded context too small for the floor adds the raise-context sentence to the above-cap line only', async () => {
-  const sentence = /Raise the loaded context to 32768 tokens.*lms load <model> --context-length 32768/;
+  const sentence = /below what the plugin needs for 30k\+ files; tell the user they can raise it in LM Studio's load settings or with `lms load <model> --context-length 32768` \(don't run it yourself\)/;
   const small = await fake(8192);
   const withSentence = [await optedHint(small.endpoint, [35000]), hintText(await hintResult(small.endpoint, [35000]))]; // opted in and default
   for (const text of withSentence) {
@@ -278,13 +278,17 @@ test('a loaded context too small for the floor adds the raise-context sentence t
     assert.match(text, sentence);
     assert.equal(text.split('\n').length, 1);
   }
+  // With the model option set, its id replaces the placeholder.
+  const pinned8k = hintText(await hintResult(small.endpoint, [35000], { CLAUDE_PLUGIN_OPTION_MODEL: 'fake-context' }));
+  assert.match(pinned8k, /`lms load fake-context --context-length 32768`/);
+  assert.doesNotMatch(pinned8k, /<model>/);
   // 22,846 tokens is the first context whose cap (30,000) fits the floor: the oversized line is unchanged.
   for (const tokens of [22846, 32768]) {
     const f = await fake(tokens);
     const text = await optedHint(f.endpoint, [capForContext(tokens) + 1]);
     assert.match(text, /too big for the loaded model's context/);
     assert.doesNotMatch(text, sentence);
-    assert.doesNotMatch(text, /Raise/);
+    assert.doesNotMatch(text, /tell the user/);
   }
   // Delegation off and a fitting context (24,576 tokens, cap 32,800): nothing prints.
   assert.equal(hintText(await hintResult((await fake(24576)).endpoint, [30000])), '');
@@ -295,7 +299,7 @@ test('a loaded context too small for the floor adds the raise-context sentence t
   for (const [endpoint, options] of [[dead, {}], [pinned, { CLAUDE_PLUGIN_OPTION_MODEL: 'missing' }]]) {
     const text = hintText(await hintResult(endpoint, [45876], options));
     assert.match(text, /too big for the loaded model's context \(assumed 32k context/);
-    assert.doesNotMatch(text, /Raise/);
+    assert.doesNotMatch(text, /tell the user/);
   }
 });
 test('hook follows a larger loaded context', async () => {

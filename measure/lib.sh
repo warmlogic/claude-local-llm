@@ -126,29 +126,27 @@ corpus_shortfall() {
 # loaded context, or null when the source is not `loaded` (an assumed 32k proves nothing). Asked of scripts/context-cap.mjs,
 # the plugin's own lookup, so the record and the plugin's hint agree.
 observe_context() {
-  LOCAL_LLM_ENDPOINT_URL="$2" LOCAL_LLM_MODEL="$3" node "$1/scripts/context-cap.mjs" 2>/dev/null \
+  LOCAL_LLM_ENDPOINT_URL="$2" LOCAL_LLM_MODEL="$3" node "$1/scripts/context-cap.mjs" \
     | jq -ce '{tokens: (if .source == "loaded" then .contextTokens else null end), source, reason: (.reason // null)}' \
     || echo '{"tokens":null,"source":"unknown","reason":"context lookup failed"}'
 }
 
-# context_warning <context-json> <model>: what a measurement run should say about the observed context; nothing when
-# the loaded context holds the delegation floor. The same derived rule as the size hint: a loaded context whose cap is
-# under MIN_DELEGATE_CHARS cannot delegate.
+# context_warning <context-json> <model>: what a measurement run should say about the observed context, with the
+# remedy for its cause; nothing when the loaded context holds the delegation floor. The same derived rule as the size
+# hint: a loaded context whose cap is under MIN_DELEGATE_CHARS cannot delegate. Returns 1 when the floor check cannot run.
 context_warning() {
-  local ctx="$1" source tokens
+  local ctx="$1" source tokens floor
   source=$(jq -r .source <<<"$ctx") && tokens=$(jq -r '.tokens // empty' <<<"$ctx") || return 1
-  if [ "$source" != loaded ]; then
-    echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); the plugin assumes 32k. Load the model with: lms load $2 --context-length 32768"
-  elif node --input-type=module -e 'const { capForContext, MIN_DELEGATE_CHARS } = await import(process.argv[2]); process.exit(capForContext(Number(process.argv[3])) < MIN_DELEGATE_CHARS ? 0 : 1)' \
-         read-floor "$MDIR/../scripts/context-cap.mjs" "$tokens"; then
-    echo "warning: LM Studio has $tokens tokens loaded, too few for the plugin's 30k-char delegation floor, so delegation jobs will fail. Reload with: lms load $2 --context-length 32768"
-  fi
-}
-
-# context_mismatch <recorded-json> <observed-json>: a warning when a resumed run sees another context than it started
-# with; nothing when it recorded none (an older run, or one without plugin-on sessions).
-context_mismatch() {
-  [ -n "$1" ] && [ "$1" != null ] || return 0
-  [ "$(jq -S -c '{tokens, source}' <<<"$1")" = "$(jq -S -c '{tokens, source}' <<<"$2")" ] \
-    || echo "warning: the loaded context changed since this run started (recorded $(jq -c '{tokens, source}' <<<"$1"), now $(jq -c '{tokens, source}' <<<"$2")); the new observation is not recorded"
+  case "$source" in
+    loaded)
+      floor=$(node --input-type=module -e 'const { capForContext, MIN_DELEGATE_CHARS } = await import(process.argv[2]); console.log(capForContext(Number(process.argv[3])) < MIN_DELEGATE_CHARS ? "warn" : "ok")' \
+        read-floor "$MDIR/../scripts/context-cap.mjs" "$tokens") || return 1
+      case "$floor" in
+        ok) ;;
+        warn) echo "warning: LM Studio has $tokens tokens loaded, too few for the plugin's 30k-char delegation floor, so delegation jobs will fail. Reload with: lms load $2 --context-length 32768" ;;
+        *) echo "measure: the floor check answered '$floor', not warn or ok" >&2; return 1 ;;
+      esac ;;
+    "pinned model not loaded") echo "warning: $2 is listed but not loaded; load $2 in LM Studio (its context decides what delegation can read). Results assume a 32k context." ;;
+    *) echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); results assume a 32k context." ;;
+  esac
 }

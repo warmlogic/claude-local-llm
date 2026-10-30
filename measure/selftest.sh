@@ -4,6 +4,7 @@
 # quota, no LM Studio. Every assertion is one `check` call; tests/test-fence.sh checks the printed total against the
 # count of them.
 set -uo pipefail
+unset MEASURE_CONFIGS MEASURE_ENDPOINT   # the run.sh checks below set their own
 
 MDIR="$(cd "$(dirname "$0")" && pwd -P)"
 FX="$MDIR/fixtures"
@@ -457,7 +458,7 @@ check "run.sh: main slots below the delegation floor use the low-floor copy, bou
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"
-runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS="${MEASURE_CONFIGS:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
+runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS="${1:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
 mkdir -p "$TMP/rh"; : > "$FAKE_LOG"
 MEASURE_ONLY="f01 f99" runsh; rc=$?
 check "run.sh: an unknown MEASURE_ONLY id is an error, before any session" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'MEASURE_ONLY names f99' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
@@ -477,6 +478,7 @@ ctx_ep() { # ctx_ep <tokens>: start a fake LM Studio with that loaded context; p
   node "$REPO/tests/fake-endpoint.mjs" "$TMP/$n.port" "$TMP/$n.log" context "$1" > /dev/null 2>&1 &
   echo $! >> "$TMP/ctx.pids"   # a file: ctx_ep runs in a command substitution
   for _ in $(seq 100); do [ -s "$TMP/$n.port" ] && break; sleep 0.05; done
+  [ -s "$TMP/$n.port" ] || { echo "ctx_ep: the fake endpoint for $1 tokens did not start" >&2; return 1; }
   echo "http://127.0.0.1:$(cat "$TMP/$n.port")"
 }
 ctx() { observe_context "$REPO" "$(ctx_ep "$1")" "${2:-}"; }
@@ -485,29 +487,43 @@ check "context: a pinned model that is not loaded is an assumed source with no t
   '{"tokens":null,"source":"pinned model not loaded","reason":"pinned model not loaded"}' "$(ctx 8192 nope | jq -c .)"
 check "context: an unreachable endpoint is an assumed source with no tokens" '{"tokens":null,"source":"fallback","reason":"no metadata"}' \
   "$(observe_context "$REPO" http://127.0.0.1:9 '' | jq -c .)"
-check "context: 8192 tokens warns with the lms load command" '1,1' \
-  "$(context_warning "$(ctx 8192 | jq -c .)" qwen-x | grep -c 'qwen-x --context-length 32768'),$(context_warning "$(ctx 8192 | jq -c .)" qwen-x | grep -c '8192')"
+check "context: 8192 tokens loaded warns with the lms load command for the model" '1,1' \
+  "$(context_warning "$(ctx 8192 | jq -c .)" qwen-x | grep -c 'qwen-x --context-length 32768'),$(context_warning "$(ctx 8192 | jq -c .)" qwen-x | grep -c '8192 tokens loaded')"
 check "context: 22846 tokens (the first that fits the 30k floor) and 32768 do not warn" '0,0' \
   "$(context_warning "$(ctx 22846 | jq -c .)" m | wc -l | tr -d ' '),$(context_warning "$(ctx 32768 | jq -c .)" m | wc -l | tr -d ' ')"
 check "context: 22845 tokens still warns" '1' "$(context_warning "$(ctx 22845 | jq -c .)" m | wc -l | tr -d ' ')"
-check "context: an assumed source warns that the context is unknown" '1' \
-  "$(context_warning '{"tokens":null,"source":"fallback","reason":"timeout"}' m | grep -c 'timeout')"
-check "context: a run that recorded no context (older meta.json) draws no mismatch warning" '' \
-  "$(context_mismatch '' '{"tokens":8192,"source":"loaded","reason":null}')"
-check "context: null recorded for a run without plugin-on sessions draws no mismatch warning" '' \
-  "$(context_mismatch null '{"tokens":8192,"source":"loaded","reason":null}')"
-check "context: the same observation draws no mismatch warning" '' \
-  "$(context_mismatch '{"tokens":32768,"source":"loaded","reason":null}' '{"tokens":32768,"source":"loaded","reason":null}')"
-check "context: a changed context on resume warns with both values" '1,1' \
-  "$(context_mismatch '{"tokens":32768,"source":"loaded","reason":null}' '{"tokens":8192,"source":"loaded","reason":null}' | grep -c '32768'),$(context_mismatch '{"tokens":32768,"source":"loaded","reason":null}' '{"tokens":8192,"source":"loaded","reason":null}' | grep -c '8192')"
+w=$(context_warning "$(ctx 8192 nope | jq -c .)" nope)
+check "context: a pinned model that is not loaded is told to be loaded, with no context-length remedy" '1,0' "$(grep -c 'load nope in LM Studio' <<<"$w"),$(grep -c 'context-length' <<<"$w")"
+w=$(context_warning '{"tokens":null,"source":"fallback","reason":"timeout"}' m)
+check "context: another assumed source states its reason and the 32k assumption, with no lms load" '1,1,0' "$(grep -c 'timeout' <<<"$w"),$(grep -c 'assum.* 32k' <<<"$w"),$(grep -c 'lms load' <<<"$w")"
+check "context: a floor check that cannot run is an error, not a fit" '1' "$( (MDIR=/nonexistent context_warning '{"tokens":8192,"source":"loaded","reason":null}' m >/dev/null 2>&1) && echo 0 || echo 1)"
+
+# the report header shows what the run saw
+variant; jq '.context = {tokens: 8192, source: "loaded", reason: null} | .endpoint = "http://127.0.0.1:4321"' "$B/meta.json" > "$TMP/v/meta.json"; render
+check "report: the header names the endpoint and the loaded context" '- Local server http://127.0.0.1:4321; loaded context 8192 tokens (loaded)' "$(cell '^- Local server')"
+variant; jq '.context = {tokens: null, source: "fallback", reason: "timeout"} | .endpoint = "http://127.0.0.1:1234"' "$B/meta.json" > "$TMP/v/meta.json"; render
+check "report: an assumed context shows its source and reason" '- Local server http://127.0.0.1:1234; loaded context unknown (fallback: timeout)' "$(cell '^- Local server')"
+variant; render
+check "report: a run without a recorded context says so" '- Local server n/a; loaded context not recorded' "$(cell '^- Local server')"
+
+# a resumed run takes its endpoint from meta.json, not from MEASURE_ENDPOINT
+rd="$TMP/resume-run"; mkdir -p "$rd"; echo '{"configs":"on","only":"","model":"","local_model":"m","endpoint":"http://127.0.0.1:4321"}' > "$rd/meta.json"
+sed -n '/^if \[ "\$MODE" = resume \]; then/,/^fi$/p' "$MDIR/run.sh" > "$TMP/resume-block.sh"
+check "run.sh: a resumed run uses the endpoint recorded in meta.json" 'http://127.0.0.1:4321' \
+  "$(MODE=resume RUN_DIR="$rd" MEASURE_ENDPOINT=http://127.0.0.1:9 bash -c '. "$1"; echo "$ENDPOINT"' _ "$TMP/resume-block.sh")"
 
 # run.sh warns about a small context in its preflight and goes on (the stale corpus rule stops it right after, before any session)
 echo stale > "$MH/corpus.rule"; : > "$FAKE_LOG"
-MEASURE_ENDPOINT="$(ctx_ep 8192)" MEASURE_LOCAL_MODEL=fake-context MEASURE_CONFIGS=on MEASURE_ONLY=f01 runsh; rc=$?
+MEASURE_ENDPOINT="$(ctx_ep 8192)" MEASURE_LOCAL_MODEL=fake-context MEASURE_ONLY=f01 runsh on; rc=$?
 check "run.sh: a small loaded context is warned about in the preflight, which then goes on to the next check" '1,1,0' \
   "$(grep -c 'lms load fake-context --context-length 32768' "$TMP/run.out"),$(grep -c 'corpus rule .* changed' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
-MEASURE_ENDPOINT="$(ctx_ep 32768)" MEASURE_LOCAL_MODEL=fake-context MEASURE_CONFIGS=on MEASURE_ONLY=f01 runsh; rc=$?
+MEASURE_ENDPOINT="$(ctx_ep 32768)" MEASURE_LOCAL_MODEL=fake-context MEASURE_ONLY=f01 runsh on; rc=$?
 check "run.sh: a loaded context that fits the floor draws no warning" '0,1' "$(grep -c '^warning' "$TMP/run.out"),$(grep -c 'corpus rule .* changed' "$TMP/run.out")"
+
+: > "$FAKE_LOG"
+MEASURE_ENDPOINT=http://192.168.1.5:1234 MEASURE_LOCAL_MODEL=fake-context MEASURE_ONLY=f01 runsh on; rc=$?
+check "run.sh: a non-loopback MEASURE_ENDPOINT dies in the preflight, before any session" '1,1,0' \
+  "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'recorded endpoint must be loopback' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]

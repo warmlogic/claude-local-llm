@@ -84,9 +84,11 @@ if (files.length > 0) {
   const context = source === 'loaded'
     ? `${number(contextTokens)} tokens, about ${number(capChars)} chars; loaded`
     : `assumed 32k context (model metadata unavailable: ${reason}); about ${number(capChars)} chars; ${source}`;
-  // A loaded context whose cap is under the floor can never delegate; say how to fix it. An assumed context proves nothing.
+  // A loaded context whose cap is under the floor can never delegate; the note is for the user, not an instruction to
+  // Claude. An assumed context proves nothing.
+  const pinnedModel = env.CLAUDE_PLUGIN_OPTION_MODEL || '<model>';
   const raiseContext = source === 'loaded' && capChars < MIN_DELEGATE_CHARS
-    ? ' The loaded context is below what the plugin needs for files of 30k characters or more. Raise the loaded context to 32768 tokens (LM Studio\'s default context length, or the model\'s own load setting; `lms load <model> --context-length 32768`).'
+    ? ` The loaded context is below what the plugin needs for 30k+ files; tell the user they can raise it in LM Studio's load settings or with \`lms load ${pinnedModel} --context-length 32768\` (don't run it yourself).`
     : '';
   const lines = files.map(({ path, size }) => {
     const prefix = `local-llm: ${path} is about ${number(size)} bytes (a char proxy).`;

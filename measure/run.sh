@@ -61,6 +61,7 @@ case "$MEASURE_HOME/" in
   "$HOME/github/"*|"$HOME/catalyst/"*) die "MEASURE_HOME must sit outside \$HOME/github and \$HOME/catalyst: traces hold file text" ;;
 esac
 case " $CONFIGS " in *" on "*)
+  node "$REPO/scripts/check-endpoint.mjs" "$ENDPOINT" measure || die "MEASURE_ENDPOINT / the recorded endpoint must be loopback: the plugin's launchers refuse any other, so every plugin-on session would fail"
   models=$(curl -s -m 5 "$ENDPOINT/v1/models") || die "LM Studio is unreachable at $ENDPOINT (start its server)"
   ids=$(jq -r '[.data[]?.id] | join(", ")' <<<"$models" 2>/dev/null) || die "LM Studio at $ENDPOINT answered /v1/models with something that is not JSON"
   jq -e --arg m "$LOCAL_MODEL" '[.data[]?.id] | index($m) != null' >/dev/null <<<"$models" \
@@ -133,7 +134,6 @@ else
   wd=$(jq -r '.work_dir // empty' "$RUN_DIR/meta.json"); [ -n "$wd" ] || die "$RUN_DIR has no recorded session cwd; it predates --resume"
   WORK=$(work_dir "$wd") || die "cannot recreate the run's session cwd $wd outside \$HOME"
   echo "resuming $RUN_DIR: runs with stored facts are kept"
-  context_mismatch "$(jq -c '.context // empty' "$RUN_DIR/meta.json")" "$CONTEXT" >&2   # the recorded observation stays
 fi
 trap 'rmdir "$WORK" 2>/dev/null' EXIT
 
