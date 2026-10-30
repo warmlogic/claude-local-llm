@@ -167,7 +167,7 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `allowed_dirs` | none (required) | The folders the local model may read. Nothing outside them is readable *by the local model*. Folder names must not contain `,` or `:`. A folder that does not exist is skipped with a warning. |
+| `allowed_dirs` | none (required) | The folders the local model may read. Nothing outside them is readable *by the local model*. Folder rules: [Choose the folders](#choose-the-folders-the-local-model-may-read). |
 | `endpoint_url` | `http://127.0.0.1:1234` | The LM Studio server. Must be loopback. |
 | `model` | empty | A model id to request. Empty means whichever model LM Studio has loaded. |
 | `delegate_tasks` | empty (off) | Comma-separated read-only task kinds to delegate unprompted: `classify`, `extract`, `summarize`, `draft`. Add `summarize` only for a local model whose summaries have been measured as reliable. Unknown kinds are ignored with a stderr note; empty or all-unknown disables delegation instructions while keeping oversized-file warnings. |
@@ -175,6 +175,8 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 ### Choose the folders the local model may read
 
 `allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
+
+Each folder must exist and be an absolute path (a leading `~` or `$HOME` is expanded), no entry may be `/` or have spaces at its edges, and folder names (after symlinks are resolved) cannot contain `,` or `:`. A folder that does not exist is skipped with a warning; if none exists, the servers refuse to start.
 
 Anything under these folders can reach Claude's context with no permission prompt: the local model's answers and batch rows are returned to Claude, and a file's content can steer what gets asked. Do not include folders that hold secrets (`.env` files, credentials, keys).
 
@@ -255,10 +257,10 @@ If `/mcp` instead says `Plugin option "allowed_dirs" isn't set`, Claude Code nev
 | --- | --- |
 | `local-llm: node (Node.js) is required` / `npx (Node.js) is required` | Install Node.js so both are on the `PATH` Claude Code sees. |
 | `local-llm: no allowed folders configured` | `allowed_dirs` is empty. Set it ([Choose the folders](#choose-the-folders-the-local-model-may-read)) and restart Claude Code. |
-| `local-llm: allowed folder must not contain ':'` | Remove the `:` from the folder name or pick another folder. Commas are forbidden too. |
+| `local-llm: allowed folder must not contain ':'` | Rename the folder or pick another; see the folder rules in [Choose the folders](#choose-the-folders-the-local-model-may-read). |
 | `local-llm: endpoint must be loopback` | `endpoint_url` must be `http(s)://` with host `127.0.0.1`, `localhost`, or `[::1]`, no user info, and a numeric port. |
 | `local-llm: none of the allowed folders exist` | Every folder in `allowed_dirs` is missing. Fix the paths. |
-| `local-llm: allowed folder must be an absolute path` | Use absolute paths (a leading `$HOME` or `~` is fine). A comma splits a folder name in two, and the fragment after the comma is what the message names, as a relative path: `/a/b,c` is read as `/a/b` and `c`. Rename the folder. |
+| `local-llm: allowed folder must be an absolute path` | Use absolute paths ([folder rules](#choose-the-folders-the-local-model-may-read)). A comma splits a folder name in two, and the fragment after the comma is what the message names, as a relative path: `/a/b,c` is read as `/a/b` and `c`. Rename the folder. |
 | `local-llm: allowed folder has leading/trailing whitespace`, `... is not a directory`, `cannot resolve allowed folder`, `refusing '/'` | Fix the entry named in the message. |
 | `local-llm: resolved folder would be altered by houtini's split/trim` | The folder's real path (after symlinks) contains `,` or `:` or edge whitespace. Use a folder whose real path does not. |
 | `local-llm: HOME is not an absolute path` | A `$HOME` or `~` entry needs `HOME` set to an absolute path in the environment Claude Code runs in. |
