@@ -7,14 +7,19 @@ import { fileURLToPath } from 'node:url';
 
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
+// A withheld batch approval says why on stderr (fixed strings, never paths); stdout stays empty, so the normal permission flow decides.
+const skip = (reason) => { console.error(`local-llm: batch auto-approval skipped: ${reason}`); return false; };
 const batchArgsAllowed = (args, cwd) => {
   const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS;
-  if (!configured) return false; // the option has no default: unset approves nothing
-  const roots = execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
-    env: { ...process.env, LOCAL_LLM_ALLOWED_DIRS: configured },
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
-  }).trim().split(',').filter(Boolean);
-  if (!roots.length) return false;
+  if (!configured) return skip('allowed_dirs option is not set'); // the option has no default: unset approves nothing
+  let roots;
+  try {
+    roots = execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
+      env: { ...process.env, LOCAL_LLM_ALLOWED_DIRS: configured },
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
+    }).trim().split(',').filter(Boolean);
+  } catch { return skip('allowed_dirs could not be resolved'); }
+  if (!roots.length) return skip('allowed_dirs could not be resolved');
   // Preserve symlink/.. ordering: resolve() before realpath could approve a different file.
   const real = (path) => realpathSync.native(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
   const files = [], options = new Set();

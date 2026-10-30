@@ -110,13 +110,14 @@ if did_not_start "$out" "HOME is not an absolute path"; then ok "empty HOME with
 else bad "empty HOME with ~/x is refused ($out)"; fi
 check_refuses "regular file as a root" "$TMP/plain-file" "not a directory"
 check_refuses "entry with ':' (houtini splits on it)" "$A,$A/x:y" "':'"
+check_refuses "relative root keeps the local-llm: prefix" "relative/dir" "local-llm: allowed folder must be an absolute path"
 check_refuses "'path:suffix' (would authorize path plus a cwd-relative suffix)" "$TMP/a:b" "':'"
 out=$(env -u LOCAL_LLM_ALLOWED_DIRS node "$DRIVER" "$LAUNCHER")
 if did_not_start "$out" "no allowed folders"; then ok "launcher refuses to start: allowed_dirs unset"
 else bad "launcher refuses to start: allowed_dirs unset ($out)"; fi
 # The message must say how to set it (Claude Code never starts the server while a required option is unset, so
 # a user sees this only for an empty value or a direct run): configure command, JSON key, /plugin UI, restart.
-for frag in "claude plugin configure local-llm@ai-plugin-marketplace" "plugin configure local-llm@inline" "--plugin-dir" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
+for frag in "claude plugin configure local-llm@ai-plugin-marketplace   (marketplace install)" "claude --plugin-dir <clone> plugin configure local-llm@inline   (--plugin-dir checkout)" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
   if did_not_start "$out" "$frag"; then ok "unset allowed_dirs message names: $frag"
   else bad "unset allowed_dirs message names: $frag ($out)"; fi
 done
@@ -341,7 +342,7 @@ done
 # Whole-command approval, not prefix approval. Keep every allow/reject visible for mutation checks.
 batch_cmd() {
   local label="$1" decision="$2" command="$3" background="${4:-false}" cwd="${5:-$PWD}" output
-  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')")
+  output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')" 2>/dev/null)
   if { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
      || { [ "$decision" = reject ] && [ -z "$output" ]; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label"; fi
 }
@@ -393,6 +394,12 @@ notool_out=$(hook_out '{"tool_name":"Bash","cwd":"/"}' 2>&1)
 if [ -z "$notool_out" ]; then ok "Bash input without tool_input is a quiet no-op"; else bad "Bash input without tool_input is a quiet no-op: $notool_out"; fi
 cwd_out=$(hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '${INPUT#/}'" '{tool_name:"Bash",cwd:"",tool_input:{command:$c}}')")
 if [ -z "$cwd_out" ]; then ok "batch hook reject: empty cwd turns a relative input into an absolute one"; else bad "batch hook reject: empty cwd turns a relative input into an absolute one"; fi
+# A relative cwd is refused too, even when the relative input would exist from the hook's own cwd (which a fallback to it would approve).
+mkdir -p "$HOOK_TMP/allowed/sub"; printf 'input\n' > "$HOOK_TMP/allowed/sub/rel.txt"
+cd "$HOOK_TMP/allowed"
+batch_cmd relative-cwd reject "$RUN --job-json '{}' rel.txt" false sub
+batch_cmd relative-cwd-control allow "$RUN --job-json '{}' rel.txt" false "$HOOK_TMP/allowed/sub"
+cd "$SCRIPT_DIR/.."
 batch_cmd outside-input reject "$RUN --job-json '{}' '$HOOK_TMP/allowed-evil/out.txt'"
 # Reads of the runner's own outputs: index.md etc. in a mkdtemp dir under the OS tmpdir
 read_out() { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | node "$REPO/scripts/approve-own-tools.mjs"; }
@@ -455,6 +462,19 @@ mkdir -p "$HOOK_TMP/home/github"
 printf 'input\n' > "$HOOK_TMP/home/github/default.txt"
 unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
 HOME="$HOOK_TMP/home" batch_cmd unset-option reject "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
+# A withheld approval says why on stderr (fixed strings, no paths); stdout stays empty and no deny is sent.
+batch_err() { hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c}}')" 2>&1 >"$HOOK_TMP/batch-err.out"; }
+unset_err=$(HOME="$HOOK_TMP/home" batch_err)
+if [ "$unset_err" = "local-llm: batch auto-approval skipped: allowed_dirs option is not set" ] && [ ! -s "$HOOK_TMP/batch-err.out" ]; then ok "batch hook: unset allowed_dirs prints one fixed stderr reason and nothing on stdout"
+else bad "batch hook: unset allowed_dirs stderr: $unset_err"; fi
+empty_err=$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_err)
+if [ "$empty_err" = "local-llm: batch auto-approval skipped: allowed_dirs option is not set" ]; then ok "batch hook: empty allowed_dirs prints the same reason"
+else bad "batch hook: empty allowed_dirs stderr: $empty_err"; fi
+res_err=$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_err)
+if [ "$res_err" = "local-llm: batch auto-approval skipped: allowed_dirs could not be resolved" ] && ! grep -q "$HOOK_TMP" <<<"$res_err"; then ok "batch hook: unresolvable allowed_dirs prints a fixed reason without the path"
+else bad "batch hook: unresolvable allowed_dirs stderr: $res_err"; fi
+quiet_err=$(unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; hook_out "$(jq -nc --arg c "node /tmp/other.mjs" '{tool_name:"Bash",cwd:"/",tool_input:{command:$c}}')" 2>&1)
+if [ -z "$quiet_err" ]; then ok "batch hook: a command that is not the runner prints nothing"; else bad "batch hook: non-runner stderr: $quiet_err"; fi
 export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
 for suffix in '; rm -rf ~' ' | sh' ' && true' ' || true' ' > /tmp/out' ' < /tmp/in' ' $(id)' ' `id`' $'\ntrue' ' &&' ' # comment' ' & true'; do
   batch_cmd "operator $(printf %q "$suffix")" reject "$RUN --job-json '{}' '$INPUT'$suffix"

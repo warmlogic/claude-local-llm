@@ -1,5 +1,6 @@
 // Resolve the allowed folders for houtini's HOUTINI_LM_FILE_ROOTS, using houtini's own semantics.
-// In: LOCAL_LLM_ALLOWED_DIRS (comma-separated; a leading $HOME, ${HOME} or ~ is expanded), HOME.
+// In: LOCAL_LLM_ALLOWED_DIRS (comma-separated; a leading $HOME, ${HOME} or ~ is expanded), HOME,
+// LOCAL_LLM_MSG_PREFIX (optional; the stderr message prefix, default local-llm).
 // Out: the resolved roots joined with "," on stdout; warnings and errors on stderr; exit 2 on refusal.
 // Consumers: launch-server.sh (as houtini's HOUTINI_LM_FILE_ROOTS) and launch-verify.sh (as the verify
 // server's LOCAL_VERIFY_ROOTS, split on ","; no root can contain one).
@@ -12,7 +13,8 @@
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
-const fail = (msg) => { console.error(`local-llm: ${msg}`); process.exit(2); };
+const prefix = process.env.LOCAL_LLM_MSG_PREFIX || 'local-llm'; // launch-verify.sh sets it so its errors name local-verify
+const fail = (msg) => { console.error(`${prefix}: ${msg}`); process.exit(2); };
 const home = process.env.HOME ?? '';
 const roots = [];
 let skipped = 0;
@@ -27,7 +29,7 @@ for (const raw of (process.env.LOCAL_LLM_ALLOWED_DIRS ?? '').split(',')) {
   let resolved;
   let isDir;
   try { resolved = realpathSync.native(entry); isDir = statSync(resolved).isDirectory(); } catch (e) {
-    if (e.code === 'ENOENT') { skipped++; console.error(`local-llm: allowed folder not found, skipping: ${entry}`); continue; }
+    if (e.code === 'ENOENT') { skipped++; console.error(`${prefix}: allowed folder not found, skipping: ${entry}`); continue; }
     fail(`cannot resolve allowed folder (${e.code}): ${entry}`);
   }
   if (!isDir) fail(`allowed folder is not a directory: ${entry}`);

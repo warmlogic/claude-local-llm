@@ -73,6 +73,9 @@ for dirs in "" " , " "$TMP/nope" "relative/dir" "/"; do
   if did_not_start "$out" "allowed folder"; then ok "launcher refuses allowed_dirs '${dirs}'"
   else bad "launcher refuses allowed_dirs '${dirs}' ($out)"; fi
 done
+out=$(LOCAL_LLM_ALLOWED_DIRS="relative/dir" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
+if did_not_start "$out" "local-verify: allowed folder must be an absolute path"; then ok "a refused root under launch-verify.sh is prefixed local-verify:"
+else bad "a refused root under launch-verify.sh is prefixed local-verify: ($out)"; fi
 for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@127.0.0.1:1234" \
           "http://localhost:1@evil.example/" "http://10.0.0.5:1234" "http://127.1:1234" "127.0.0.1:1234"; do
   out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
@@ -88,7 +91,7 @@ for v in abc 0 -5 1.5; do
 done
 
 out=$(env -u LOCAL_LLM_ALLOWED_DIRS LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
-for frag in "claude plugin configure local-llm@ai-plugin-marketplace" "plugin configure local-llm@inline" "--plugin-dir" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
+for frag in "claude plugin configure local-llm@ai-plugin-marketplace   (marketplace install)" "claude --plugin-dir <clone> plugin configure local-llm@inline   (--plugin-dir checkout)" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
   if did_not_start "$out" "$frag"; then ok "unset allowed_dirs message names: $frag"
   else bad "unset allowed_dirs message names: $frag ($out)"; fi
 done
