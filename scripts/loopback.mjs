@@ -1,13 +1,15 @@
 // Loopback check for the inference endpoint, shared by both launchers (via check-endpoint.mjs) and
 // the verify server. Accepts only http(s)://127.0.0.1, localhost or [::1], with an optional numeric
-// port, no userinfo, and nothing else before the path. A string check on purpose: the URL parser
+// port, no userinfo, and nothing after that but one optional trailing slash (a server root: a path, query or fragment
+// would build broken request URLs such as `?x=1/v1/chat/completions`). A string check on purpose: the URL parser
 // would normalize forms like 127.1 or 0x7f000001, so what passes is exactly what the user typed.
-const LOOPBACK = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?(?:[/?#][^]*)?$/;
+const LOOPBACK = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?\/?$/;
 
 export const isLoopbackEndpoint = (url) => typeof url === 'string' && LOOPBACK.test(url);
 
 export const loopbackError = (url) =>
-  `endpoint must be loopback (127.0.0.1, localhost or [::1]) with a numeric port (set endpoint_url in the plugin options): ${url}`;
+  `endpoint must be loopback (127.0.0.1, localhost or [::1]) and a server root only: no path, query or fragment, ` +
+  `with an optional numeric port, like http://127.0.0.1:1234 (set endpoint_url in the plugin options): ${url}`;
 
 // The proxy variables Node's env proxy reads, plus the flag that turns it on. Any of these DEFINED, even empty,
 // makes the verify server and the batch runner refuse to start, because file text could go through a proxy.

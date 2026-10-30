@@ -85,6 +85,17 @@ for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://
   if did_not_start "$out" "local-verify: endpoint must be loopback"; then ok "launcher refuses non-loopback endpoint $ep"
   else bad "launcher refuses non-loopback endpoint $ep ($out)"; fi
 done
+for ep in "http://127.0.0.1:" "http://localhost:" "http://[::1]:" "http://127.0.0.1:1234/v1" \
+          "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f"; do
+  out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
+  if did_not_start "$out" "local-verify: endpoint must be loopback" && did_not_start "$out" "server root only: no path, query or fragment"; then ok "launcher refuses endpoint that is not a server root $ep"
+  else bad "launcher refuses endpoint that is not a server root $ep ($out)"; fi
+done
+for ep in "http://127.0.0.1:1234/" "http://localhost:1234" "http://[::1]" "https://localhost"; do
+  out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
+  if jq -e '.init' >/dev/null <<<"$out"; then ok "launcher accepts server-root endpoint $ep"
+  else bad "launcher accepts server-root endpoint $ep ($out)"; fi
+done
 for v in abc 0 -5 1.5; do
   for name in LOCAL_VERIFY_REQUEST_TIMEOUT_MS LOCAL_VERIFY_BUDGET_MS; do
     out=$(env "$name=$v" LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
@@ -104,6 +115,11 @@ printf '#!/bin/sh\nexec node "%s/server/verify-server.mjs"\n' "$REPO" > "$TMP/di
 out=$(LOCAL_VERIFY_ROOTS="$ROOT" LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$DRIVER" "$TMP/direct.sh")
 if did_not_start "$out" "loopback"; then ok "server refuses a non-loopback endpoint in code"
 else bad "server refuses a non-loopback endpoint in code ($out)"; fi
+for ep in "http://127.0.0.1:" "http://127.0.0.1:1234/v1" "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f"; do
+  out=$(LOCAL_VERIFY_ROOTS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$TMP/direct.sh")
+  if did_not_start "$out" "server root only: no path, query or fragment"; then ok "server refuses endpoint that is not a server root in code: $ep"
+  else bad "server refuses endpoint that is not a server root in code: $ep ($out)"; fi
+done
 for roots in "" "/" "relative"; do
   out=$(env LOCAL_VERIFY_ROOTS="$roots" LOCAL_LLM_ENDPOINT_URL=http://127.0.0.1:1234 node "$DRIVER" "$TMP/direct.sh")
   if did_not_start "$out" "allowed folder"; then ok "server refuses roots '${roots}' in code"

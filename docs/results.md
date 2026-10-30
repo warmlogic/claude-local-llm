@@ -54,4 +54,4 @@ Paid runs on a 60-ticket classification job showed that Claude could start the r
 
 ## Quality
 
-The operator spot-check sheet is pending; usable-answer rates are not reported yet.
+Usable-answer rates are in section C: 4 of 10 delegated answers judged usable, against 8 of 10 when Claude read the file itself.
