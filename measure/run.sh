@@ -23,7 +23,7 @@ REPO="$(cd "$MDIR/.." && pwd -P)"
 . "$MDIR/lib.sh"
 MEASURE_HOME="${MEASURE_HOME:-$HOME/.cache/local-llm-measure}"
 CLAUDE="${MEASURE_CLAUDE:-claude}"
-ENDPOINT="http://127.0.0.1:1234"
+ENDPOINT="${MEASURE_ENDPOINT:-http://127.0.0.1:1234}"   # the self-test points it at a fake LM Studio
 CTL_REPS=3; SMALL_REPS=3; RUN_TIMEOUT_SEC=300
 die() { echo "measure: $*" >&2; exit 1; }
 
@@ -62,7 +62,12 @@ case " $CONFIGS " in *" on "*)
   models=$(curl -s -m 5 "$ENDPOINT/v1/models") || die "LM Studio is unreachable at $ENDPOINT (start its server)"
   ids=$(jq -r '[.data[]?.id] | join(", ")' <<<"$models" 2>/dev/null) || die "LM Studio at $ENDPOINT answered /v1/models with something that is not JSON"
   jq -e --arg m "$LOCAL_MODEL" '[.data[]?.id] | index($m) != null' >/dev/null <<<"$models" \
-    || die "LM Studio is up but does not list MEASURE_LOCAL_MODEL=$LOCAL_MODEL (listed: ${ids:-none}); load it or set MEASURE_LOCAL_MODEL" ;;
+    || die "LM Studio is up but does not list MEASURE_LOCAL_MODEL=$LOCAL_MODEL (listed: ${ids:-none}); load it or set MEASURE_LOCAL_MODEL"
+  # The loaded context is recorded, and a small or unknown one is warned about, not refused: the measurement
+  # deliberately runs small files and counts delegation failures.
+  CONTEXT=$(observe_context "$REPO" "$ENDPOINT" "$LOCAL_MODEL")
+  context_warning "$CONTEXT" "$LOCAL_MODEL" >&2 ;;
+*) CONTEXT=null ;;
 esac
 
 # --- corpus: reuse the frozen manifest; pick a new one only on the first run or MEASURE_RESELECT=1 -------------
@@ -116,15 +121,17 @@ if [ "$MODE" = new ]; then
     --arg configs "$CONFIGS" --arg only "$ONLY" --argjson ctl_reps "$CTL_REPS" --argjson small_reps "$SMALL_REPS" \
     --argjson partial "$([ -n "$ONLY" ] && echo true || echo false)" \
     --argjson allow_short "$([ -n "$(corpus_shortfall "$MANIFEST")" ] && echo true || echo false)" \
+    --argjson context "$CONTEXT" \
     '{date_start: $date_start, date_end: null, cutoff: $cutoff, repo_sha: $repo_sha, repo_dirty: $repo_dirty,
       claude_version: $claude_version, server_pin: $server_pin, lms_version: (if $lms_version == "" then "unknown" else $lms_version end),
       model: $model, local_model: $local_model, run_dir: $run_dir, work_dir: $work_dir, configs: $configs, only: $only,
-      ctl_reps: $ctl_reps, small_reps: $small_reps, partial: $partial, allow_short: $allow_short}' > "$RUN_DIR/meta.json" \
+      ctl_reps: $ctl_reps, small_reps: $small_reps, partial: $partial, allow_short: $allow_short, context: $context}' > "$RUN_DIR/meta.json" \
     || die "writing meta.json"
 else
   wd=$(jq -r '.work_dir // empty' "$RUN_DIR/meta.json"); [ -n "$wd" ] || die "$RUN_DIR has no recorded session cwd; it predates --resume"
   WORK=$(work_dir "$wd") || die "cannot recreate the run's session cwd $wd outside \$HOME"
   echo "resuming $RUN_DIR: runs with stored facts are kept"
+  context_mismatch "$(jq -c '.context // empty' "$RUN_DIR/meta.json")" "$CONTEXT" >&2   # the recorded observation stays
 fi
 trap 'rmdir "$WORK" 2>/dev/null' EXIT
 

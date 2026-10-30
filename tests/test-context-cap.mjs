@@ -269,6 +269,35 @@ test('skill scales spot-checks to stakes while retaining verification safeguards
   assert.match(fails, /Input-specific\*\* \(too big, path not allowed, a quality flag, a partial `x\/y file\(s\) read`\): do that one job yourself/);
   assert.match(verify, /When the local model produced the answer, say so in a few words/);
 });
+test('a loaded context too small for the floor adds the raise-context sentence to the above-cap line only', async () => {
+  const sentence = /Raise the loaded context to 32768 tokens.*lms load <model> --context-length 32768/;
+  const small = await fake(8192);
+  const withSentence = [await optedHint(small.endpoint, [35000]), hintText(await hintResult(small.endpoint, [35000]))]; // opted in and default
+  for (const text of withSentence) {
+    assert.match(text, /too big for the loaded model's context \(8,192 tokens, about 6,553 chars; loaded\).*use batch\/run.mjs\./);
+    assert.match(text, sentence);
+    assert.equal(text.split('\n').length, 1);
+  }
+  // 22,846 tokens is the first context whose cap (30,000) fits the floor: the oversized line is unchanged.
+  for (const tokens of [22846, 32768]) {
+    const f = await fake(tokens);
+    const text = await optedHint(f.endpoint, [capForContext(tokens) + 1]);
+    assert.match(text, /too big for the loaded model's context/);
+    assert.doesNotMatch(text, sentence);
+    assert.doesNotMatch(text, /Raise/);
+  }
+  // Delegation off and a fitting context (24,576 tokens, cap 32,800): nothing prints.
+  assert.equal(hintText(await hintResult((await fake(24576)).endpoint, [30000])), '');
+  // An assumed context proves nothing: fallback and pinned-not-loaded add no sentence.
+  const dead = await serve(() => {});
+  await new Promise((r) => servers.at(-1).close(r));
+  const pinned = await serve((q, r) => r.end(JSON.stringify({ data: [model('a', 8192)] })));
+  for (const [endpoint, options] of [[dead, {}], [pinned, { CLAUDE_PLUGIN_OPTION_MODEL: 'missing' }]]) {
+    const text = hintText(await hintResult(endpoint, [45876], options));
+    assert.match(text, /too big for the loaded model's context \(assumed 32k context/);
+    assert.doesNotMatch(text, /Raise/);
+  }
+});
 test('hook follows a larger loaded context', async () => {
   const f = await fake(65536);
   assert.match(await optedHint(f.endpoint, [90000]), /98,304 chars; loaded.*invoke/);

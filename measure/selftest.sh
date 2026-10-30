@@ -13,7 +13,7 @@ check() { # check <label> <expected> <actual>
   if [ "$2" = "$3" ]; then echo "  measure selftest PASS: $1"; else echo "  measure selftest FAIL: $1 (want $2, got $3)"; fails=$((fails+1)); fi
 }
 TMP=$(mktemp -d) || { echo "mktemp failed"; exit 1; }
-trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT   # undoes the chmod 000 fixtures first
+trap 'kill $(cat "$TMP/ctx.pids" 2>/dev/null) 2>/dev/null; chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT   # stops the fake endpoints; undoes the chmod 000 fixtures first
 # judge.sh wraps each call in timeout; a pass-through shim keeps this test free of coreutils
 mkdir -p "$TMP/bin" && printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' > "$TMP/bin/timeout" && chmod +x "$TMP/bin/timeout"
 export PATH="$TMP/bin:$PATH"
@@ -451,7 +451,7 @@ check "run.sh: main slots below the delegation floor use the low-floor copy, bou
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"
-runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS=off "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
+runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS="${MEASURE_CONFIGS:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
 mkdir -p "$TMP/rh"; : > "$FAKE_LOG"
 MEASURE_ONLY="f01 f99" runsh; rc=$?
 check "run.sh: an unknown MEASURE_ONLY id is an error, before any session" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'MEASURE_ONLY names f99' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
@@ -462,6 +462,46 @@ echo stale > "$MH/corpus.rule"; MEASURE_ONLY=f01 runsh; rc=$?
 check "run.sh: a manifest frozen under another corpus rule (selector or entropy guard) is refused" '1,1' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'corpus rule .* changed since the manifest was frozen' "$TMP/run.out")"
 check "selector_rule covers the entropy guard" '1' "$(cp -R "$MDIR" "$TMP/mcopy" && echo '// x' >> "$TMP/mcopy/entropy.mjs" && [ "$(MDIR="$TMP/mcopy" selector_rule)" != "$(selector_rule)" ] && echo 1 || echo 0)"
+
+# --- the loaded context run.sh records and warns about (against the fake endpoint's `context` mode) ---------------
+REPO="$(cd "$MDIR/.." && pwd -P)"
+ctx_ep() { # ctx_ep <tokens>: start a fake LM Studio with that loaded context; prints its endpoint
+  local n="ctx-$1"
+  : > "$TMP/$n.port"
+  node "$REPO/tests/fake-endpoint.mjs" "$TMP/$n.port" "$TMP/$n.log" context "$1" > /dev/null 2>&1 &
+  echo $! >> "$TMP/ctx.pids"   # a file: ctx_ep runs in a command substitution
+  for _ in $(seq 100); do [ -s "$TMP/$n.port" ] && break; sleep 0.05; done
+  echo "http://127.0.0.1:$(cat "$TMP/$n.port")"
+}
+ctx() { observe_context "$REPO" "$(ctx_ep "$1")" "${2:-}"; }
+check "context: a loaded context is recorded as tokens and source" '{"tokens":8192,"source":"loaded","reason":null}' "$(ctx 8192 | jq -c .)"
+check "context: a pinned model that is not loaded is an assumed source with no tokens" \
+  '{"tokens":null,"source":"pinned model not loaded","reason":"pinned model not loaded"}' "$(ctx 8192 nope | jq -c .)"
+check "context: an unreachable endpoint is an assumed source with no tokens" '{"tokens":null,"source":"fallback","reason":"no metadata"}' \
+  "$(observe_context "$REPO" http://127.0.0.1:9 '' | jq -c .)"
+check "context: 8192 tokens warns with the lms load command" '1,1' \
+  "$(context_warning "$(ctx 8192 | jq -c .)" qwen-x | grep -c 'qwen-x --context-length 32768'),$(context_warning "$(ctx 8192 | jq -c .)" qwen-x | grep -c '8192')"
+check "context: 22846 tokens (the first that fits the 30k floor) and 32768 do not warn" '0,0' \
+  "$(context_warning "$(ctx 22846 | jq -c .)" m | wc -l | tr -d ' '),$(context_warning "$(ctx 32768 | jq -c .)" m | wc -l | tr -d ' ')"
+check "context: 22845 tokens still warns" '1' "$(context_warning "$(ctx 22845 | jq -c .)" m | wc -l | tr -d ' ')"
+check "context: an assumed source warns that the context is unknown" '1' \
+  "$(context_warning '{"tokens":null,"source":"fallback","reason":"timeout"}' m | grep -c 'timeout')"
+check "context: a run that recorded no context (older meta.json) draws no mismatch warning" '' \
+  "$(context_mismatch '' '{"tokens":8192,"source":"loaded","reason":null}')"
+check "context: null recorded for a run without plugin-on sessions draws no mismatch warning" '' \
+  "$(context_mismatch null '{"tokens":8192,"source":"loaded","reason":null}')"
+check "context: the same observation draws no mismatch warning" '' \
+  "$(context_mismatch '{"tokens":32768,"source":"loaded","reason":null}' '{"tokens":32768,"source":"loaded","reason":null}')"
+check "context: a changed context on resume warns with both values" '1,1' \
+  "$(context_mismatch '{"tokens":32768,"source":"loaded","reason":null}' '{"tokens":8192,"source":"loaded","reason":null}' | grep -c '32768'),$(context_mismatch '{"tokens":32768,"source":"loaded","reason":null}' '{"tokens":8192,"source":"loaded","reason":null}' | grep -c '8192')"
+
+# run.sh warns about a small context in its preflight and goes on (the stale corpus rule stops it right after, before any session)
+echo stale > "$MH/corpus.rule"; : > "$FAKE_LOG"
+MEASURE_ENDPOINT="$(ctx_ep 8192)" MEASURE_LOCAL_MODEL=fake-context MEASURE_CONFIGS=on MEASURE_ONLY=f01 runsh; rc=$?
+check "run.sh: a small loaded context is warned about in the preflight, which then goes on to the next check" '1,1,0' \
+  "$(grep -c 'lms load fake-context --context-length 32768' "$TMP/run.out"),$(grep -c 'corpus rule .* changed' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+MEASURE_ENDPOINT="$(ctx_ep 32768)" MEASURE_LOCAL_MODEL=fake-context MEASURE_CONFIGS=on MEASURE_ONLY=f01 runsh; rc=$?
+check "run.sh: a loaded context that fits the floor draws no warning" '0,1' "$(grep -c '^warning' "$TMP/run.out"),$(grep -c 'corpus rule .* changed' "$TMP/run.out")"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]
