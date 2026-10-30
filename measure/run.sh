@@ -72,6 +72,13 @@ case " $CONFIGS " in *" on "*)
   context_warning "$CONTEXT" "$LOCAL_MODEL" >&2 ;;
 *) CONTEXT=null ;;
 esac
+if [ "$MODE" = resume ]; then   # a resumed run measures under the context it started with; no record (older or off-only run) skips the check
+  RECORDED=$(jq -c '.context // empty' "$RUN_DIR/meta.json")
+  if [ -n "$RECORDED" ] && [ "$RECORDED" != null ] && [ "$CONTEXT" != null ] \
+     && [ "$(jq -S -c '{tokens, source}' <<<"$RECORDED")" != "$(jq -S -c '{tokens, source}' <<<"$CONTEXT")" ]; then
+    die "the loaded context changed since this run started (recorded $(jq -c '{tokens, source}' <<<"$RECORDED"), now $(jq -c '{tokens, source}' <<<"$CONTEXT")); reload the model at the recorded context, or start a new run"
+  fi
+fi
 
 # --- corpus: reuse the frozen manifest; pick a new one only on the first run or MEASURE_RESELECT=1 -------------
 MANIFEST="$MEASURE_HOME/corpus.tsv"

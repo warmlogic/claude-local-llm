@@ -458,7 +458,7 @@ check "run.sh: main slots below the delegation floor use the low-floor copy, bou
 
 # --- run.sh refuses bad inputs before any session ------------------------------------------------------------------
 MH="$TMP/mh"; mkdir -p "$MH"; cp "$B/corpus.tsv" "$MH/corpus.tsv"; selector_rule > "$MH/corpus.rule"
-runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS="${1:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" > "$TMP/run.out" 2>&1 < /dev/null; }
+runsh() { HOME="$TMP/rh" TMPDIR="$TMP" MEASURE_HOME="$MH" MEASURE_CLAUDE="$TMP/fake-claude" MEASURE_CONFIGS="${1:-off}" "$TIMEOUT" 60 bash "$MDIR/run.sh" "${@:2}" > "$TMP/run.out" 2>&1 < /dev/null; }
 mkdir -p "$TMP/rh"; : > "$FAKE_LOG"
 MEASURE_ONLY="f01 f99" runsh; rc=$?
 check "run.sh: an unknown MEASURE_ONLY id is an error, before any session" '1,1,0' "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'MEASURE_ONLY names f99' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
@@ -524,6 +524,21 @@ check "run.sh: a loaded context that fits the floor draws no warning" '0,1' "$(g
 MEASURE_ENDPOINT=http://192.168.1.5:1234 MEASURE_LOCAL_MODEL=fake-context MEASURE_ONLY=f01 runsh on; rc=$?
 check "run.sh: a non-loopback MEASURE_ENDPOINT dies in the preflight, before any session" '1,1,0' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'recorded endpoint must be loopback' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+
+# a resumed run measures under the context it started with: another loaded context dies before any session
+rr="$TMP/resume-ctx"; mkdir -p "$rr"; cp "$B/corpus.tsv" "$rr/corpus.tsv"
+resume_meta() { # resume_meta <endpoint> <context-json>
+  jq -n --arg e "$1" --argjson c "$2" '{configs: "on", only: "", model: "", local_model: "fake-context", endpoint: $e, context: $c}' > "$rr/meta.json"; }
+ep8=$(ctx_ep 8192)
+: > "$FAKE_LOG"; resume_meta "$ep8" '{"tokens":32768,"source":"loaded","reason":null}'; runsh on --resume "$rr"; rc=$?
+check "run.sh: a resume under another loaded context dies before any session, naming both values" '1,1,1,0' \
+  "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'recorded {"tokens":32768' "$TMP/run.out"),$(grep -c 'now {"tokens":8192' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+resume_meta "$ep8" '{"tokens":8192,"source":"loaded","reason":null}'; runsh on --resume "$rr"
+check "run.sh: a resume under the recorded context goes past the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+resume_meta "$ep8" null; runsh on --resume "$rr"
+check "run.sh: a resume whose recorded context is null (an off-only run) skips the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+jq 'del(.context)' "$rr/meta.json" > "$rr/m" && mv "$rr/m" "$rr/meta.json"; runsh on --resume "$rr"
+check "run.sh: a resume whose meta.json has no context (an older run) skips the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]
