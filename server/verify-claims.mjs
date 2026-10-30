@@ -203,17 +203,6 @@ async function judgeClaim(cfg, model, state, claim, ci, k, signalIn) {
 export async function verifyClaims(cfg, args, cancel = new AbortController().signal) {
   if (!isLoopbackEndpoint(cfg.endpoint)) throw new VerifyError(loopbackError(cfg.endpoint));
   const { paths, claims, k } = validateArgs(args);
-  const reads = await Promise.allSettled(paths.map((p) => readFenced(p, cfg.roots)));
-  const failed = reads.flatMap((r, i) => (r.status === 'rejected' ? [`${paths[i]}: ${safeMessage(r.reason)}`] : []));
-  if (failed.length === 1) throw new VerifyError(`cannot use ${failed[0]}`);
-  if (failed.length) throw new VerifyError(`cannot use ${failed.length} paths: ${failed.join('; ')}`);
-  const texts = reads.map((r) => r.value);
-  const total = texts.reduce((n, t) => n + Buffer.byteLength(t), 0);
-  if (total > MAX_INPUT_BYTES) {
-    throw new VerifyError(`the files total ${formatSize(total)}, over the 1 MB combined limit (${MAX_INPUT_BYTES} bytes); send fewer files`);
-  }
-  const state = texts.map((t, i) => `=== ${basename(paths[i])} ===\n${t}`).join('\n\n');
-
   const budget = new AbortController();
   const budgetTimer = setTimeout(
     () => budget.abort(new VerifyError(`verify_claims ran past its ${cfg.budgetMs} ms budget; ${RETRY_HINT}`)),
@@ -221,14 +210,27 @@ export async function verifyClaims(cfg, args, cancel = new AbortController().sig
   );
   const signal = AbortSignal.any([budget.signal, cancel]);
   try {
+    const reads = await Promise.allSettled(paths.map((p) => readFenced(p, cfg.roots)));
+    const failed = reads.flatMap((r, i) => (r.status === 'rejected' ? [`${paths[i]}: ${safeMessage(r.reason)}`] : []));
+    if (failed.length === 1) throw new VerifyError(`cannot use ${failed[0]}`);
+    if (failed.length) throw new VerifyError(`cannot use ${failed.length} paths: ${failed.join('; ')}`);
+    const texts = reads.map((r) => r.value);
+    const total = texts.reduce((n, t) => n + Buffer.byteLength(t), 0);
+    if (total > MAX_INPUT_BYTES) {
+      throw new VerifyError(`the files total ${formatSize(total)}, over the 1 MB combined limit (${MAX_INPUT_BYTES} bytes); send fewer files`);
+    }
+    const state = texts.map((t, i) => `=== ${basename(paths[i])} ===\n${t}`).join('\n\n');
     const model = await pickModel(cfg, signal);
     const judged = await Promise.all(claims.map((c, ci) => judgeClaim(cfg, model, state, c, ci, k, signal)));
     const results = judged.map((j) => j.result);
     const firstError = judged.find((j) => j.error)?.error;
     if (judged.every((j) => j.error)) throw new VerifyError(safeMessage(firstError), { cause: firstError });
     return firstError ? { model, k, partial: true, error: safeMessage(firstError), results } : { model, k, results };
+  } catch (e) {
+    if (signal.aborted && e instanceof Object) e.callStopped = true; // the finally below logs the stop; the caller must not log it again
+    throw e;
   } finally {
-    // Logged here, not after the judging: a cancel that lands before the first request is sent throws out of pickModel and never reaches that point.
+    // The one place a stopped call (budget overrun or client cancel, at any point) is logged.
     if (signal.aborted) console.error(`local-verify: call stopped: ${safeMessage(signal.reason)}`);
     clearTimeout(budgetTimer);
     budget.abort(new VerifyError('the call is over')); // nothing of this call may keep a slot or a request

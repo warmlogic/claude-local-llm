@@ -76,6 +76,9 @@ done
 out=$(LOCAL_LLM_ALLOWED_DIRS="relative/dir" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
 if did_not_start "$out" "local-verify: allowed folder must be an absolute path"; then ok "a refused root under launch-verify.sh is prefixed local-verify:"
 else bad "a refused root under launch-verify.sh is prefixed local-verify: ($out)"; fi
+out=$(LOCAL_LLM_ALLOWED_DIRS="$TMP/nope,$ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
+if jq -e '.init and (.stderr | contains("local-verify: allowed folder not found, skipping: ")) and (.stderr | contains("local-llm:") | not)' >/dev/null <<<"$out"; then ok "launch-verify.sh: the skipped-folder warning is prefixed local-verify: and the server still starts"
+else bad "launch-verify.sh: skipped-folder warning prefix ($out)"; fi
 for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://user@127.0.0.1:1234" \
           "http://localhost:1@evil.example/" "http://10.0.0.5:1234" "http://127.1:1234" "127.0.0.1:1234"; do
   out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
@@ -477,7 +480,8 @@ lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(
 out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=800 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 6000)
 a=$(jq -c '.responses[] | select(.id == 2)' <<<"$out"); b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
 if jq -e '.result.isError and (.result.content[0].text | contains("budget"))' >/dev/null <<<"$a" \
-   && jq -e '.at_ms < 3000 and .result.isError == false and (.result.content[0].text | fromjson | (has("partial") | not) and .results[0].label == "SUPPORTED")' >/dev/null <<<"$b"; then
+   && jq -e '.at_ms < 3000 and .result.isError == false and (.result.content[0].text | fromjson | (has("partial") | not) and .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
+   && [ "$(jq -r '.stderr' <<<"$out" | grep -c 'call stopped')" -eq 1 ] && ! jq -e '.stderr | contains("verify_claims failed")' >/dev/null <<<"$out"; then
   ok "same server: after a call overruns its budget with every slot stalled, the next call gets slots and answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "slot leak after an overrun (a: $(cut -c1-200 <<<"$a"); b: $(cut -c1-200 <<<"$b"); $(jq -c '{timedOut,exit}' <<<"$out"))"; fi
 # Cancel after the call's requests are in flight (so the cancel has slots to free), then a second call must answer.
@@ -493,18 +497,19 @@ if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .re
    && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("call stopped: request 2 was cancelled")' >/dev/null <<<"$out"; then
   ok "notifications/cancelled aborts the call: no reply for it, its slots free, the next call answers ($(jq '.at_ms' <<<"$b") ms)"
 else bad "cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); b: $(cut -c1-200 <<<"$b"))"; fi
-# A cancel that lands before the call's first request (no delay, so it can only race ahead of the file read and model lookup)
-# still ends the call quietly and still logs why it stopped.
-start_fake cancel0 verify
-lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 8)")" \
+# A cancel while the call is parked in its model lookup (the fake never answers the first /api/v0/models request):
+# no chat request has been sent yet. The call ends quietly with one log line, and the next call answers.
+start_fake cancel0 verify-slowlist-once
+lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[yes] a"]' 8)")" \
   --argjson b "$(call_line 3 "$(claims_on "$INSIDE" '["[yes] b"]' 1)")" \
-  '[$i, $a, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2}}, $b, {delay_ms: 2500}, {close_stdin: true}]')
+  '[$i, $a, {delay_ms: 300}, {jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:2}}, $b, {delay_ms: 2500}, {close_stdin: true}]')
 out=$(env "${raw_env[@]}" LOCAL_VERIFY_BUDGET_MS=60000 LOCAL_LLM_ENDPOINT_URL="$EP" node "$RAW" "$LAUNCHER" "$lines" 3 15000)
 b=$(jq -c '.responses[] | select(.id == 3)' <<<"$out")
 if jq -e '.result.isError == false and (.result.content[0].text | fromjson | .results[0].label == "SUPPORTED")' >/dev/null <<<"$b" \
-   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && jq -e '.stderr | contains("call stopped: request 2 was cancelled")' >/dev/null <<<"$out"; then
-  ok "an immediate notifications/cancelled: no reply for the call, the stop is logged, the next call answers"
-else bad "immediate cancel ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); stderr: $(jq -c '.stderr' <<<"$out" | cut -c1-200))"; fi
+   && ! jq -e '.responses[] | select(.id == 2)' >/dev/null <<<"$out" && [ "$(chat_count "$LOG")" -eq 1 ] \
+   && [ "$(jq -r '.stderr' <<<"$out" | grep -c 'call stopped')" -eq 1 ] && ! jq -e '.stderr | contains("verify_claims failed")' >/dev/null <<<"$out"; then
+  ok "a cancel during the model lookup: no reply, exactly one stop line in the log, no chat request sent for it, the next call answers"
+else bad "cancel during the model lookup ($(jq -c '[.responses[] | {id, at_ms}]' <<<"$out"); chats: $(chat_count "$LOG"); stderr: $(jq -c '.stderr' <<<"$out" | cut -c1-300))"; fi
 start_fake twocalls verify
 lines=$(jq -nc --argjson i "$(init 1 2025-06-18)" \
   --argjson a "$(call_line 2 "$(claims_on "$INSIDE" '["[stall] a"]' 3)")" \
