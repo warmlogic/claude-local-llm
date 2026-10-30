@@ -176,7 +176,7 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 
 `allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
 
-Each folder must exist and be an absolute path (a leading `~` or `$HOME` is expanded), no entry may be `/` or have spaces at its edges, and folder names (after symlinks are resolved) cannot contain `,` or `:`. A folder that does not exist is skipped with a warning; if none exists, the servers refuse to start.
+Each folder must be an absolute path to a directory other than `/` (a leading `~`, `$HOME` or `${HOME}` is expanded). No folder name may contain `,` or `:`, and no path may start or end with whitespace, in the path you enter or in its real path after symlinks. A folder that does not exist is skipped with a warning; if none exists, the servers refuse to start.
 
 Anything under these folders can reach Claude's context with no permission prompt: the local model's answers and batch rows are returned to Claude, and a file's content can steer what gets asked. Do not include folders that hold secrets (`.env` files, credentials, keys).
 
