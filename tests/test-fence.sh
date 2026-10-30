@@ -116,7 +116,7 @@ if did_not_start "$out" "no allowed folders"; then ok "launcher refuses to start
 else bad "launcher refuses to start: allowed_dirs unset ($out)"; fi
 # The message must say how to set it (Claude Code never starts the server while a required option is unset, so
 # a user sees this only for an empty value or a direct run): configure command, JSON key, /plugin UI, restart.
-for frag in "claude plugin configure local-llm@" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
+for frag in "claude plugin configure local-llm@ai-plugin-marketplace" "plugin configure local-llm@inline" "--plugin-dir" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
   if did_not_start "$out" "$frag"; then ok "unset allowed_dirs message names: $frag"
   else bad "unset allowed_dirs message names: $frag ($out)"; fi
 done

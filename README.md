@@ -29,7 +29,7 @@ Status:
 - ✅ Implemented: a second server, local-verify, with one tool, `verify_claims`: the local model votes on whether short claims are supported by a file, without the file entering Claude's context. Its answer is a hint, never verification, and the skill does not use it yet.
 - ✅ Implemented: a repeatable measurement harness (`bash measure/run.sh`; see AGENTS.md, "Measuring") for Claude cost, tokens and answer quality on real files.
 - ✅ Implemented: real-file cost and quality measurements (`docs/results.md`). The latest result motivates keeping unprompted single-file delegation off by default.
-- ✅ Implemented: a permanent install from the clone as a marketplace (section 4), or per session with `--plugin-dir`.
+- ✅ Implemented: a permanent install from the public `ai-plugin-marketplace` (section 4), or per session with `--plugin-dir`.
 
 ## Prerequisites
 
@@ -129,25 +129,39 @@ Optional hardening, only if you set the plugin's `model` option: just-in-time (J
 
 ## 4. Install the plugin
 
-To try it out, clone the repo and point Claude Code at it. The GitHub repository is private, so the clone needs a GitHub account with access to `warmlogic/claude-local-llm` (SSH key or `gh auth login`):
+Install from the public marketplace:
 
 ```bash
-git clone git@github.com:warmlogic/claude-local-llm.git "$HOME/github/claude-local-llm"
+claude plugin marketplace add warmlogic/ai-plugin-marketplace
+claude plugin install local-llm@ai-plugin-marketplace
+```
+
+The plugin then loads in every session, under the id `local-llm@ai-plugin-marketplace`. Its servers will not start until you set `allowed_dirs`, which has no default: see [Choose the folders the local model may read](#choose-the-folders-the-local-model-may-read). The configure commands below use the per-session id `local-llm@inline`. For the marketplace install, run them without `--plugin-dir` and with the installed id, e.g. `claude plugin configure local-llm@ai-plugin-marketplace`.
+
+**Update.** The plugin is unversioned, so every merge to `main` is a release. Refresh the catalog, update the plugin, then restart Claude Code or run `/reload-plugins`:
+
+```bash
+claude plugin marketplace update ai-plugin-marketplace
+claude plugin update local-llm@ai-plugin-marketplace
+```
+
+**Uninstall.**
+
+```bash
+claude plugin uninstall local-llm@ai-plugin-marketplace
+claude plugin marketplace remove ai-plugin-marketplace
+```
+
+The marketplace also lists other plugins; remove it only if you use none of them.
+
+**Try it for one session.** Clone the repo and point Claude Code at it:
+
+```bash
+git clone https://github.com/warmlogic/claude-local-llm.git "$HOME/github/claude-local-llm"
 claude --plugin-dir "$HOME/github/claude-local-llm"
 ```
 
-`--plugin-dir` shows no setup prompt, and `allowed_dirs` has no default, so the plugin's servers will not start until you set it: see [Choose the folders the local model may read](#choose-the-folders-the-local-model-may-read).
-
-`--plugin-dir` loads the plugin for that session only, so pass it each time.
-
-For a permanent install, add the clone as a marketplace and install from it. The repo's `.claude-plugin/marketplace.json` lists the plugin:
-
-```bash
-claude plugin marketplace add "$HOME/github/claude-local-llm"
-claude plugin install local-llm@warmlogic-local-llm
-```
-
-It then loads in every session, under the id `local-llm@warmlogic-local-llm`. A local-path marketplace installs whatever the clone has checked out, so keep the clone on `main`. The configure commands below use the per-session id `local-llm@inline`. For the permanent install, run them without `--plugin-dir` and with the installed id, e.g. `claude plugin configure local-llm@warmlogic-local-llm`. The plugin is unversioned, so every merge to `main` is a release. Pull the clone, then run `claude plugin marketplace update warmlogic-local-llm` and `claude plugin update local-llm@warmlogic-local-llm`, and restart or `/reload-plugins`. To remove it: `claude plugin uninstall local-llm@warmlogic-local-llm`, then `claude plugin marketplace remove warmlogic-local-llm`.
+`--plugin-dir` shows no setup prompt, and `allowed_dirs` has no default, so the plugin's servers will not start until you set it: see [Choose the folders the local model may read](#choose-the-folders-the-local-model-may-read). `--plugin-dir` loads the plugin for that session only, so pass it each time.
 
 The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.json`):
 
@@ -168,7 +182,7 @@ Until it is set, Claude Code does not start the plugin's servers: `/mcp` shows t
 
 - **The prompt.** Claude Code asks for the plugin's options when you enable it, and its dialog does not accept an empty value for a required option. A `--plugin-dir` session has no enable step and so no prompt; use one of the next two.
 - **The `/plugin` UI.** Open `/plugin`, pick the plugin, and choose its configuration.
-- **`claude plugin configure`.** Run it with the plugin's id (`local-llm@warmlogic-local-llm` for the permanent install below, `local-llm@inline` with `--plugin-dir`) to see the options and which are unset. For a `--plugin-dir` session, pass the same flag:
+- **`claude plugin configure`.** Run it with the plugin's id (`local-llm@ai-plugin-marketplace` for the marketplace install above, `local-llm@inline` with `--plugin-dir`) to see the options and which are unset. For a `--plugin-dir` session, pass the same flag:
 
 ```bash
 claude --plugin-dir "$HOME/github/claude-local-llm" plugin configure local-llm@inline
