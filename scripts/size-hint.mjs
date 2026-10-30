@@ -8,6 +8,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 import { getContextCap, MIN_DELEGATE_CHARS } from './context-cap.mjs';
+import { isLoopbackEndpoint } from './loopback.mjs';
 
 const MAX_FILES = 3;
 const MAX_STATS = 100;
@@ -67,8 +68,15 @@ if (files.length > 0) {
   if (unknown.length) console.error(`local-llm: ignoring unknown delegate_tasks kinds: ${JSON.stringify(unknown)}`);
   const tasks = kinds.filter((kind) => known.has(kind));
   const taskList = tasks.length < 2 ? tasks[0] : `${tasks.slice(0, -1).join(', ')} or ${tasks.at(-1)}`;
+  const endpoint = env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL || env.LOCAL_LLM_ENDPOINT_URL || undefined;
+  if (endpoint !== undefined && !isLoopbackEndpoint(endpoint)) {
+    // Both launchers refuse this endpoint, so no local tool is running: do not tell Claude to delegate.
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext:
+      'local-llm: endpoint_url is not a loopback server root (http://127.0.0.1:1234 form), so the local model tools are unavailable; read big files yourself.' } }));
+    process.exit(0);
+  }
   const { contextTokens, capChars, source, reason } = await getContextCap({
-    endpoint: env.CLAUDE_PLUGIN_OPTION_ENDPOINT_URL || env.LOCAL_LLM_ENDPOINT_URL || undefined,
+    endpoint,
     model: env.CLAUDE_PLUGIN_OPTION_MODEL ?? env.LOCAL_LLM_MODEL ?? undefined,
   });
   const number = (n) => n.toLocaleString('en-US');

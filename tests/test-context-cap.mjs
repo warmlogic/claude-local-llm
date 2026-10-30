@@ -106,9 +106,18 @@ test('unavailable or malformed metadata falls back; tiny context has no usable r
   assert.deepEqual(await getContextCap({ endpoint: dead }), assumed('no metadata'));
   assert.match(await optedHint(dead, [35000]), /assumed 32k context \(model metadata unavailable: no metadata\).*45,875 chars.*fallback/);
 });
+test('an endpoint that is not a loopback server root gets a note, never a delegation instruction', async () => {
+  const h = await optedHint(`${await serve(() => {})}/v1`, [35000, 60000]);
+  assert.match(h, /not a loopback server root.*unavailable/);
+  assert.doesNotMatch(h, /delegate-local|code_task_files|Context cap/);
+});
 test('loopback validation, redirect refusal and proxy bypass keep metadata local', async () => {
   let hits = 0;
-  const target = await serve((q, r) => { hits++; r.end(JSON.stringify({ data: [model('a', 65536)] })); });
+  const target = await serve((q, r) => { // path-aware: a doubled slash (//api/v0/models) must 404
+    hits++;
+    if (q.url !== '/api/v0/models') { r.statusCode = 404; r.end(); return; }
+    r.end(JSON.stringify({ data: [model('a', 65536)] }));
+  });
   const redirect = await serve((q, r) => { r.writeHead(307, { location: target }); r.end(); });
   assert.deepEqual(await getContextCap({ endpoint: redirect }), assumed('http 307'));
   assert.deepEqual(await getContextCap({ endpoint: target.replace('127.0.0.1', '127.1') }), assumed('not a loopback server root'));
