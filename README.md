@@ -176,7 +176,9 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 
 `allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
 
-To block the plugin's tools entirely (in one project, or everywhere), deny them by name in a Claude Code settings file, for example the project's `.claude/settings.json`:
+To block the two tools that read your files, deny them by name in a Claude Code settings file: the project's `.claude/settings.json` for one project, or `~/.claude/settings.json` for everywhere. Batch runs (`batch/run.mjs`) go through Bash and stay behind its normal permission prompt.
+
+For example:
 
 ```json
 {
