@@ -176,6 +176,24 @@ The plugin has four options (declared as `userConfig` in `.claude-plugin/plugin.
 
 `allowed_dirs` is the only option you must set, and it has no default. Set it to the folders where your big logs and documents live, and no wider: it is the only boundary on what the local model reads. Claude Code's `Read(...)` deny rules do not apply to the plugin's tools, so a file you have denied to Claude is still readable through the local model if it sits inside `allowed_dirs`, and the model's answer reaches Claude. Keep private folders out of it.
 
+To block the two tools that read your files, deny them by name in a Claude Code settings file: the project's `.claude/settings.json` for one project, or `~/.claude/settings.json` for everywhere. The `Bash(...)` rule is the off-switch for batch runs: the hook approves only commands that contain the exact runner path `batch/run.mjs`, so a rule anchored on that path, not on the leading `node`, matches every command it would approve. It also blocks every other Bash command that names the runner path (prompted `--job` and `--transcripts` runs, and even `grep` or `cat` on it); that is intended. The full off-switch is disabling the plugin; leaving `allowed_dirs` unset also stops the servers.
+
+For example:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "mcp__plugin_local-llm_local-llm__code_task_files",
+      "mcp__plugin_local-llm_local-verify__verify_claims",
+      "Bash(*batch/run.mjs*)"
+    ]
+  }
+}
+```
+
+A deny rule wins over the plugin's approval hook, and the tool is then not available to Claude at all. The plugin does not try to emulate your path-level `Read(...)` rules in its hook: a hook cannot see every place a rule can come from (settings files, `--disallowedTools`, `--settings`, rules added during a session), so it would look like a complete fence when it is not. The two fences are `allowed_dirs` for paths and a tool-name deny for switching the tools off.
+
 Each folder must be an absolute path to a directory other than `/` (a leading `~`, `$HOME` or `${HOME}` is expanded). No folder name may contain `,` or `:`, and no path may start or end with whitespace, in the path you enter or in its real path after symlinks. A folder that does not exist is skipped with a warning; if none exists, the servers refuse to start.
 
 Anything under these folders can reach Claude's context with no permission prompt: the local model's answers and batch rows are returned to Claude, and a file's content can steer what gets asked. Do not include folders that hold secrets (`.env` files, credentials, keys).
@@ -218,7 +236,7 @@ The plugin ships what it needs, so you do not add an allow rule.
 ## Privacy and security
 
 - **The local model's inference never leaves your machine.** The model runs in LM Studio on loopback, and the launcher refuses any `endpoint_url` that is not `127.0.0.1`, `localhost`, or `[::1]`, so the file is never sent to a remote model server.
-- **Some text still reaches Claude.** The model's answer does, and an extraction answer can quote the file verbatim. When Claude spot-checks a fact it runs a narrow Grep for a specific pattern, which returns a few matching lines. `allowed_dirs` limits only the local model. When the local model cannot do a job (LM Studio down, a path outside `allowed_dirs`, a file too large, a bad answer), Claude reads the file itself with its own tools and permissions, wherever Claude Code is allowed to read. Do not ask for jobs on files you would not show Claude. To keep a folder from Claude entirely, leave it out of `allowed_dirs` and add `Read(...)` deny rules for it; the deny rules cover Claude's own tools, `allowed_dirs` covers the local model's.
+- **Some text still reaches Claude.** The model's answer does, and an extraction answer can quote the file verbatim. When Claude spot-checks a fact it runs a narrow Grep for a specific pattern, which returns a few matching lines. `allowed_dirs` limits only the local model. When the local model cannot do a job (LM Studio down, a path outside `allowed_dirs`, a file too large, a bad answer), Claude reads the file itself with its own tools and permissions, wherever Claude Code is allowed to read. Do not ask for jobs on files you would not show Claude. To keep a folder from Claude entirely, leave it out of `allowed_dirs` and add `Read(...)` deny rules for it; the deny rules cover Claude's own tools, `allowed_dirs` covers the local model's. To switch the plugin's tools off, deny them by name: see [Choose the folders](#choose-the-folders-the-local-model-may-read).
 - **One outbound call carries the model id.** At startup, and every 7 days per model, houtini-lm (the MCP server the plugin pins) asks `huggingface.co` for the loaded model's metadata, which sends the model id (for example `incoai/Qwen3.6-35B-A3B-Splash`), never file text. Houtini 3.3.4 has no setting to turn this off. So the claim is "the file is never sent to a remote model server", not "nothing leaves the machine". Houtini also keeps a cache at `~/.houtini-lm/model-cache.db`.
 - **The version pin covers houtini-lm's own code, not its dependencies.** `@modelcontextprotocol/sdk` is a version range resolved at the first `npx` launch (houtini-lm ships no shrinkwrap), and the npx cache keeps that resolution until it is cleared. This residual exposure is accepted. When bumping the pin, maintainers re-check its dependency ranges with `npm view @houtini/lm@<pin> dependencies`.
 - **The API key is a dummy.** LM Studio needs no key. The launcher sets `HOUTINI_LM_API_KEY=not-needed` because otherwise houtini falls back to `OPENROUTER_API_KEY` from your environment and would use it as the credential. The launcher also clears the other environment variables houtini reads, so nothing ambient changes its routing.

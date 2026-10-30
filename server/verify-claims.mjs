@@ -5,7 +5,7 @@
 // form that scored 48/48 with no false accepts on its easy set. Vote share is a hint, not a
 // certificate: the model is often unanimously wrong on counts, numbers, dates and comparisons.
 // The caller declares each claim's kind (an undeclared claim is "computed"), and every result
-// carries auto_accept: false until local-llm-9dl sets a threshold from real answers.
+// carries auto_accept: false, always; the result is a hint.
 // A claim whose samples cannot finish (budget, timeouts, a failed request) comes back NOT_RUN
 // beside the claims that did; the call fails outright only when no claim finished.
 // File text never appears in a result or an error.
