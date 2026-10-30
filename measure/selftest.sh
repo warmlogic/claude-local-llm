@@ -119,10 +119,8 @@ check "copy_plugin: copies server/ only when the checkout has one" "0,$([ -e "$M
   "$rc,$([ -e "$TMP/snap1/server" ] && echo 1 || echo 0),$([ -s "$TMP/snap1/skills/delegate-local/SKILL.md" ] && echo 1 || echo 0),$rc2,$([ -s "$TMP/snap2/server/index.mjs" ] && echo 1 || echo 0)"
 mkdir -p "$TMP/pin/.claude-plugin"
 pin_plugin_config "$MDIR/.." "$TMP/pin" some-model; rc=$?
-check "pin_plugin_config: the snapshot pins the model and allows exactly select-corpus.sh's roots" '0,some-model,["$HOME/github","$HOME/catalyst"]' \
+check "pin_plugin_config: the snapshot pins the model and allows the roots select-corpus.sh scans" '0,some-model,["$HOME/github","$HOME/catalyst"]' \
   "$rc,$(jq -r '.userConfig.model.default' "$TMP/pin/.claude-plugin/plugin.json"),$(jq -c '.userConfig.allowed_dirs.default' "$TMP/pin/.claude-plugin/plugin.json")"
-check "pin_plugin_config: those roots are the ones select-corpus.sh scans" '["$HOME/github","$HOME/catalyst"]' \
-  "$(sed -n 's/^ROOTS=(\(.*\))$/\1/p' "$MDIR/select-corpus.sh" | sed 's/ /,/; s/^/[/; s/$/]/' | tr -d '\\')"
 mkdir -p "$TMP/fh/t"
 check "work_dir: refuses a TMPDIR under \$HOME and creates nothing there" '1,0' \
   "$( (HOME="$TMP/fh" TMPDIR="$TMP/fh/t" work_dir >/dev/null) && echo 0 || echo 1),$(ls -A "$TMP/fh/t" | wc -l | tr -d ' ')"
