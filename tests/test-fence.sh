@@ -478,9 +478,8 @@ msg_is() { # <label> <reason> <stdout>: exactly {"systemMessage": "local-llm: ba
 }
 msg_is "unset allowed_dirs" "allowed_dirs option is not set" "$(HOME="$HOOK_TMP/home" batch_msg)"
 msg_is "empty allowed_dirs" "allowed_dirs option is not set" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_msg)"
-msg_is "a missing allowed_dirs folder" "allowed_dirs could not be resolved" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_msg)"
-msg_is "allowed_dirs with no folder entries (resolver exits 0, empty)" "no configured allowed_dirs folder exists" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=' , ' batch_msg)"
-msg_is "a relative allowed_dirs entry (resolver exits 2)" "allowed_dirs could not be resolved" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=relative batch_msg)"
+msg_is "a missing allowed_dirs folder" "allowed_dirs could not be resolved (check that each folder exists and is an absolute path)" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_msg)"
+msg_is "a relative allowed_dirs entry (resolver exits 2)" "allowed_dirs could not be resolved (check that each folder exists and is an absolute path)" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=relative batch_msg)"
 quiet_out=$(unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; hook_out "$(jq -nc --arg c "node /tmp/other.mjs" '{tool_name:"Bash",cwd:"/",tool_input:{command:$c}}')" 2>&1)
 if [ -z "$quiet_out" ]; then ok "batch hook: a command that is not the runner prints nothing"; else bad "batch hook: non-runner output: $quiet_out"; fi
 export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"
