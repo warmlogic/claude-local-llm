@@ -124,6 +124,12 @@ want_roots=$(HOME='$HOME' bash -c "$(grep '^ROOTS=' "$MDIR/select-corpus.sh"); p
 check "pin_plugin_config: the snapshot pins the model and allows the roots select-corpus.sh scans" "0,some-model,$want_roots" \
   "$rc,$(jq -r '.userConfig.model.default' "$TMP/pin/.claude-plugin/plugin.json"),$(jq -c '.userConfig.allowed_dirs.default' "$TMP/pin/.claude-plugin/plugin.json")"
 mkdir -p "$TMP/noroots"; echo 'echo no roots here' > "$TMP/noroots/select-corpus.sh"
+pin_plugin_config "$MDIR/.." "$TMP/pin" some-model http://127.0.0.1:4321
+check "pin_plugin_config: a MEASURE_ENDPOINT override reaches the snapshot's endpoint_url, so sessions use the server whose context was recorded" \
+  'http://127.0.0.1:4321' "$(jq -r '.userConfig.endpoint_url.default' "$TMP/pin/.claude-plugin/plugin.json")"
+pin_plugin_config "$MDIR/.." "$TMP/pin" some-model
+check "pin_plugin_config: without an endpoint the snapshot keeps the manifest's default" 'http://127.0.0.1:1234' \
+  "$(jq -r '.userConfig.endpoint_url.default' "$TMP/pin/.claude-plugin/plugin.json")"
 ( MDIR="$TMP/noroots"; pin_plugin_config "$MDIR/.." "$TMP/pin" other-model ) 2>/dev/null; rc_nr=$?
 check "pin_plugin_config: a select-corpus.sh without a ROOTS line fails and leaves the snapshot's manifest alone" '1,some-model' \
   "$rc_nr,$(jq -r '.userConfig.model.default' "$TMP/pin/.claude-plugin/plugin.json")"

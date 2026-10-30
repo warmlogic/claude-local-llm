@@ -11,7 +11,8 @@
 # corpus.tsv (the frozen manifest, with paths), runs/<stamp>/ (traces, answers, the graded file copies, judge prompts,
 # review.md). Sessions run in an empty temp dir outside $HOME (see work_dir in lib.sh).
 # Env: MEASURE_HOME; MEASURE_MODEL (empty = Claude Code's default model, unpinned); MEASURE_LOCAL_MODEL
-# (qwen3.6-35b-a3b-splash: LM Studio must list it, and the plugin snapshots pin it); MEASURE_RESELECT=1 (pick the
+# (qwen3.6-35b-a3b-splash: LM Studio must list it, and the plugin snapshots pin it); MEASURE_ENDPOINT (LM Studio's
+# root, default http://127.0.0.1:1234; recorded in meta.json and pinned into the snapshots and the session hook environment); MEASURE_RESELECT=1 (pick the
 # corpus again); MEASURE_ALLOW_SHORT=1 (run a manifest short of 10 main files or a small slot: an incomplete private
 # report whose gates cannot pass); MEASURE_CONFIGS ("off on"); MEASURE_ONLY (space-separated ids, e.g. "f01": a
 # partial run, also incomplete and private); MEASURE_JUDGE_MODEL, MEASURE_JUDGE_JOBS (see judge.sh).
@@ -23,7 +24,6 @@ REPO="$(cd "$MDIR/.." && pwd -P)"
 . "$MDIR/lib.sh"
 MEASURE_HOME="${MEASURE_HOME:-$HOME/.cache/local-llm-measure}"
 CLAUDE="${MEASURE_CLAUDE:-claude}"
-ENDPOINT="${MEASURE_ENDPOINT:-http://127.0.0.1:1234}"   # the self-test points it at a fake LM Studio
 CTL_REPS=3; SMALL_REPS=3; RUN_TIMEOUT_SEC=300
 die() { echo "measure: $*" >&2; exit 1; }
 
@@ -43,9 +43,11 @@ esac
 if [ "$MODE" = resume ]; then   # a resumed run keeps the settings it started with
   CONFIGS=$(jq -r .configs "$RUN_DIR/meta.json"); ONLY=$(jq -r '.only // ""' "$RUN_DIR/meta.json")
   MODEL=$(jq -r .model "$RUN_DIR/meta.json"); LOCAL_MODEL=$(jq -r .local_model "$RUN_DIR/meta.json")
+  ENDPOINT=$(jq -r '.endpoint // "http://127.0.0.1:1234"' "$RUN_DIR/meta.json")
 else
   CONFIGS="${MEASURE_CONFIGS:-off on}"; ONLY="${MEASURE_ONLY:-}"; MODEL="${MEASURE_MODEL:-}"
   LOCAL_MODEL="${MEASURE_LOCAL_MODEL:-qwen3.6-35b-a3b-splash}"
+  ENDPOINT="${MEASURE_ENDPOINT:-http://127.0.0.1:1234}"   # the LM Studio server; the self-test points it at a fake
 fi
 
 # --- preflight: nothing is spent unless every check passes ---------------------------------------------------
@@ -102,7 +104,7 @@ if [ "$MODE" = new ]; then
   # Plugin snapshots: this checkout's plugin with the local model pinned, and a copy whose skill floor is 1k.
   for d in plugin plugin-lowfloor; do
     copy_plugin "$REPO" "$RUN_DIR/$d" || die "copying the plugin to $RUN_DIR/$d"
-    pin_plugin_config "$REPO" "$RUN_DIR/$d" "$LOCAL_MODEL" \
+    pin_plugin_config "$REPO" "$RUN_DIR/$d" "$LOCAL_MODEL" "$ENDPOINT" \
       || die "pinning the model and allowed folders in $RUN_DIR/$d"
   done
   lower_floor "$RUN_DIR/plugin-lowfloor" \
@@ -117,14 +119,14 @@ if [ "$MODE" = new ]; then
     --arg claude_version "$("$CLAUDE" --version 2>/dev/null | head -n 1)" \
     --arg server_pin "$(grep -oE '@houtini/lm@[0-9.]+' "$REPO/scripts/launch-server.sh" | head -n 1)" \
     --arg lms_version "$( (lms version 2>/dev/null || true) | sed 's/\x1b\[[0-9;]*m//g' | sed -n 's/^CLI commit: */commit /p' | head -n 1)" \
-    --arg model "$MODEL" --arg local_model "$LOCAL_MODEL" --arg run_dir "$RUN_DIR" --arg work_dir "$WORK" \
+    --arg model "$MODEL" --arg local_model "$LOCAL_MODEL" --arg endpoint "$ENDPOINT" --arg run_dir "$RUN_DIR" --arg work_dir "$WORK" \
     --arg configs "$CONFIGS" --arg only "$ONLY" --argjson ctl_reps "$CTL_REPS" --argjson small_reps "$SMALL_REPS" \
     --argjson partial "$([ -n "$ONLY" ] && echo true || echo false)" \
     --argjson allow_short "$([ -n "$(corpus_shortfall "$MANIFEST")" ] && echo true || echo false)" \
     --argjson context "$CONTEXT" \
     '{date_start: $date_start, date_end: null, cutoff: $cutoff, repo_sha: $repo_sha, repo_dirty: $repo_dirty,
       claude_version: $claude_version, server_pin: $server_pin, lms_version: (if $lms_version == "" then "unknown" else $lms_version end),
-      model: $model, local_model: $local_model, run_dir: $run_dir, work_dir: $work_dir, configs: $configs, only: $only,
+      model: $model, local_model: $local_model, endpoint: $endpoint, run_dir: $run_dir, work_dir: $work_dir, configs: $configs, only: $only,
       ctl_reps: $ctl_reps, small_reps: $small_reps, partial: $partial, allow_short: $allow_short, context: $context}' > "$RUN_DIR/meta.json" \
     || die "writing meta.json"
 else
@@ -147,7 +149,7 @@ run_one() {
   start=$SECONDS
   # the plugin's delegate_tasks default is off; "on" runs measure delegation, so opt every corpus task kind in
   # (an explicit CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS, even empty, wins)
-  (cd "$WORK" && export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract,summarize}" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
+  (cd "$WORK" && export CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS="${CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS-classify,extract,summarize}" LOCAL_LLM_ENDPOINT_URL="$ENDPOINT" && ENABLE_CLAUDEAI_MCP_SERVERS=false "$TIMEOUT" "$RUN_TIMEOUT_SEC" "$CLAUDE" "${args[@]}" > "$t" 2> "$t.err" < /dev/null)
   rc=$?
   trace_facts "$RUN_DIR/facts/.$1" "$t" "$1" "$2" "$3" "$4" "$5" "$6" "$rc" "$((SECONDS - start))" > "$RUN_DIR/facts/$1.json.new" \
     && mv "$RUN_DIR/facts/$1.json.new" "$RUN_DIR/facts/$1.json" || die "writing facts for $1"
