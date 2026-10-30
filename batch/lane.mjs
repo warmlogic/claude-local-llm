@@ -36,8 +36,10 @@ export const registerLane = ({ label, task = null }) => {
     renameSync(tmp, target);
     file = target;
   } catch (e) { // Catalyst is installed but the write failed: say so once, and run on
-    console.error(`local-llm: could not write a lane file in ${dir} (${e.code ?? e.name}); running without a band lane`);
-    if (tmp) { try { rmSync(tmp, { force: true }); } catch { /* the reader prunes dead pids */ } } // unlinks (never follows) whatever sits at our own pid's tmp name, so a stale one cannot block this pid's lane again
+    let cleanup = '';
+    // unlinks (never follows) whatever sits at our own pid's tmp name, so a stale one cannot block this pid's lane again
+    if (tmp) { try { rmSync(tmp, { force: true }); } catch (c) { cleanup = `; cleanup failed (${c.code ?? c.name})`; } }
+    console.error(`local-llm: could not write a lane file in ${dir} (${e.code ?? e.name}); running without a band lane${cleanup}`);
   }
   return () => { if (file) { try { rmSync(file, { force: true }); } catch { /* the reader prunes dead pids */ } } };
 };

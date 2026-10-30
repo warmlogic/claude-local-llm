@@ -504,6 +504,13 @@ LOCAL_LLM_ENDPOINT_URL="$EP" bash -c 'ln -s "$1" "$2/local-$$.json.tmp"; exec no
 if [ "$rc_k" -eq 0 ] && [ "$(cat "$TMP/victim")" = victim ] && ! ls "$LANES"/local-*.tmp >/dev/null 2>&1 && grep -q '^local-llm: could not write a lane file' "$TMP/lnk.se"; then ok "a symlink planted at the lane tmp name is not followed (victim intact, link removed, run fails open)"
 else bad "lane symlink: rc=$rc_k victim=$(cat "$TMP/victim") $(head -c 200 "$TMP/lnk.se")"; fi
 rm -rf "$HOME/catalyst"
+# A directory planted at the tmp name cannot be unlinked: the one stderr line says the cleanup failed too, and the run goes on.
+start_fake ld batch
+mkdir -p "$LANES"
+LOCAL_LLM_ENDPOINT_URL="$EP" bash -c 'mkdir "$2/local-$$.json.tmp"; exec node "$3" --job "$4" --out "$5" "$6"' _ x "$LANES" "$RUN" "$TMP/job.json" "$TMP/out-ln9" "$TMP/a.txt" > /dev/null 2> "$TMP/dir.se"; rc_d=$?
+if [ "$rc_d" -eq 0 ] && [ "$(grep -c '^local-llm:' "$TMP/dir.se")" -eq 1 ] && grep -qE "^local-llm: could not write a lane file in .*/catalyst/band/lanes \([A-Z]+\); running without a band lane; cleanup failed \([A-Z_]+\)$" "$TMP/dir.se"; then ok "a directory planted at the lane tmp name: one stderr line reports the failed cleanup too, and the run goes on"
+else bad "lane tmp dir: rc=$rc_d $(head -c 300 "$TMP/dir.se")"; fi
+rm -rf "$HOME/catalyst"
 
 echo "batch pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
