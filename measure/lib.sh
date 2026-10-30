@@ -61,7 +61,8 @@ copy_plugin() {
   for part in "${parts[@]}"; do cp -R "$1/$part" "$2/" || return 1; done
 }
 
-# pin_plugin_config <repo> <plugin-copy> <model>: the copy's manifest with the local model pinned and allowed_dirs
+# pin_plugin_config <repo> <plugin-copy> <model> [endpoint]: the copy's manifest with the local model pinned (and
+# endpoint_url, when given, so sessions use the server whose context was recorded) and allowed_dirs
 # defaulting to the corpus roots, read from select-corpus.sh's ROOTS line (its one definition), since the real
 # manifest has no default and a headless run cannot be asked.
 # Callers must set $MDIR (the measure/ directory) first; returns 1 when select-corpus.sh has no ROOTS line.
@@ -69,7 +70,7 @@ pin_plugin_config() {
   local roots
   roots=$(sed -n 's/^ROOTS=(\(.*\))$/\1/p' "$MDIR/select-corpus.sh" | tr -d '"')
   [ -n "$roots" ] || return 1
-  jq --arg m "$3" --arg r "$roots" '.userConfig.model.default = $m | .userConfig.allowed_dirs.default = ($r | split(" "))' "$1/.claude-plugin/plugin.json" > "$2/.claude-plugin/plugin.json"
+  jq --arg m "$3" --arg e "${4:-}" --arg r "$roots" '.userConfig.model.default = $m | (if $e != "" then .userConfig.endpoint_url.default = $e else . end) | .userConfig.allowed_dirs.default = ($r | split(" "))' "$1/.claude-plugin/plugin.json" > "$2/.claude-plugin/plugin.json"
 }
 
 # results_path <run-dir> <repo>: where a run's table goes. A run's table stays in its run dir; only a full run
@@ -119,4 +120,33 @@ corpus_shortfall() {
          n = split("s2k s5k s10k", slot, " ")
          for (i = 1; i <= n; i++) if (!(slot[i] in s)) out = out (out == "" ? "" : ", ") "no " slot[i] " file"
          print out}' "$1"
+}
+
+# observe_context <repo> <endpoint> <model>: the context LM Studio reports, as {tokens, source, reason}. tokens is the
+# loaded context, or null when the source is not `loaded` (an assumed 32k proves nothing). Asked of scripts/context-cap.mjs,
+# the plugin's own lookup, so the record and the plugin's hint agree.
+observe_context() {
+  LOCAL_LLM_ENDPOINT_URL="$2" LOCAL_LLM_MODEL="$3" node "$1/scripts/context-cap.mjs" \
+    | jq -ce '{tokens: (if .source == "loaded" then .contextTokens else null end), source, reason: (.reason // null)}' \
+    || echo '{"tokens":null,"source":"unknown","reason":"context lookup failed"}'
+}
+
+# context_warning <context-json> <model>: what a measurement run should say about the observed context, with the
+# remedy for its cause; nothing when the loaded context holds the delegation floor. The same derived rule as the size
+# hint: a loaded context whose cap is under MIN_DELEGATE_CHARS cannot delegate. Returns 1 when the floor check cannot run.
+context_warning() {
+  local ctx="$1" source tokens floor
+  source=$(jq -r .source <<<"$ctx") && tokens=$(jq -r '.tokens // empty' <<<"$ctx") || return 1
+  case "$source" in
+    loaded)
+      floor=$(node --input-type=module -e 'const { capForContext, MIN_DELEGATE_CHARS } = await import(process.argv[2]); console.log(capForContext(Number(process.argv[3])) < MIN_DELEGATE_CHARS ? "warn" : "ok")' \
+        read-floor "$MDIR/../scripts/context-cap.mjs" "$tokens") || return 1
+      case "$floor" in
+        ok) ;;
+        warn) echo "warning: LM Studio has $tokens tokens loaded, too few for the plugin's 30k-char delegation floor, so delegation jobs will fail. Reload with: lms load $2 --context-length 32768" ;;
+        *) echo "measure: the floor check answered '$floor', not warn or ok" >&2; return 1 ;;
+      esac ;;
+    "pinned model not loaded") echo "warning: $2 is listed but not loaded; load $2 in LM Studio (its context decides what delegation can read). The plugin's hint assumes 32k, but sessions run at whatever LM Studio loads." ;;
+    *) echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); the plugin's hint assumes 32k, but sessions run at whatever LM Studio loads. Check that LM Studio's server is up and answers /api/v0/models." ;;
+  esac
 }

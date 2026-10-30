@@ -76,7 +76,7 @@ if (files.length > 0) {
       'local-llm: endpoint_url is not a loopback server root (http://127.0.0.1:1234 form), so the local model tools are unavailable; read big files yourself.' } }));
     process.exit(0);
   }
-  const { contextTokens, capChars, source, reason } = await getContextCap({
+  const { contextTokens, capChars, source, reason, model: loadedModel } = await getContextCap({
     endpoint,
     model: env.CLAUDE_PLUGIN_OPTION_MODEL ?? env.LOCAL_LLM_MODEL ?? undefined,
   });
@@ -84,9 +84,22 @@ if (files.length > 0) {
   const context = source === 'loaded'
     ? `${number(contextTokens)} tokens, about ${number(capChars)} chars; loaded`
     : `assumed 32k context (model metadata unavailable: ${reason}); about ${number(capChars)} chars; ${source}`;
+  // With delegation opted in, a loaded context whose cap is under the floor can never delegate; the note is for the
+  // user, not an instruction to Claude. An assumed context proves nothing.
+  // The model id goes into an inline command, so only a plain id is interpolated: the model option's, else the one
+  // model the lookup named.
+  const modelId = env.CLAUDE_PLUGIN_OPTION_MODEL || loadedModel || '';
+  const pinnedModel = /^[A-Za-z0-9._:\/@-]+$/.test(modelId) ? modelId : '<model>';
+  let raiseContext = tasks.length && source === 'loaded' && capChars < MIN_DELEGATE_CHARS
+    ? ` The loaded context is below what the plugin needs for 30k+ files; tell the user they can raise it in LM Studio's load settings or with \`lms load ${pinnedModel} --context-length 32768\` (don't run it yourself).`
+    : '';
   const lines = files.map(({ path, size }) => {
     const prefix = `local-llm: ${path} is about ${number(size)} bytes (a char proxy).`;
-    if (size > capChars) return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices. Only when the user explicitly requests a local batch over multiple files, use batch/run.mjs.`;
+    if (size > capChars) {
+      const note = raiseContext; // once per prompt, on the first oversized line
+      raiseContext = '';
+      return `${prefix} It is too big for the loaded model's context (${context}); Grep or Read the relevant slices. Only when the user explicitly requests a local batch over multiple files, use batch/run.mjs.${note}`;
+    }
     if (!tasks.length) return null;
     return `${prefix} Context cap: ${context}. If this turn's job on it is a read-only ${taskList} task, invoke the local-llm:delegate-local skill with the Skill tool before reading the file, instead of reading it yourself; this holds for the user's own project files too. Send the Skill call and ToolSearch query "select:mcp__plugin_local-llm_local-llm__code_task_files" in the same assistant message (they are independent), and use the stated size instead of running \`wc -c\` again.`;
   }).filter(Boolean);

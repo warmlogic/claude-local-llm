@@ -269,6 +269,58 @@ test('skill scales spot-checks to stakes while retaining verification safeguards
   assert.match(fails, /Input-specific\*\* \(too big, path not allowed, a quality flag, a partial `x\/y file\(s\) read`\): do that one job yourself/);
   assert.match(verify, /When the local model produced the answer, say so in a few words/);
 });
+test('a loaded context too small for the floor adds the raise-context sentence to the above-cap line only', async () => {
+  const sentence = /below what the plugin needs for 30k\+ files; tell the user they can raise it in LM Studio's load settings or with `lms load [^`]+ --context-length 32768` \(don't run it yourself\)/;
+  const small = await fake(8192);
+  const text8k = await optedHint(small.endpoint, [35000]);
+  assert.match(text8k, /too big for the loaded model's context \(8,192 tokens, about 6,553 chars; loaded\).*use batch\/run.mjs\./);
+  assert.match(text8k, sentence);
+  assert.equal(text8k.split('\n').length, 1);
+  // The model comes from the context lookup when the option is unset; with several loaded models it stays a placeholder.
+  assert.match(text8k, /`lms load fake-context --context-length 32768`/);
+  assert.match(await optedHint((await fake('8192,16384')).endpoint, [35000]), /`lms load <model> --context-length 32768`/);
+  // Delegation off (the default): the too-big line stays as it was, with no note.
+  const offText = hintText(await hintResult(small.endpoint, [35000]));
+  assert.match(offText, /too big for the loaded model's context/);
+  assert.doesNotMatch(offText, /tell the user/);
+  // With the model option set, its id is used.
+  const pinned8k = await optedHint(small.endpoint, [35000], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', CLAUDE_PLUGIN_OPTION_MODEL: 'fake-context' });
+  assert.match(pinned8k, /`lms load fake-context --context-length 32768`/);
+  assert.doesNotMatch(pinned8k, /<model>/);
+  // Several oversized files: the note appears once, on the first oversized line.
+  const several = await optedHint(small.endpoint, [35000, 36000]);
+  assert.equal(several.split('\n').length, 2);
+  assert.equal(several.split('tell the user').length - 1, 1);
+  // A model id that could break the line (backtick, newline) is never interpolated: the placeholder stays.
+  const odd = 'bad`\nid';
+  const oddEndpoint = await serve((q, r) => r.end(JSON.stringify({ data: [model(odd, 8192)] })));
+  const oddText = await optedHint(oddEndpoint, [35000], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', CLAUDE_PLUGIN_OPTION_MODEL: odd });
+  assert.equal(oddText.split('\n').length, 1);
+  assert.match(oddText, /`lms load <model> --context-length 32768`/);
+  // LM Studio ids carry quant suffixes (`@q4_k_m`) and a vendor path: both are plain.
+  const quant = 'qwen/qwen3-8b@q4_k_m';
+  const quantEndpoint = await serve((q, r) => r.end(JSON.stringify({ data: [model(quant, 8192)] })));
+  assert.match(await optedHint(quantEndpoint, [35000]), /`lms load qwen\/qwen3-8b@q4_k_m --context-length 32768`/);
+  // 22,846 tokens is the first context whose cap (30,000) fits the floor: the oversized line is unchanged.
+  for (const tokens of [22846, 32768]) {
+    const f = await fake(tokens);
+    const text = await optedHint(f.endpoint, [capForContext(tokens) + 1]);
+    assert.match(text, /too big for the loaded model's context/);
+    assert.doesNotMatch(text, sentence);
+    assert.doesNotMatch(text, /tell the user/);
+  }
+  // Delegation off and a fitting context (24,576 tokens, cap 32,800): nothing prints.
+  assert.equal(hintText(await hintResult((await fake(24576)).endpoint, [30000])), '');
+  // An assumed context proves nothing: fallback and pinned-not-loaded add no sentence.
+  const dead = await serve(() => {});
+  await new Promise((r) => servers.at(-1).close(r));
+  const pinned = await serve((q, r) => r.end(JSON.stringify({ data: [model('a', 8192)] })));
+  for (const [endpoint, options] of [[dead, {}], [pinned, { CLAUDE_PLUGIN_OPTION_MODEL: 'missing' }]]) {
+    const text = hintText(await hintResult(endpoint, [45876], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', ...options }));
+    assert.match(text, /too big for the loaded model's context \(assumed 32k context/);
+    assert.doesNotMatch(text, /tell the user/);
+  }
+});
 test('hook follows a larger loaded context', async () => {
   const f = await fake(65536);
   assert.match(await optedHint(f.endpoint, [90000]), /98,304 chars; loaded.*invoke/);
