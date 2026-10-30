@@ -87,6 +87,12 @@ for v in abc 0 -5 1.5; do
   done
 done
 
+out=$(env -u LOCAL_LLM_ALLOWED_DIRS LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
+for frag in "claude plugin configure local-llm@" "--values-stdin" '{"allowed_dirs"' "/plugin" "restart"; do
+  if did_not_start "$out" "$frag"; then ok "unset allowed_dirs message names: $frag"
+  else bad "unset allowed_dirs message names: $frag ($out)"; fi
+done
+
 # --- the server re-checks both itself when run without the launcher -------------------------
 printf '#!/bin/sh\nexec node "%s/server/verify-server.mjs"\n' "$REPO" > "$TMP/direct.sh"; chmod +x "$TMP/direct.sh"
 out=$(LOCAL_VERIFY_ROOTS="$ROOT" LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$DRIVER" "$TMP/direct.sh")

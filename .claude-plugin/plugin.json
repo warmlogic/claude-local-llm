@@ -1,6 +1,6 @@
 {
   "name": "local-llm",
-  "description": "Offload small, low-stakes text jobs (summaries, classification, extraction, drafts) from Claude Code to a model running locally in LM Studio, over loopback only",
+  "description": "On request, run bounded text jobs on big files (classify, extract, check claims) on a model running locally in LM Studio, over loopback only",
   "author": {
     "name": "Matt Mollison",
     "email": "matt.mollison@gmail.com"
@@ -11,8 +11,7 @@
       "title": "Allowed folders",
       "description": "Folders the local model may read files from. Nothing outside them is readable. A leading $HOME or ~ is expanded; a folder name must not contain a comma.",
       "multiple": true,
-      "required": true,
-      "default": ["$HOME/github", "$HOME/catalyst"]
+      "required": true
     },
     "endpoint_url": {
       "type": "string",

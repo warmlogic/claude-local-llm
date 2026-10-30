@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
 const batchArgsAllowed = (args, cwd) => {
-  const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
-    ?? JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')).userConfig.allowed_dirs.default.join(',');
+  const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS;
+  if (!configured) return false; // the option has no default: unset approves nothing
   const roots = execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
     env: { ...process.env, LOCAL_LLM_ALLOWED_DIRS: configured },
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,

@@ -415,10 +415,6 @@ need jq
 skill_flags > /dev/null || die "the skill's names table cannot supply the bad-answer flags (see above)"
 for tool in claude node jq curl shasum; do need "$tool"; done
 TIMEOUT=$(command -v timeout || command -v gtimeout) || die "timeout (or gtimeout) is required; on macOS: brew install coreutils"
-case "$REPO/" in
-  "$HOME/github/"*|"$HOME/catalyst/"*) ;;
-  *) die "fixtures live under the repo, which must sit inside the default allowed_dirs (\$HOME/github or \$HOME/catalyst)" ;;
-esac
 
 OUT="${DELEG_OUT:-$(mktemp -d)}"
 mkdir -p "$OUT" && [ -d "$OUT" ] && [ -w "$OUT" ] || die "trace dir $OUT is not a writable directory"
@@ -494,16 +490,17 @@ for f_n in app-35k.log:35000 app-2k.log:2000 app-35k-b.log:35000 notes-0412.md:3
     || die "fixture ${f_n%%:*} is $size bytes: want whole lines at or just under $target"
 done
 
-# copy_plugin <dest> <endpoint-url> [<allowed-dir>]: temp plugin copy whose endpoint_url default is <endpoint-url>
-# and, when given, whose allowed_dirs default is just <allowed-dir>
+# copy_plugin <dest> <endpoint-url> <allowed-dir>: temp plugin copy whose endpoint_url default is <endpoint-url> and
+# whose allowed_dirs default is just <allowed-dir> (the manifest has none: a headless run needs one to start the servers)
 copy_plugin() {
   mkdir -p "$1" || die "mkdir $1"
   cp -R "$REPO/.claude-plugin" "$REPO/.mcp.json" "$REPO/package.json" "$REPO/scripts" "$REPO/server" "$REPO/batch" "$REPO/skills" "$REPO/hooks" "$1/" \
     || die "copying the plugin to $1"
-  jq --arg u "$2" --arg d "${3:-}" '.userConfig.endpoint_url.default = $u | if $d != "" then .userConfig.allowed_dirs.default = [$d] else . end' "$REPO/.claude-plugin/plugin.json" > "$1/.claude-plugin/plugin.json" \
+  [ -n "${3:-}" ] || die "copy_plugin $1: no allowed dir given"
+  jq --arg u "$2" --arg d "$3" '.userConfig.endpoint_url.default = $u | .userConfig.allowed_dirs.default = [$d]' "$REPO/.claude-plugin/plugin.json" > "$1/.claude-plugin/plugin.json" \
     || die "rewriting plugin.json in $1"
   [ "$(jq -r '.userConfig.endpoint_url.default' "$1/.claude-plugin/plugin.json")" = "$2" ] || die "plugin copy $1 does not carry endpoint $2"
-  [ -z "${3:-}" ] || [ "$(jq -c '.userConfig.allowed_dirs.default' "$1/.claude-plugin/plugin.json")" = "[\"$3\"]" ] || die "plugin copy $1 does not carry allowed_dirs $3"
+  [ "$(jq -c '.userConfig.allowed_dirs.default' "$1/.claude-plugin/plugin.json")" = "[\"$3\"]" ] || die "plugin copy $1 does not carry allowed_dirs $3"
 }
 dead_url() {
   local port
@@ -518,16 +515,16 @@ lm_models=$(curl -sf -m 3 "$ENDPOINT/v1/models" 2>/dev/null | jq '.data | length
 [ "${lm_models:-0}" -gt 0 ] 2>/dev/null && lm_up=1 || lm_models=0
 
 # --- plugins for each case ---------------------------------------------------------------------------
-copy_plugin "$PLUGINS/real" "$ENDPOINT"
+copy_plugin "$PLUGINS/real" "$ENDPOINT" "$FIX"
 copy_plugin "$PLUGINS/project" "$ENDPOINT" "$PROJ"
 DEAD=$(dead_url) || die "no dead endpoint url"
-copy_plugin "$PLUGINS/down" "$DEAD"
+copy_plugin "$PLUGINS/down" "$DEAD" "$FIX"
 case " $CASES " in *" d "*)
   node "$SCRIPT_DIR/fake-endpoint.mjs" "$PLUGINS/port" "$PLUGINS/requests.log" no-model &
   FAKE_PID=$!
   for _ in $(seq 1 50); do [ -s "$PLUGINS/port" ] && break; sleep 0.1; done
   [ -s "$PLUGINS/port" ] || die "fake endpoint did not start"
-  copy_plugin "$PLUGINS/nomodel" "http://127.0.0.1:$(cat "$PLUGINS/port")" ;;
+  copy_plugin "$PLUGINS/nomodel" "http://127.0.0.1:$(cat "$PLUGINS/port")" "$FIX" ;;
 esac
 
 plugin_for() { case "$1" in a|a2|b|g|l) echo real ;; h|j) echo project ;; c|e) echo down ;; d) echo nomodel ;; esac; }
