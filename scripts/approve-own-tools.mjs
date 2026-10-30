@@ -7,23 +7,18 @@ import { fileURLToPath } from 'node:url';
 
 const root = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const within = (path, roots) => roots.some((r) => path === r || path.startsWith(r + sep));
-// A withheld batch approval says why in a systemMessage (fixed strings, never paths), with no hookSpecificOutput:
-// the normal permission flow still decides, and nothing is denied.
+// Only a command that passes every other check is withheld for want of usable allowed_dirs, so only then does the
+// hook say why: a systemMessage with fixed text (never a path) and no hookSpecificOutput. The normal permission flow
+// still decides and nothing is denied. Every other rejection stays silent.
 const skip = (reason) => {
   process.stdout.write(JSON.stringify({ systemMessage: `local-llm: batch auto-approval skipped: ${reason}` }));
   return false;
 };
+const resolveRoots = (configured) => execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
+  env: { ...process.env, LOCAL_LLM_ALLOWED_DIRS: configured },
+  encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
+}).trim().split(',').filter(Boolean);
 const batchArgsAllowed = (args, cwd) => {
-  const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS;
-  if (!configured) return skip('allowed_dirs option is not set'); // the option has no default: unset approves nothing
-  let roots;
-  try {
-    roots = execFileSync(process.execPath, [join(root, 'scripts/resolve-roots.mjs')], {
-      env: { ...process.env, LOCAL_LLM_ALLOWED_DIRS: configured },
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
-    }).trim().split(',').filter(Boolean);
-  } catch (e) { return skip(e.code === 'ETIMEDOUT' || e.signal ? 'allowed_dirs resolution timed out' : 'allowed_dirs could not be resolved'); }
-  if (!roots.length) return skip('allowed_dirs could not be resolved');
   // Preserve symlink/.. ordering: resolve() before realpath could approve a different file.
   const real = (path) => realpathSync.native(isAbsolute(path) ? path : `${cwd}${sep}${path}`);
   const files = [], options = new Set();
@@ -45,7 +40,14 @@ const batchArgsAllowed = (args, cwd) => {
   // --transcripts is never auto-approved: session transcripts under $HOME/.claude/projects hold copies of files from
   // every past session, so reading them goes through the normal permission flow (batch runs are explicit anyway).
   if (options.has('--transcripts')) return false;
-  return options.has('--job-json') && files.length > 0 && files.every((path) => within(real(path), roots));
+  if (!options.has('--job-json') || !files.length) return false;
+  const reals = files.map(real); // a missing input throws: silent
+  const configured = process.env.CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS;
+  if (!configured) return skip('allowed_dirs option is not set'); // the option has no default: unset approves nothing
+  let roots;
+  try { roots = resolveRoots(configured); } catch (e) { return skip(e.code === 'ETIMEDOUT' ? 'allowed_dirs resolution timed out' : 'allowed_dirs could not be resolved'); }
+  if (!roots.length) return skip('no configured allowed_dirs folder exists'); // the resolver exited 0 with nothing to allow
+  return reals.every((path) => within(path, roots));
 };
 // A deliberately small shell lexer. Single quotes are literal; double quotes must not expand anything.
 // No evaluation, redirection, pipelines, comments or compound commands. A final & is the only operator.

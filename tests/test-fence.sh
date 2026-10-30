@@ -343,9 +343,11 @@ done
 batch_cmd() {
   local label="$1" decision="$2" command="$3" background="${4:-false}" cwd="${5:-$PWD}" output rc
   output=$(hook_out "$(jq -nc --arg c "$command" --argjson b "$background" --arg cwd "$cwd" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c,run_in_background:$b}}')"); rc=$?
-  # A reject is exit 0 with no stdout, or exactly the one systemMessage line (no decision): a crash cannot pass as a reject.
+  # reject: exit 0 and empty stdout. reject-msg: exit 0 and exactly the one skip systemMessage, no decision (allowed_dirs
+  # alone blocked it). A crash cannot pass as either.
   if [ "$rc" -eq 0 ] && { { [ "$decision" = allow ] && jq -e '.hookSpecificOutput.permissionDecision == "allow"' >/dev/null <<<"$output"; } \
-     || { [ "$decision" = reject ] && { [ -z "$output" ] || jq -e 'keys == ["systemMessage"] and (.systemMessage | startswith("local-llm: batch auto-approval skipped: "))' >/dev/null <<<"$output"; }; }; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label (rc=$rc: $output)"; fi
+     || { [ "$decision" = reject ] && [ -z "$output" ]; } \
+     || { [ "$decision" = reject-msg ] && jq -e 'keys == ["systemMessage"] and (.systemMessage | startswith("local-llm: batch auto-approval skipped: "))' >/dev/null <<<"$output"; }; }; then ok "batch hook $decision: $label"; else bad "batch hook $decision: $label (rc=$rc: $output)"; fi
 }
 # Use physical paths: the shell test REPO may contain a trailing /.. .
 BROOT=$(cd "$REPO" && pwd -P)
@@ -452,17 +454,22 @@ HOME="$HOOK_TMP/home" batch_cmd transcripts-outside reject "$RUN --transcripts -
 ln -s "$HOOK_TMP/allowed-evil/out.txt" "$HOOK_TMP/home/.claude/projects/link.jsonl"
 HOME="$HOOK_TMP/home" batch_cmd transcripts-symlink reject "$RUN --transcripts --job-json '{}' '$HOOK_TMP/home/.claude/projects/link.jsonl'"
 
-CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_cmd unresolvable-roots reject "$RUN --job-json '{}' '$INPUT'"
-CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_cmd empty-roots reject "$RUN --job-json '{}' '$INPUT'"
-CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='/' batch_cmd slash-root reject "$RUN --job-json '{}' '$INPUT'"
-CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=" $HOOK_TMP/allowed" batch_cmd padded-root reject "$RUN --job-json '{}' '$INPUT'"
-CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='relative' batch_cmd relative-root reject "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_cmd unresolvable-roots reject-msg "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_cmd empty-roots reject-msg "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='/' batch_cmd slash-root reject-msg "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=" $HOOK_TMP/allowed" batch_cmd padded-root reject-msg "$RUN --job-json '{}' '$INPUT'"
+CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='relative' batch_cmd relative-root reject-msg "$RUN --job-json '{}' '$INPUT'"
 HOME="$HOOK_TMP/home" CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='~/../allowed' batch_cmd home-root allow "$RUN --job-json '{}' '$INPUT'"
 # allowed_dirs has no manifest default: an unset option approves nothing (fail closed), even for an input under HOME.
 mkdir -p "$HOOK_TMP/home/github"
 printf 'input\n' > "$HOOK_TMP/home/github/default.txt"
 unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
-HOME="$HOOK_TMP/home" batch_cmd unset-option reject "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
+HOME="$HOOK_TMP/home" batch_cmd unset-option reject-msg "$RUN --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
+# With allowed_dirs unset, a command that fails any other check stays silent: only allowed_dirs may be the reason printed.
+batch_cmd unset-option-transcripts reject "$RUN --transcripts --job-json '{}' '$HOOK_TMP/home/github/default.txt'"
+batch_cmd unset-option-job-file reject "$RUN --job /etc/x '$HOOK_TMP/home/github/default.txt'"
+batch_cmd unset-option-unknown-flag reject "$RUN --job-json '{}' --surprise '$HOOK_TMP/home/github/default.txt'"
+batch_cmd unset-option-missing-input reject "$RUN --job-json '{}' '$HOOK_TMP/home/github/missing.txt'"
 # A withheld approval says why in a systemMessage (fixed strings, no paths): no hookSpecificOutput, so the normal prompt decides and nothing is denied.
 batch_msg() { hook_out "$(jq -nc --arg c "$RUN --job-json '{}' '$INPUT'" --arg cwd "$PWD" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c}}')" 2>"$HOOK_TMP/batch-msg.err"; }
 msg_is() { # <label> <reason> <stdout>: exactly {"systemMessage": "local-llm: batch auto-approval skipped: <reason>"}, nothing on stderr
@@ -472,6 +479,7 @@ msg_is() { # <label> <reason> <stdout>: exactly {"systemMessage": "local-llm: ba
 msg_is "unset allowed_dirs" "allowed_dirs option is not set" "$(HOME="$HOOK_TMP/home" batch_msg)"
 msg_is "empty allowed_dirs" "allowed_dirs option is not set" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS='' batch_msg)"
 msg_is "a missing allowed_dirs folder" "allowed_dirs could not be resolved" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/missing" batch_msg)"
+msg_is "allowed_dirs with no folder entries (resolver exits 0, empty)" "no configured allowed_dirs folder exists" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=' , ' batch_msg)"
 msg_is "a relative allowed_dirs entry (resolver exits 2)" "allowed_dirs could not be resolved" "$(CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS=relative batch_msg)"
 quiet_out=$(unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS; hook_out "$(jq -nc --arg c "node /tmp/other.mjs" '{tool_name:"Bash",cwd:"/",tool_input:{command:$c}}')" 2>&1)
 if [ -z "$quiet_out" ]; then ok "batch hook: a command that is not the runner prints nothing"; else bad "batch hook: non-runner output: $quiet_out"; fi
@@ -499,7 +507,7 @@ batch_cmd symlink-out reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-jso
 jq '.userConfig.allowed_dirs.default = ["'"$HOOK_TMP"'/allowed"]' "$BROOT/.claude-plugin/plugin.json" > "$HOOK_TMP/hook-plugin/.claude-plugin/plugin.json"
 rm -f "$HOOK_TMP/hook-plugin/batch/run.mjs"; cp "$BROOT/batch/run.mjs" "$HOOK_TMP/hook-plugin/batch/run.mjs"
 unset CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS
-batch_cmd unset-option-ignores-manifest-default reject "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'"
+batch_cmd unset-option-ignores-manifest-default reject-msg "node $HOOK_TMP/hook-plugin/batch/run.mjs --job-json '{}' '$INPUT'"
 # A resolver that outlives the hook's 1 s limit gets its own reason.
 printf 'await new Promise((r) => setTimeout(r, 4000));\n' > "$HOOK_TMP/hook-plugin/scripts/resolve-roots.mjs"
 export CLAUDE_PLUGIN_OPTION_ALLOWED_DIRS="$HOOK_TMP/allowed"

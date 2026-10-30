@@ -227,7 +227,8 @@ export async function verifyClaims(cfg, args, cancel = new AbortController().sig
     if (judged.every((j) => j.error)) throw new VerifyError(safeMessage(firstError), { cause: firstError });
     return firstError ? { model, k, partial: true, error: safeMessage(firstError), results } : { model, k, results };
   } catch (e) {
-    if (signal.aborted && e instanceof Object) e.callStopped = true; // the finally below logs the stop; the caller must not log it again
+    // The finally below logs the stop; the caller must not log it again. Only the abort reason itself, or the all-claims-failed error wrapping it, is the stop's: any other error keeps its own log.
+    if (signal.aborted && e instanceof Object && (e === signal.reason || e.cause === signal.reason)) e.callStopped = true;
     throw e;
   } finally {
     // The one place a stopped call (budget overrun or client cancel, at any point) is logged.

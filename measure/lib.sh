@@ -64,6 +64,7 @@ copy_plugin() {
 # pin_plugin_config <repo> <plugin-copy> <model>: the copy's manifest with the local model pinned and allowed_dirs
 # defaulting to the corpus roots, read from select-corpus.sh's ROOTS line (its one definition), since the real
 # manifest has no default and a headless run cannot be asked.
+# Callers must set $MDIR (the measure/ directory) first; returns 1 when select-corpus.sh has no ROOTS line.
 pin_plugin_config() {
   local roots
   roots=$(sed -n 's/^ROOTS=(\(.*\))$/\1/p' "$MDIR/select-corpus.sh" | tr -d '"')
