@@ -132,7 +132,13 @@ for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://
           "ftp://127.0.0.1" "127.0.0.1:1234" "http://10.0.0.5:1234"; do
   check_refuses "non-loopback endpoint $ep" "$A" "loopback" "$ep"
 done
-for ep in "http://127.0.0.1:1234" "http://localhost:1234/v1" "http://[::1]:1234" "http://[::1]" "https://localhost"; do
+# Loopback but not a bare server root: an empty port, a path, a query or a fragment would build broken request URLs
+# (or fail later as "fetch failed", which reads as an LM Studio outage), so the check names the expected form.
+for ep in "http://127.0.0.1:" "http://localhost:" "http://[::1]:" "http://127.0.0.1:1234/v1" \
+          "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f" "http://127.0.0.1:1234//"; do
+  check_refuses "endpoint that is not a server root $ep" "$A" "server root only: no path, query or fragment" "$ep"
+done
+for ep in "http://127.0.0.1:1234" "http://127.0.0.1:1234/" "http://localhost:1234" "http://localhost:1234/" "http://[::1]:1234" "http://[::1]" "https://localhost"; do
   out=$(LOCAL_LLM_ENDPOINT_URL="$ep" run_launcher "$A")
   if [ "$(jq -r '.init' <<<"$out")" = "true" ]; then ok "launcher accepts loopback endpoint: $ep"
   else bad "launcher accepts loopback endpoint: $ep ($out)"; fi
@@ -250,6 +256,12 @@ if [ -s "$TMP/stub-env" ] && [ "$(wc -w <<<"$unset_names")" -ge 15 ] && [ -z "$l
    && grep -qxF "HOUTINI_LM_MAX_FILE_MB=1" "$TMP/stub-env"; then
   ok "houtini's environment: ${#ambient[@]} ambient variables dropped, launcher values set"
 else bad "houtini's environment (rc=$stub_rc, leaked:$leaked; unset list: $(wc -w <<<"$unset_names") names; stderr: $stub_err)"; fi
+
+# A trailing slash on endpoint_url is accepted but removed: houtini 3.3.4 appends /v1/... without stripping it.
+rm -f "$TMP/stub-env"
+env LOCAL_LLM_ENDPOINT_URL=http://127.0.0.1:1234/ LOCAL_LLM_MODEL= PATH="$TMP/stubbin:$PATH" LOCAL_LLM_ALLOWED_DIRS="$A" "$LAUNCHER" >/dev/null 2>&1
+if grep -qxF "HOUTINI_LM_ENDPOINT_URL=http://127.0.0.1:1234" "$TMP/stub-env" 2>/dev/null; then ok "houtini receives the endpoint without a trailing slash"
+else bad "houtini receives the endpoint without a trailing slash ($(grep HOUTINI_LM_ENDPOINT_URL "$TMP/stub-env" 2>&1))"; fi
 
 # --- the launcher never runs from the spawner's cwd ----------------------------
 # npx prefers a matching @houtini/lm under node_modules in cwd or any ancestor; planted copies
