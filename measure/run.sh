@@ -97,7 +97,7 @@ if [ "$MODE" = new ]; then
   # Plugin snapshots: this checkout's plugin with the local model pinned, and a copy whose skill floor is 1k.
   for d in plugin plugin-lowfloor; do
     copy_plugin "$REPO" "$RUN_DIR/$d" || die "copying the plugin to $RUN_DIR/$d"
-    jq --arg m "$LOCAL_MODEL" '.userConfig.model.default = $m | .userConfig.allowed_dirs.default = ["$HOME/github", "$HOME/catalyst"]' "$REPO/.claude-plugin/plugin.json" > "$RUN_DIR/$d/.claude-plugin/plugin.json" \
+    pin_plugin_config "$REPO" "$RUN_DIR/$d" "$LOCAL_MODEL" \
       || die "pinning the model and allowed folders in $RUN_DIR/$d"
   done
   lower_floor "$RUN_DIR/plugin-lowfloor" \

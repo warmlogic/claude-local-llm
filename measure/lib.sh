@@ -61,6 +61,12 @@ copy_plugin() {
   for part in "${parts[@]}"; do cp -R "$1/$part" "$2/" || return 1; done
 }
 
+# pin_plugin_config <repo> <plugin-copy> <model>: the copy's manifest with the local model pinned and allowed_dirs
+# defaulting to the corpus roots (select-corpus.sh's ROOTS), since the real manifest has no default and a headless run cannot be asked.
+pin_plugin_config() {
+  jq --arg m "$3" '.userConfig.model.default = $m | .userConfig.allowed_dirs.default = ["$HOME/github", "$HOME/catalyst"]' "$1/.claude-plugin/plugin.json" > "$2/.claude-plugin/plugin.json"
+}
+
 # results_path <run-dir> <repo>: where a run's table goes. A run's table stays in its run dir; only a full run
 # (not MEASURE_ONLY, not MEASURE_ALLOW_SHORT) with MEASURE_PUBLISH=1 writes the committed docs/results.md.
 results_path() {
