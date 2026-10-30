@@ -85,6 +85,17 @@ for ep in "http://example.com:1234" "http://127.0.0.1.example.com:1234" "http://
   if did_not_start "$out" "local-verify: endpoint must be loopback"; then ok "launcher refuses non-loopback endpoint $ep"
   else bad "launcher refuses non-loopback endpoint $ep ($out)"; fi
 done
+for ep in "http://127.0.0.1:" "http://localhost:" "http://[::1]:" "http://127.0.0.1:1234/v1" \
+          "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f" "http://127.0.0.1:1234//"; do
+  out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
+  if did_not_start "$out" "local-verify: endpoint must be loopback" && did_not_start "$out" "server root only: no path, query or fragment"; then ok "launcher refuses endpoint that is not a server root $ep"
+  else bad "launcher refuses endpoint that is not a server root $ep ($out)"; fi
+done
+for ep in "http://127.0.0.1:1234/" "http://localhost:1234" "http://[::1]" "https://localhost"; do
+  out=$(LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$LAUNCHER")
+  if jq -e '.init' >/dev/null <<<"$out"; then ok "launcher accepts server-root endpoint $ep"
+  else bad "launcher accepts server-root endpoint $ep ($out)"; fi
+done
 for v in abc 0 -5 1.5; do
   for name in LOCAL_VERIFY_REQUEST_TIMEOUT_MS LOCAL_VERIFY_BUDGET_MS; do
     out=$(env "$name=$v" LOCAL_LLM_ALLOWED_DIRS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$EP" node "$DRIVER" "$LAUNCHER")
@@ -104,6 +115,11 @@ printf '#!/bin/sh\nexec node "%s/server/verify-server.mjs"\n' "$REPO" > "$TMP/di
 out=$(LOCAL_VERIFY_ROOTS="$ROOT" LOCAL_LLM_ENDPOINT_URL=http://example.com:1234 node "$DRIVER" "$TMP/direct.sh")
 if did_not_start "$out" "loopback"; then ok "server refuses a non-loopback endpoint in code"
 else bad "server refuses a non-loopback endpoint in code ($out)"; fi
+for ep in "http://127.0.0.1:" "http://127.0.0.1:1234/v1" "http://127.0.0.1:1234?x=1" "http://127.0.0.1:1234#f" "http://127.0.0.1:1234//"; do
+  out=$(LOCAL_VERIFY_ROOTS="$ROOT" LOCAL_LLM_ENDPOINT_URL="$ep" node "$DRIVER" "$TMP/direct.sh")
+  if did_not_start "$out" "server root only: no path, query or fragment"; then ok "server refuses endpoint that is not a server root in code: $ep"
+  else bad "server refuses endpoint that is not a server root in code: $ep ($out)"; fi
+done
 for roots in "" "/" "relative"; do
   out=$(env LOCAL_VERIFY_ROOTS="$roots" LOCAL_LLM_ENDPOINT_URL=http://127.0.0.1:1234 node "$DRIVER" "$TMP/direct.sh")
   if did_not_start "$out" "allowed folder"; then ok "server refuses roots '${roots}' in code"
@@ -252,6 +268,12 @@ model_case() { # <label> <mode> <jq test on the call>
   out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)")
   if jq -e "$3" >/dev/null <<<"$out"; then ok "$1"; else bad "$1 ($(brief "$out"))"; fi
 }
+# A trailing slash on the endpoint is accepted and never doubles into //v1/... (the fake 404s that).
+start_fake slash verify
+out=$(call "$(claims_on "$INSIDE" '["[yes] x"]' 1)" LOCAL_LLM_ENDPOINT_URL="$EP/")
+if jq -e '.call.isError | not' >/dev/null <<<"$out" && jq -se '[.[] | select(.body)] | length > 0 and all(.url == "/v1/chat/completions")' "$LOG" >/dev/null; then
+  ok "a trailing-slash endpoint requests /v1/chat/completions"
+else bad "trailing-slash endpoint ($(brief "$out") $(head -c 200 "$LOG"))"; fi
 model_case "/v1/models fallback when /api/v0 is a 404, skipping the embeddings model" verify-v1 \
   '.call.isError == false and (.call.text | fromjson | .model == "v1-chat-model")'
 model_case "/v1/models fallback with two chat models: refuses to guess" verify-v1-many \
@@ -260,8 +282,8 @@ model_case "/api/v0/models without load state: refuses to guess" verify-nostate 
   '.call.isError and (.call.text | contains("cannot tell which model is loaded"))'
 model_case "/api/v0/models without a data array: an unexpected response, not 'nothing loaded'" verify-badlist \
   '.call.isError and (.call.text | contains("unexpected response from /api/v0/models"))'
-model_case "both model lists 404: endpoint_url probably ends in /v1" verify-nolists \
-  '.call.isError and (.call.text | contains("endpoint_url should be the server root, without /v1"))'
+model_case "both model lists 404: is this an LM Studio or OpenAI-compatible server?" verify-nolists \
+  '.call.isError and (.call.text | contains("no model list at the endpoint root (404): is this an LM Studio or OpenAI-compatible server?"))'
 model_case "two loaded chat models: refuses to guess" verify-twoloaded \
   '.call.isError and (.call.text | contains("cannot tell which of 2 loaded chat models to use; set the model plugin option"))'
 model_case "only an embeddings model loaded: 'no chat model loaded'" verify-embedonly \

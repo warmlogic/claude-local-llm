@@ -45,7 +45,7 @@ export async function getContextCap({
   model = process.env.LOCAL_LLM_MODEL || '',
 } = {}) {
   const fallback = (reason, source = 'fallback') => budget(FALLBACK_TOKENS, source, reason);
-  if (!isLoopbackEndpoint(endpoint)) return fallback('not loopback');
+  if (!isLoopbackEndpoint(endpoint)) return fallback('not a loopback server root');
   try {
     const list = (await models(endpoint))?.data;
     if (!Array.isArray(list)) return fallback('no metadata');

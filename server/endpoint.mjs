@@ -166,7 +166,7 @@ export async function pickModel(cfg, signal) {
   } catch (e) {
     if (e.status !== 404) throw e;
     const v1 = await get('/v1/models').catch((e1) => {
-      if (e1.status === 404) throw new VerifyError('no model list at the endpoint (404); endpoint_url should be the server root, without /v1');
+      if (e1.status === 404) throw new VerifyError('no model list at the endpoint root (404): is this an LM Studio or OpenAI-compatible server?');
       throw e1;
     });
     if (!Array.isArray(v1?.data)) throw new VerifyError('unexpected response from /v1/models');

@@ -46,7 +46,7 @@ unset OPENROUTER_API_KEY LM_STUDIO_URL LM_STUDIO_PASSWORD LM_STUDIO_MODEL LM_PAS
   HOUTINI_LM_PROVIDER HOUTINI_LM_MIN_TOKENS HOUTINI_LM_CROSS_PROCESS_LOCK HOUTINI_LM_CONTEXT_WINDOW
 . ./scripts/no-proxy.sh  # no proxy may carry the request off loopback
 export HOUTINI_LM_FILE_ROOTS=$roots
-export HOUTINI_LM_ENDPOINT_URL=$endpoint
+export HOUTINI_LM_ENDPOINT_URL=${endpoint%/}  # houtini appends /v1/... without stripping a trailing slash
 [ -z "${LOCAL_LLM_MODEL:-}" ] || export HOUTINI_LM_MODEL=$LOCAL_LLM_MODEL
 export HOUTINI_LM_API_KEY=not-needed
 export HOUTINI_LM_MAX_FILE_MB=1
