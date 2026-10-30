@@ -89,7 +89,7 @@ if (files.length > 0) {
   // The model id goes into an inline command, so only a plain id is interpolated: the model option's, else the one
   // model the lookup named.
   const modelId = env.CLAUDE_PLUGIN_OPTION_MODEL || loadedModel || '';
-  const pinnedModel = /^[A-Za-z0-9._:\/-]+$/.test(modelId) ? modelId : '<model>';
+  const pinnedModel = /^[A-Za-z0-9._:\/@-]+$/.test(modelId) ? modelId : '<model>';
   let raiseContext = tasks.length && source === 'loaded' && capChars < MIN_DELEGATE_CHARS
     ? ` The loaded context is below what the plugin needs for 30k+ files; tell the user they can raise it in LM Studio's load settings or with \`lms load ${pinnedModel} --context-length 32768\` (don't run it yourself).`
     : '';

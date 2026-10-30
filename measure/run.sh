@@ -75,14 +75,12 @@ case " $CONFIGS " in *" on "*)
 *) CONTEXT=null ;;
 esac
 if [ "$MODE" = resume ]; then
-  # A resumed run measures under the context it started with. Only two loaded contexts can be compared: an assumed
-  # source (pin not loaded yet, a lookup that timed out) proves nothing, and neither does a run with no record.
+  # A resumed run measures under the context it started with. A recorded `loaded` context must be observed again, loaded
+  # and with the same tokens. A run with no record, or an assumed one, has nothing to compare.
   RECORDED=$(jq -c '.context // empty' "$RUN_DIR/meta.json")
-  if [ -n "$RECORDED" ] && [ "$(jq -r .source <<<"$RECORDED")" = loaded ] && [ "$(jq -r .source <<<"$CONTEXT")" = loaded ] \
-     && [ "$(jq -r .tokens <<<"$RECORDED")" != "$(jq -r .tokens <<<"$CONTEXT")" ]; then
-    die "the loaded context changed since this run started (recorded $(jq -c '{tokens, source}' <<<"$RECORDED"), now $(jq -c '{tokens, source, reason}' <<<"$CONTEXT")); reload the model at $(jq -r .tokens <<<"$RECORDED") tokens, or start a new run"
-  elif [ -n "$RECORDED" ] && [ "$(jq -r .source <<<"$RECORDED")" = loaded ] && [ "$(jq -r .source <<<"$CONTEXT")" != loaded ] && [ "$CONTEXT" != null ]; then
-    echo "warning: this run started with $(jq -r .tokens <<<"$RECORDED") tokens loaded and LM Studio no longer reports a loaded context; reload $LOCAL_MODEL at $(jq -r .tokens <<<"$RECORDED") tokens" >&2
+  if [ -n "$RECORDED" ] && [ "$(jq -r .source <<<"$RECORDED")" = loaded ] \
+     && { [ "$(jq -r .source <<<"$CONTEXT")" != loaded ] || [ "$(jq -r .tokens <<<"$RECORDED")" != "$(jq -r .tokens <<<"$CONTEXT")" ]; }; then
+    die "the loaded context is not the one this run started with (recorded $(jq -c '{tokens, source}' <<<"$RECORDED"), now $(jq -c '{tokens, source, reason}' <<<"$CONTEXT")); reload $LOCAL_MODEL at $(jq -r .tokens <<<"$RECORDED") tokens, retry if the lookup failed, or start a new run"
   fi
 fi
 

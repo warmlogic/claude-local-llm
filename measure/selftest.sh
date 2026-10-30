@@ -547,17 +547,21 @@ ep8=$(ctx_ep 8192)
 check "run.sh: a resume under another loaded context dies before any session, naming both values" '1,1,1,0' \
   "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'recorded {"tokens":32768' "$TMP/run.out"),$(grep -c 'now {"tokens":8192' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 resume_meta "$ep8" '{"tokens":8192,"source":"loaded","reason":null}'; runsh on --resume "$rr"
-check "run.sh: a resume under the recorded context goes past the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+check "run.sh: a resume under the recorded context goes past the check" '0,1' "$(grep -c 'loaded context is not the one' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
 resume_meta "$ep8" '{"tokens":null,"source":"pinned model not loaded","reason":"pinned model not loaded"}'; runsh on --resume "$rr"
-check "run.sh: a resume of a run that started before the model was loaded goes past the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
-resume_meta "$(ctx_ep 0 verify-v1)" '{"tokens":32768,"source":"loaded","reason":null}' v1-chat-model; runsh on --resume "$rr"
-check "run.sh: a resume whose lookup now falls back goes past the check (an assumed source proves nothing)" '0,1,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out"),$(grep -c 'reload v1-chat-model at 32768 tokens' "$TMP/run.out")"
+check "run.sh: a resume of a run that recorded an assumed source goes past the check" '0,1' "$(grep -c 'loaded context is not the one' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+resume_meta "$ep8" '{"tokens":8192,"source":"loaded","reason":null}' fake-idle; : > "$FAKE_LOG"; runsh on --resume "$rr"; rc=$?
+check "run.sh: a resume of a loaded-context run whose model is no longer loaded dies before any session, naming the tokens and the cause" '1,1,1,0' \
+  "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'reload fake-idle at 8192 tokens' "$TMP/run.out"),$(grep -c 'pinned model not loaded' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+resume_meta "$(ctx_ep 0 verify-v1)" '{"tokens":32768,"source":"loaded","reason":null}' v1-chat-model; : > "$FAKE_LOG"; runsh on --resume "$rr"; rc=$?
+check "run.sh: a resume whose lookup now fails dies before any session, naming the reason (retry if it was transient)" '1,1,1,0' \
+  "$([ $rc -ne 0 ] && echo 1 || echo 0),$(grep -c 'now {"tokens":null,"source":"fallback","reason":"http 404"}' "$TMP/run.out"),$(grep -c 'reload v1-chat-model at 32768 tokens, retry if the lookup failed' "$TMP/run.out"),$(wc -l < "$FAKE_LOG" | tr -d ' ')"
 MEASURE_ENDPOINT=http://127.0.0.1:9 runsh on --resume "$rr"
 check "run.sh: a resume says when it ignores a different MEASURE_ENDPOINT for the recorded one" '1' "$(grep -c 'using the recorded endpoint' "$TMP/run.out")"
 resume_meta "$ep8" null; runsh on --resume "$rr"
-check "run.sh: a resume whose recorded context is null (an off-only run) skips the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+check "run.sh: a resume whose recorded context is null (an off-only run) skips the check" '0,1' "$(grep -c 'loaded context is not the one' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
 jq 'del(.context)' "$rr/meta.json" > "$rr/m" && mv "$rr/m" "$rr/meta.json"; runsh on --resume "$rr"
-check "run.sh: a resume whose meta.json has no context (an older run) skips the check" '0,1' "$(grep -c 'loaded context changed' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
+check "run.sh: a resume whose meta.json has no context (an older run) skips the check" '0,1' "$(grep -c 'loaded context is not the one' "$TMP/run.out"),$(grep -c 'predates --resume' "$TMP/run.out")"
 
 echo "measure selftest total: $total, failed: $fails"
 [ "$fails" -eq 0 ]

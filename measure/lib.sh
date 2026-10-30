@@ -147,6 +147,6 @@ context_warning() {
         *) echo "measure: the floor check answered '$floor', not warn or ok" >&2; return 1 ;;
       esac ;;
     "pinned model not loaded") echo "warning: $2 is listed but not loaded; load $2 in LM Studio (its context decides what delegation can read). The plugin's hint assumes 32k, but sessions run at whatever LM Studio loads." ;;
-    *) echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); the plugin's hint assumes 32k, but sessions run at whatever LM Studio loads." ;;
+    *) echo "warning: could not read the loaded context ($(jq -r '.reason // .source' <<<"$ctx")); the plugin's hint assumes 32k, but sessions run at whatever LM Studio loads. Check that LM Studio's server is up and answers /api/v0/models." ;;
   esac
 }

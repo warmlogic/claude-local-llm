@@ -297,6 +297,10 @@ test('a loaded context too small for the floor adds the raise-context sentence t
   const oddText = await optedHint(oddEndpoint, [35000], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract', CLAUDE_PLUGIN_OPTION_MODEL: odd });
   assert.equal(oddText.split('\n').length, 1);
   assert.match(oddText, /`lms load <model> --context-length 32768`/);
+  // LM Studio ids carry quant suffixes (`@q4_k_m`) and a vendor path: both are plain.
+  const quant = 'qwen/qwen3-8b@q4_k_m';
+  const quantEndpoint = await serve((q, r) => r.end(JSON.stringify({ data: [model(quant, 8192)] })));
+  assert.match(await optedHint(quantEndpoint, [35000]), /`lms load qwen\/qwen3-8b@q4_k_m --context-length 32768`/);
   // 22,846 tokens is the first context whose cap (30,000) fits the floor: the oversized line is unchanged.
   for (const tokens of [22846, 32768]) {
     const f = await fake(tokens);
