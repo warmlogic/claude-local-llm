@@ -106,10 +106,16 @@ test('unavailable or malformed metadata falls back; tiny context has no usable r
   assert.deepEqual(await getContextCap({ endpoint: dead }), assumed('no metadata'));
   assert.match(await optedHint(dead, [35000]), /assumed 32k context \(model metadata unavailable: no metadata\).*45,875 chars.*fallback/);
 });
-test('an endpoint that is not a loopback server root gets a note, never a delegation instruction', async () => {
-  const h = await optedHint(`${await serve(() => {})}/v1`, [35000, 60000]);
-  assert.match(h, /not a loopback server root.*unavailable/);
+test('an endpoint_url option that is not a loopback server root gets a note, never a delegation instruction', async () => {
+  const live = await serve(() => {});
+  const bad = (kinds) => ({ CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: kinds, CLAUDE_PLUGIN_OPTION_ENDPOINT_URL: `${live}/v1` });
+  const h = await optedHint(live, [35000, 60000], bad('classify,extract'));
+  assert.match(h, /not a loopback server root.*tools are unavailable/);
   assert.doesNotMatch(h, /delegate-local|code_task_files|Context cap/);
+  assert.equal(await optedHint(live, [35000], bad('')), ''); // delegation off: no note
+  // Only the option reaches the servers (.mcp.json); a stale shell variable must not raise the note.
+  const stale = await optedHint(`${live}/v1`, [35000], { CLAUDE_PLUGIN_OPTION_DELEGATE_TASKS: 'classify,extract' });
+  assert.doesNotMatch(stale, /tools are unavailable/);
 });
 test('loopback validation, redirect refusal and proxy bypass keep metadata local', async () => {
   let hits = 0;
